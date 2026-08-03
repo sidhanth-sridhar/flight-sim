@@ -16,7 +16,9 @@
     },
 
     "StarterPlayer": {
+      "$className": "StarterPlayer",
       "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
         "FlightSim": {
           "$path": "src/StarterPlayer/StarterPlayerScripts/FlightSim"
         }

@@ -1,6 +1,28 @@
 # Flight Simulator — Developer Handoff
 
-**Read this first.** It is the source of truth for continuing development. Last updated at the end of Phase 1, step 3.
+**Read this first.** It is the source of truth for continuing development.
+
+---
+
+## 0. Resume here — state at 2026-08-03
+
+**All 251 checks green across 9 suites.** Run them in **Play mode, Client datamodel** (see the warning in §4).
+
+**Uncommitted** — nothing from this session is committed; HEAD is `407054e`:
+```
+ M HANDOFF.md
+ M default.project.json                     # explicit $className; conventional, fixed nothing (§3)
+ ?? .../FlightSim/Controls/                 # InputController.luau      65/65
+ ?? .../FlightSim/Controllers/              # FlightController.luau     13/13
+```
+
+**Phase 1 remaining**: `AircraftService` (server spawning, replaces FlightController's test spawn), then the raw-numbers debug HUD. Then the flight gate — taxi, take off, coordinated turn, deliberate stall, recover, land — which the pilot flies before Phase 2.
+
+**Open questions for the pilot**, none blocking:
+- Spawn height: currently 100 m, so the aircraft free-falls before you reach it. `SPAWN_CFRAME` in FlightController; `CFrame.new(0, 1.30, 0)` parks it.
+- Pause (P) is a stopgap that zeroes control forces; it is not a real pause and probably should not be bound until designed.
+- The `Controls/` vs `Controllers/` folder split is deliberate for now — the rename was flagged as a separate task.
+- Three DeepSeek findings were reviewed this session: two were real bugs, one was half a real bug. See §6c and §7.
 
 ---
 
@@ -38,13 +60,33 @@ These were decided deliberately and are expensive to reverse. Do not change them
 
 ⚠️ **`require` caches per Studio session.** After editing a module, re-running `runTests()` in the same session gives you the *stale* copy. Restart the session, or clone the module tree to a temp folder and require the clone.
 
-⚠️ **If Rojo stops delivering changes, it is almost certainly OneDrive.** On 2026-08-03 `rojo serve` was running on 34872 with Studio connected, yet a newly created `.luau` file never reached the datamodel — OneDrive was swallowing the filesystem notifications. **Remedy: pause OneDrive, then restart `rojo serve`.** That is the fix; confirm both before inventing anything else. A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do not use it.**
+⚠️ **Rojo will not reconcile a subtree whose root instance it did not create.** Solved 2026-08-03; two wrong diagnoses were recorded first, so read this before theorising.
+
+The symptom: `Controls/InputController.luau` existed on disk and Rojo's *served* tree contained it, yet it never appeared in Studio, while new files under `ReplicatedStorage` synced instantly.
+
+The cause: `StarterPlayerScripts.FlightSim` was hand-created in Phase 0. Rojo does not own that instance, so it silently refuses to patch anything beneath it. The stale `Controllers` / `UI` folders sitting in Studio but absent from `src/` were the visible tell — had Rojo owned that subtree it would have deleted them.
+
+**The fix: delete the offending folder in Studio and let Rojo recreate it.** Everything under it is reproducible from `src/`, so nothing is lost. It reappeared complete, with `Controls/InputController` present, within a second.
+
+**Diagnosing this class of problem** — establish which side is broken before touching anything:
+```bash
+rojo build default.project.json -o probe.rbxlx && grep -c YourModule probe.rbxlx
+curl -s http://localhost:34872/api/rojo                  # msgpack, but names are readable
+curl -s http://localhost:34872/api/read/<rootInstanceId> | grep -c YourModule
+```
+If the served tree contains the module, the server is fine and the plugin is the problem. Do not restart anything until you know which.
+
+**Two theories that were wrong, recorded so they are not re-tried:**
+- *"It's OneDrive eating file notifications."* It failed identically with OneDrive stopped.
+- *"`StarterPlayerScripts` needs an explicit `$className`."* It does not — Rojo already inferred the correct class, verified by diffing builds from before and after. The explicit `$className` now in `default.project.json` is conventional and harmless, but it fixed nothing.
+
+A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do not use it.**
 
 ---
 
 ## 4. Current state
 
-### Verified green (173 checks total)
+### Verified green (251 checks total)
 
 | Module | Path | Checks |
 |---|---|---|
@@ -55,6 +97,10 @@ These were decided deliberately and are expensive to reverse. Do not change them
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 |
 | `FlightModel` | `Physics/FlightModel.luau` | 34/34 |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 65/65 |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 13/13 |
+
+⚠️ **Run the suites in PLAY mode, not Edit.** `require` caches per session, and the Edit session accumulates stale copies as modules are edited — a module edited after it was first required will keep serving the old copy for the rest of the session, which shows up as `attempt to call a nil value` on a function you can see in the file. Entering Play creates a fresh DataModel with a clean cache. Use `datamodel_type: "Client"`; the server has no `UserInputService` and cannot load `InputController`.
 
 Also built and working: `Constants`, `MathUtil`, `Signal`, `Units`, `Remotes` (12-entry manifest), and both server/client bootstraps. A live boot logs gravity 9.80665, 12 remotes created, sea-level density 1.2250.
 
@@ -65,7 +111,7 @@ Also built and working: `Constants`, `MathUtil`, `Signal`, `Units`, `Remotes` (1
 1. **Centre-of-mass frame mismatch.** Roblox reports `AssemblyCenterOfMass` relative to the **root part**; the definition measures offsets from a **datum**. They are different origins. Fixed by storing a `DatumOffset` attribute on the root at build time and converting in `measure()`.
 2. **Cylinder volume.** Roblox computes mass from *true geometric* volume, not the bounding box — a cylinder is only π/4 of its box, so wheels came out 21% light. Fixed with a `SHAPE_VOLUME_FACTOR` table.
 
-Nothing is currently unverified. `FlightModel` and `GroundHandling` are built and green (§6); the next module to write is `InputController`.
+Nothing is currently unverified. Phase 1 is four modules from complete: `FlightController`, `AircraftService`, the debug HUD, and then the flight gate.
 
 ### Real physics results achieved so far
 
@@ -140,11 +186,87 @@ local fg, tg = GroundHandling.computeForces(gear, k, dt, controls, fa.Y)
 FlightModel.applyForces(fm, fa + fg, ta + tg)
 ```
 
+## 6c. `InputController` — built and green (2026-08-03)
+
+`src/StarterPlayer/StarterPlayerScripts/FlightSim/Controls/InputController.luau`, 56/56 — passed on its first execution once the Rojo subtree problem in §3 was solved.
+
+```lua
+local ic = InputController.new(definition, overrides?)
+local controls, systems = InputController.update(ic, dt, snapshot, flightState?)
+local snapshot = InputController.poll(ic, mouseDelta)   -- the only impure call
+InputController.rebind(ic, action, keyCode)
+```
+
+**The Controls contract is untouched.** `state.controls` carries exactly the six fields `FlightModel` declares, with the same signs, and a test asserts there are no extra keys — so it passes straight to `FlightModel`/`GroundHandling` with no edit to either.
+
+**New state went into a separate `state.systems` struct**, not into `Controls`: `engineCommanded`, `cameraHold`, `altitudeHold`, `altitudeTargetM`, `gearDown`, `paused`, `viewIndex`, `mouseMode`. `Controls` is a physics contract where every field is a number the aerodynamics consumes; putting booleans in it would mean FlightModel's type no longer describes what FlightModel reads. `engineCommanded` is a *commanded* state — FlightController wires it to `Engine.start`/`stop`.
+
+**`update()` is pure**, taking a snapshot of held ACTION names rather than reading `UserInputService`. That is what makes ramps, edge-triggered detents and the altitude-hold law testable at all. Edge detection lives inside `update()` (it keeps `wasHeld`), so callers pass held-state only.
+
+**Altitude hold is a cascade**: altitude error → demanded vertical speed → pitch command. Commanding pitch straight from altitude error gives a phugoid that never settles; the inner vertical-speed loop is what damps it. Manual pitch past `disconnectThreshold` disconnects it, as a real autopilot does.
+
+**Mouse is inverted as specified** — pointer forward → nose down. Roblox reports `Delta.Y < 0` when the mouse moves forward and pitch is positive-nose-up, so the accumulation needs *no negation anywhere*. Both directions are asserted separately because this is the likeliest thing in the file to be wrong.
+
+### Review of the three reported bugs (2026-08-03)
+
+1. **`viewIndex` grew unbounded** — real, fixed. Now wraps within `config.viewCount` (3: cockpit/chase/free) so the camera system can index straight into its view list. **The count is an assumption**; correct it when the camera system lands.
+2. **`RecenterStick` "should return to neutral controls"** — *half* real. It now also clears the `smoothDamp` velocities, so the controls settle at neutral instead of coasting through and returning from the far side. But it deliberately **does not clear trim**: recentring the stick means letting go of it, and a trimmed aircraft with the stick released holds its trimmed attitude — that is what trim is *for*. Clearing it would pitch the aircraft the moment the pilot tidied their controls. That part was a realism choice, not a bug.
+3. **Altitude hold engaged and disconnected on the same frame** — real, and the worst of the three. Fixed by capturing the stick position at engagement and disconnecting on *movement away from it*. See §7 for why absolute deflection cannot work in Direct mouse mode.
+
+### Bindings
+Pilot-specified (do not change): **W/S** throttle ramp, **A/D** rudder, **F/G** flap detents down/up, **C** camera hold, **R** altitude hold, **E** engine toggle, mouse = pitch/roll.
+
+Chosen here, open to review: **B** brake, **V** cycle view, **, / .** trim down/up, **L** gear (G was taken; inert on the fixed-gear 172), **X** recentre stick, **M** mouse mode, **P** pause.
+
+**C is momentary** (held only while down); **R latches**. Bindings live in `InputController.DEFAULT_BINDINGS` and are overridable per player via `rebind()`, which is what the settings menu will drive. A test asserts no two actions share a key.
+
+### The complete frame loop `FlightController` has to write
+
+Every piece below already exists and is tested. This is the whole of it:
+
+```lua
+local snapshot = InputController.poll(ic, mouseDelta)          -- mouseDelta from UIS
+local controls, systems = InputController.update(ic, dt, snapshot, {
+    altitude = fm.telemetry.altitude,
+    verticalSpeed = fm.telemetry.verticalSpeed,
+})
+
+if systems.engineCommanded ~= fm.engine.running then           -- E is a COMMAND
+    if systems.engineCommanded then Engine.start(fm.engine, def.engine)
+    else Engine.stop(fm.engine) end
+end
+
+local k = FlightModel.readKinematics(fm)
+local fa, ta = FlightModel.computeForces(fm, k, dt, controls, env)
+local fg, tg = GroundHandling.computeForces(gear, k, dt, controls, fa.Y)
+FlightModel.applyForces(fm, fa + fg, ta + tg)                  -- ONCE. It overwrites.
+```
+
+Order matters in two places: `flightState` for altitude hold comes from *last* frame's telemetry (it is the only thing available at that point in the frame, and one frame of lag is invisible), and `GroundHandling` needs `fa.Y` so it must run after the aerodynamics.
+
+`systems.cameraHold` / `viewIndex` belong to the Phase 2 camera system; `paused` and `gearDown` have no consumer yet.
+
+## 6d. `FlightController` — built and green (2026-08-03)
+
+`src/StarterPlayer/StarterPlayerScripts/FlightSim/Controllers/FlightController.luau`, 13/13. Exposes `Init()`, started by `Init.client.luau` via `CONTROLLER_ORDER`.
+
+It owns only sequencing and lifecycle. `stepFrame(rig, dt, snapshot)` is factored out of the Roblox event plumbing so the ordering can be tested directly — the loop itself is four lines.
+
+**Confirmed working end to end in Play**: the bootstrap starts it, the aircraft builds, sitting in the seat starts the loop.
+
+**Deviation from the plan in §6c**: `flightState` for altitude hold is taken from *this* frame's `readKinematics`, not last frame's telemetry. `readKinematics` is cheap and pure, so there was no reason to accept a frame of lag.
+
+⚠️ **`InputController` is NOT started by the bootstrap.** It sits in `Controls/`, has no `Init()`, and is a library this controller drives. `CONTROLLER_ORDER` lists its name but the loader only scans `Controllers/`, so it is skipped silently. Do not "fix" that path — the folder rename is a separate task.
+
+### Things this controller decides, open to review
+- **Spawn at `CFrame.new(0, 100, 0)`** as specified, so the aircraft free-falls onto the baseplate before anyone reaches it. `CFrame.new(0, 1.30, 0)` parks it on the ground instead — one constant, `SPAWN_CFRAME`.
+- **Mouse is locked to centre while seated**, released on exit. `GetMouseDelta()` returns zero unless the mouse is locked, so without this the yoke is simply dead. The camera system may want to take this over.
+- **Input is dropped while a text box is focused**, or typing "was" in chat flies the aircraft.
+- **Pause zeroes the constraints** rather than leaving the last force applied, which would accelerate the aircraft indefinitely. This is a stopgap, not a real pause — Roblox keeps simulating, so the aircraft becomes an unpowered glider. Pause needs a design decision before it is worth binding.
+
 ### Then, in order
-1. `InputController` — keyboard axes first (deterministic and verifiable), then mouse modes.
-2. `FlightController` — client frame loop, network ownership handling, and the summing above.
-3. `AircraftService` — server-side spawning.
-4. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
+1. `AircraftService` — server-side spawning, which replaces the test spawn above.
+2. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
 
 **Phase 1 test gate**: taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. Do not proceed to Phase 2 until the user has flown it and signed off.
 
@@ -159,6 +281,8 @@ FlightModel.applyForces(fm, fa + fg, ta + tg)
 - The stall blend is centred ~3° *beyond* `alphaStall`, so peak CL occurs *at* the stated stall angle. Centring it on `alphaStall` puts CL_max several degrees early and well below the real value.
 - When splitting a wing into panels: halve the **area**, keep the **full wing's aspect ratio**. Induced drag depends on total span. Getting this wrong roughly doubles induced drag and the aircraft mysteriously won't climb.
 - **The thrust line is BELOW the centre of mass**, by about 0.28 m — the high wing and its fuel carry the balance point above the propeller shaft. So power produces a nose-**up** moment ("power up, nose up"), which is correct for a high-wing Cessna. A comment in the definition claimed the opposite for a while; the sign is now asserted by `FlightModel.runTests()` rather than trusted to prose.
+- **A `runTests()` that errors mid-suite leaks its rig into the workspace**, and in Studio that debris survives into the next Play session — where a leftover aircraft looks exactly like a double-spawn bug. It cost real time to diagnose once. `FlightController.runTests` now wraps its body in a `pcall` and destroys the rig either way; **`AircraftBuilder`, `FlightModel` and `GroundHandling` still destroy on the last line and have the same flaw.** If a Play session shows more aircraft than expected, clean `workspace` in *Edit* first.
+- **Altitude hold disconnects on stick MOVEMENT, not absolute deflection.** In Direct mouse mode the stick holds wherever it was put, so testing absolute deflection meant a pilot flying with real pitch input would press R and have it engage and disconnect on the same frame — a dead key with no feedback. The reference position is captured at engagement.
 - **Cross-product order for the lateral axis.** `rollDir:Cross(groundNormal)` points to the aircraft's right; `groundNormal:Cross(rollDir)` points left. Getting it backwards inverts nose-wheel steering and the reported skid direction *without* breaking lateral grip, because grip is sign-symmetric — so the tests that would catch it are the steering ones, not the friction ones. This was caught on the first `GroundHandling` run.
 - **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
 

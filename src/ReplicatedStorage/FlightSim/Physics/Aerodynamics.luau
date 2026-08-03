@@ -113,6 +113,13 @@ export type Surface = {
 	controlEffect: number, -- change in CL per unit control deflection (-1..1)
 	flapEffect: number, -- change in CL per unit flap extension (0..1)
 	flapDragEffect: number, -- change in CD0 at full flap
+
+	-- Integration metadata ------------------------------------------------
+	-- Ignored by the solver; read by FlightModel to decide which control axis
+	-- drives this surface. Kept on the Surface itself rather than in a
+	-- wrapper table so the per-frame loop stays flat.
+	controlAxis: string?, -- "pitch" | "roll" | "yaw" | nil
+	controlSign: number, -- +1 or -1; ailerons are differential, hence the sign
 }
 
 -- =========================================================================
@@ -259,9 +266,38 @@ function Aerodynamics.newSurface(props: { [string]: any }): Surface
 		controlEffect = props.controlEffect or 0,
 		flapEffect = props.flapEffect or 0,
 		flapDragEffect = props.flapDragEffect or 0,
+
+		controlAxis = props.controlAxis,
+		controlSign = props.controlSign or 1,
 	}
 
 	return surface
+end
+
+--[[
+	Build a surface set at a given incidence angle.
+
+	Incidence is the angle at which a surface is bolted to the airframe,
+	measured from the fuselage reference line. It is not cosmetic:
+
+	  - The wing is rigged at about +1.5 degrees so the fuselage sits level in
+	    cruise while the wing still meets the air at a useful angle. Without
+	    it, level flight would mean flying permanently nose-up.
+	  - The tailplane is rigged at a slight NEGATIVE angle, so it produces a
+	    download that balances the nose-down pitching moment of a cambered
+	    wing. This is a large part of why an aircraft is stable in pitch.
+
+	Implemented by rotating the forward and normal vectors about the span
+	axis, which keeps everything downstream - angle of attack, lift direction,
+	stall - working with no special cases.
+]]
+function Aerodynamics.axesWithIncidence(incidenceDeg: number, spanAxis: Vector3?): (Vector3, Vector3)
+	local i = math.rad(incidenceDeg)
+	local axis = spanAxis or Vector3.new(1, 0, 0)
+	-- Positive incidence must raise the leading edge, giving forward =
+	-- (0, sin i, -cos i) and normal = (0, cos i, sin i) for a wing.
+	local rotation = CFrame.fromAxisAngle(axis, i)
+	return rotation * Vector3.new(0, 0, -1), rotation * Vector3.new(0, 1, 0)
 end
 
 -- =========================================================================

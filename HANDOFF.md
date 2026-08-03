@@ -38,26 +38,13 @@ These were decided deliberately and are expensive to reverse. Do not change them
 
 ⚠️ **`require` caches per Studio session.** After editing a module, re-running `runTests()` in the same session gives you the *stale* copy. Restart the session, or clone the module tree to a temp folder and require the clone.
 
-⚠️ **Rojo's file watcher did not pick up new files on 2026-08-03.** `rojo serve` was running on port 34872 with Studio connected, but a newly created `.luau` file never appeared in the datamodel. Likely the OneDrive folder swallowing filesystem notifications. If this happens again, either restart `rojo serve` and reconnect the plugin, or use the fallback below.
-
-**Fallback sync (no Rojo).** Serve `src/` over plain HTTP and have Studio pull it in — files stay the source of truth:
-
-```bash
-node tools/srcserve.js          # static read-only server on 127.0.0.1:8791
-```
-```lua
--- in the Studio command bar
-local src = game:GetService("HttpService"):GetAsync(
-	"http://127.0.0.1:8791/ReplicatedStorage/FlightSim/Physics/FlightModel.luau")
-game.ReplicatedStorage.FlightSim.Physics.FlightModel.Source = src
-```
-Combine this with the clone-to-temp-folder trick above to defeat the `require` cache in one step.
+⚠️ **If Rojo stops delivering changes, it is almost certainly OneDrive.** On 2026-08-03 `rojo serve` was running on 34872 with Studio connected, yet a newly created `.luau` file never reached the datamodel — OneDrive was swallowing the filesystem notifications. **Remedy: pause OneDrive, then restart `rojo serve`.** That is the fix; confirm both before inventing anything else. A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do not use it.**
 
 ---
 
 ## 4. Current state
 
-### Verified green (148 checks total)
+### Verified green (173 checks total)
 
 | Module | Path | Checks |
 |---|---|---|
@@ -67,6 +54,7 @@ Combine this with the clone-to-temp-folder trick above to defeat the `require` c
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 25/25 |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 |
 | `FlightModel` | `Physics/FlightModel.luau` | 34/34 |
+| `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 |
 
 Also built and working: `Constants`, `MathUtil`, `Signal`, `Units`, `Remotes` (12-entry manifest), and both server/client bootstraps. A live boot logs gravity 9.80665, 12 remotes created, sea-level density 1.2250.
 
@@ -77,7 +65,7 @@ Also built and working: `Constants`, `MathUtil`, `Signal`, `Units`, `Remotes` (1
 1. **Centre-of-mass frame mismatch.** Roblox reports `AssemblyCenterOfMass` relative to the **root part**; the definition measures offsets from a **datum**. They are different origins. Fixed by storing a `DatumOffset` attribute on the root at build time and converting in `measure()`.
 2. **Cylinder volume.** Roblox computes mass from *true geometric* volume, not the bounding box — a cylinder is only π/4 of its box, so wheels came out 21% light. Fixed with a `SHAPE_VOLUME_FACTOR` table.
 
-Nothing is currently unverified. The next module to write is `FlightModel` (§6).
+Nothing is currently unverified. `FlightModel` and `GroundHandling` are built and green (§6); the next module to write is `InputController`.
 
 ### Real physics results achieved so far
 
@@ -126,14 +114,37 @@ FlightModel.recomputeGeometry(state)               -- only if mass layout change
 
 **The split that matters**: `computeForces(state, kinematics, dt, controls, env)` is pure — it reads nothing from the datamodel. `step()` only gathers kinematics off the assembly, calls it, and writes the constraints. That is what lets the tests assert on pitch stability, roll damping and weathervaning without Roblox simulating anything, and it is worth preserving.
 
-**Deliberately not in this module**: gravity (Roblox applies it), ground handling (steering, brakes, rolling resistance), and input. Ground handling is the gap before the taxi part of the Phase 1 gate can be flown.
+**Deliberately not in this module**: gravity (Roblox applies it), ground handling, and input.
+
+## 6b. `GroundHandling` — built and green (2026-08-03)
+
+`src/ReplicatedStorage/FlightSim/Physics/GroundHandling.luau`, 25/25.
+
+```lua
+local gear = GroundHandling.new(model, definition)
+local f, t = GroundHandling.computeForces(gear, kinematics, dt, controls, liftVertical)
+```
+
+Roblox's solver already gives us *contact* — the aircraft rests and rolls on real collidable wheels. What it cannot give us is *tyre* behaviour: Roblox friction is isotropic, so without this module the aircraft slides across the runway like a curling stone. It supplies three things Roblox will not: lateral grip, rolling resistance and brakes, and nose-wheel steering.
+
+**`liftVertical` is not optional in spirit.** Every gear force scales with `weight − lift`, so passing 0 leaves the aircraft braking and steering at full authority right up to rotation. Pass the vertical component of the aero force computed the same frame.
+
+**Steering is a cornering force at the nose wheel, not a commanded yaw rate.** The yaw emerges from `r × F`. That is what makes steering authority fade as lift unloads the nose wheel and vanish entirely when it lifts — handing over to the rudder exactly when it should. `Cessna172.gear.steeringRate` was replaced by `steeringAuthority` (fraction of available grip at full pedal) and `tyreFriction` for this reason.
+
+### Wiring it up (the FlightController's job)
+`FlightModel.applyForces` **overwrites**, it does not accumulate. Sum both contributors and write once:
+```lua
+local k = FlightModel.readKinematics(fm)
+local fa, ta = FlightModel.computeForces(fm, k, dt, controls, env)
+local fg, tg = GroundHandling.computeForces(gear, k, dt, controls, fa.Y)
+FlightModel.applyForces(fm, fa + fg, ta + tg)
+```
 
 ### Then, in order
-1. `GroundHandling` — nose-wheel steering, brakes, rolling resistance. Needed for taxi.
-2. `InputController` — keyboard axes first (deterministic and verifiable), then mouse modes.
-3. `FlightController` — client frame loop, network ownership handling.
-4. `AircraftService` — server-side spawning.
-5. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
+1. `InputController` — keyboard axes first (deterministic and verifiable), then mouse modes.
+2. `FlightController` — client frame loop, network ownership handling, and the summing above.
+3. `AircraftService` — server-side spawning.
+4. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
 
 **Phase 1 test gate**: taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. Do not proceed to Phase 2 until the user has flown it and signed off.
 
@@ -148,6 +159,7 @@ FlightModel.recomputeGeometry(state)               -- only if mass layout change
 - The stall blend is centred ~3° *beyond* `alphaStall`, so peak CL occurs *at* the stated stall angle. Centring it on `alphaStall` puts CL_max several degrees early and well below the real value.
 - When splitting a wing into panels: halve the **area**, keep the **full wing's aspect ratio**. Induced drag depends on total span. Getting this wrong roughly doubles induced drag and the aircraft mysteriously won't climb.
 - **The thrust line is BELOW the centre of mass**, by about 0.28 m — the high wing and its fuel carry the balance point above the propeller shaft. So power produces a nose-**up** moment ("power up, nose up"), which is correct for a high-wing Cessna. A comment in the definition claimed the opposite for a while; the sign is now asserted by `FlightModel.runTests()` rather than trusted to prose.
+- **Cross-product order for the lateral axis.** `rollDir:Cross(groundNormal)` points to the aircraft's right; `groundNormal:Cross(rollDir)` points left. Getting it backwards inverts nose-wheel steering and the reported skid direction *without* breaking lateral grip, because grip is sign-symmetric — so the tests that would catch it are the steering ones, not the friction ones. This was caught on the first `GroundHandling` run.
 - **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
 
 ---

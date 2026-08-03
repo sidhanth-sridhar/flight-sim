@@ -377,10 +377,14 @@ function FlightModel.computeForces(
 
 	--[[
 		Thrust acts on the propeller shaft, not at the centre of mass. On the
-		172 the thrust line sits slightly ABOVE the centre of mass, so opening
-		the throttle produces a small nose-down pitching moment - which is
-		exactly what happens in the real aircraft and part of why a go-around
-		needs a firm pull.
+		172 the thrust line sits about 0.28 m BELOW the centre of mass - the
+		high wing and the fuel it carries hold the balance point above the
+		propeller shaft - so opening the throttle produces a nose-UP pitching
+		moment. That is the "power up, nose up" behaviour of the high-wing
+		Cessnas, and it is why a go-around needs forward pressure on the yoke.
+
+		The sign is asserted by runTests() rather than trusted to this comment,
+		because this exact claim was stated backwards here once already.
 
 		This has to be applied by hand precisely because AeroForce is set to
 		ApplyAtCenterOfMass; the constraint contributes no moment of its own.
@@ -508,27 +512,52 @@ end
 	load, a breakpoint - cannot integrate a huge step and launch the aircraft
 	into orbit.
 ]]
+--[[
+	Read the assembly's true state out of Roblox, in SI.
+
+	This is one half of the stud/metre boundary; everything downstream of it is
+	pure SI. Exposed separately from step() because anything else that
+	contributes force - GroundHandling, and later damage or ground effect -
+	needs the same kinematics, and reading them twice per frame would be both
+	wasteful and a chance for the two readings to disagree.
+]]
+function FlightModel.readKinematics(state: any): Kinematics
+	local root = state.root
+	return {
+		cframe = root.CFrame,
+		velocity = root.AssemblyLinearVelocity / Constants.STUDS_PER_METER,
+		angularVelocity = root.AssemblyAngularVelocity, -- rad/s: no length scale
+		altitude = Units.studsToMeters(root.AssemblyCenterOfMass.Y),
+	}
+end
+
+--[[
+	The other half of the boundary: SI force and torque in, Roblox units out.
+
+	Callers with more than one force contributor must sum them and call this
+	ONCE. Calling it twice does not accumulate - the second call overwrites the
+	first, and the aircraft silently flies on whichever contribution happened
+	to be written last.
+]]
+function FlightModel.applyForces(state: any, force: Vector3, torque: Vector3)
+	state.aeroForce.Force = Units.newtonsToRobloxForceVector(force)
+	state.aeroTorque.Torque = Units.newtonMetersToRobloxTorqueVector(torque)
+end
+
+--[[
+	Aerodynamics and thrust only. Convenience for tests and for any context
+	with no landing gear; the FlightController sums this with GroundHandling
+	and calls applyForces itself.
+]]
 function FlightModel.step(state: any, dt: number, controls: Controls?, environment: Environment?)
 	dt = math.min(math.max(dt, 0), Constants.SIM.MAX_TIMESTEP)
 	if dt <= 0 then
 		return
 	end
 
-	local root = state.root
-
-	-- The stud/metre boundary. Everything past this line is SI.
-	local kinematics: Kinematics = {
-		cframe = root.CFrame,
-		velocity = root.AssemblyLinearVelocity / Constants.STUDS_PER_METER,
-		angularVelocity = root.AssemblyAngularVelocity, -- rad/s: no length scale
-		altitude = Units.studsToMeters(root.AssemblyCenterOfMass.Y),
-	}
-
+	local kinematics = FlightModel.readKinematics(state)
 	local force, torque = FlightModel.computeForces(state, kinematics, dt, controls, environment)
-
-	-- ...and the boundary back into Roblox units.
-	state.aeroForce.Force = Units.newtonsToRobloxForceVector(force)
-	state.aeroTorque.Torque = Units.newtonMetersToRobloxTorqueVector(torque)
+	FlightModel.applyForces(state, force, torque)
 end
 
 -- Stop applying force. Used when the pilot leaves the seat, when the aircraft

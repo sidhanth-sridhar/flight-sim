@@ -291,10 +291,29 @@ Cessna172.gear = {
 		{ name = "Right", offset = Vector3.new(1.25, -0.95, 0.4), radius = 0.2, braked = true },
 	},
 
-	-- Nose wheel steering authority, radians per second of yaw at full pedal.
-	steeringRate = 0.6,
-	-- Steering fades out as speed rises; above this the rudder does the work.
+	--[[
+		Steering is modelled as a real cornering FORCE at the nose wheel, not
+		as a commanded yaw rate. The yaw then emerges from r x F like every
+		other moment in this project.
+
+		That choice buys two behaviours for free, both of which matter on the
+		takeoff roll: steering authority falls away as lift unloads the nose
+		wheel, and disappears entirely the moment the nose wheel leaves the
+		ground - which is exactly when the rudder has to take over.
+
+		Expressed as the fraction of the tyre's available grip used at full
+		pedal. Well under 1.0, because a nose wheel steered to the limit of
+		adhesion would simply skid.
+	]]
+	steeringAuthority = 0.55,
+	-- Steering is progressively reduced above this speed; the rudder does the
+	-- work by then, and full-authority nose wheel steering at speed is how
+	-- real aircraft depart the side of the runway.
 	steeringFadeSpeed = 25, -- m/s
+
+	-- Sideways grip of a tyre on dry asphalt. This is what stops the aircraft
+	-- sliding sideways across the runway in a crosswind landing.
+	tyreFriction = 0.8,
 
 	-- Rolling resistance and braking, as fractions of the weight on wheels.
 	rollingResistance = 0.025,

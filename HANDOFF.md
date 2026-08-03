@@ -38,11 +38,26 @@ These were decided deliberately and are expensive to reverse. Do not change them
 
 ⚠️ **`require` caches per Studio session.** After editing a module, re-running `runTests()` in the same session gives you the *stale* copy. Restart the session, or clone the module tree to a temp folder and require the clone.
 
+⚠️ **Rojo's file watcher did not pick up new files on 2026-08-03.** `rojo serve` was running on port 34872 with Studio connected, but a newly created `.luau` file never appeared in the datamodel. Likely the OneDrive folder swallowing filesystem notifications. If this happens again, either restart `rojo serve` and reconnect the plugin, or use the fallback below.
+
+**Fallback sync (no Rojo).** Serve `src/` over plain HTTP and have Studio pull it in — files stay the source of truth:
+
+```bash
+node tools/srcserve.js          # static read-only server on 127.0.0.1:8791
+```
+```lua
+-- in the Studio command bar
+local src = game:GetService("HttpService"):GetAsync(
+	"http://127.0.0.1:8791/ReplicatedStorage/FlightSim/Physics/FlightModel.luau")
+game.ReplicatedStorage.FlightSim.Physics.FlightModel.Source = src
+```
+Combine this with the clone-to-temp-folder trick above to defeat the `require` cache in one step.
+
 ---
 
 ## 4. Current state
 
-### Verified green (94 checks total)
+### Verified green (148 checks total)
 
 | Module | Path | Checks |
 |---|---|---|
@@ -50,17 +65,19 @@ These were decided deliberately and are expensive to reverse. Do not change them
 | `Aerodynamics` | `Physics/Aerodynamics.luau` | 29/29 |
 | `Engine` | `Physics/Engine.luau` | 23/23 |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 25/25 |
+| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 |
+| `FlightModel` | `Physics/FlightModel.luau` | 34/34 |
 
 Also built and working: `Constants`, `MathUtil`, `Signal`, `Units`, `Remotes` (12-entry manifest), and both server/client bootstraps. A live boot logs gravity 9.80665, 12 remotes created, sea-level density 1.2250.
 
-### ⚠️ Unverified — do this first
+### AircraftBuilder — now verified (2026-08-03)
 
-`Aircraft/AircraftBuilder.luau` — roughly 19 checks, **never run successfully end to end**. Its last run failed one check; two fixes were applied but not executed:
+`Aircraft/AircraftBuilder.luau` passes 20/20. The two outstanding fixes were confirmed correct when finally executed:
 
 1. **Centre-of-mass frame mismatch.** Roblox reports `AssemblyCenterOfMass` relative to the **root part**; the definition measures offsets from a **datum**. They are different origins. Fixed by storing a `DatumOffset` attribute on the root at build time and converting in `measure()`.
 2. **Cylinder volume.** Roblox computes mass from *true geometric* volume, not the bounding box — a cylinder is only π/4 of its box, so wheels came out 21% light. Fixed with a `SHAPE_VOLUME_FACTOR` table.
 
-**First task: run `AircraftBuilder.runTests()` and confirm it is green.**
+Nothing is currently unverified. The next module to write is `FlightModel` (§6).
 
 ### Real physics results achieved so far
 
@@ -93,31 +110,30 @@ All emergent from honest coefficients — none of these were tuned to hit a targ
 
 ---
 
-## 6. Next task: `FlightModel`
+## 6. `FlightModel` — built and green (2026-08-03)
 
-This is the module that makes it fly. Intended design, already worked out:
+`src/ReplicatedStorage/FlightSim/Physics/FlightModel.luau`, 34/34.
 
-**Location**: `src/ReplicatedStorage/FlightSim/Physics/FlightModel.luau`
+**API**
+```lua
+local state = FlightModel.new(model, definition)   -- caches geometry at spawn
+FlightModel.step(state, dt, controls, environment) -- once per frame, pilot's client
+FlightModel.release(state)                         -- zero the constraints
+FlightModel.recomputeGeometry(state)               -- only if mass layout changes
+```
 
-**Per frame, on the pilot's client:**
-1. Read `AssemblyLinearVelocity`, `AssemblyAngularVelocity`, `AssemblyCenterOfMass`, root `CFrame`.
-2. Altitude → `Atmosphere.getDensity()`.
-3. For each surface: compute its offset from CoM (cached at spawn), get point velocity via `Aerodynamics.getPointVelocity(v - wind, ω, r)`, call `Aerodynamics.solveSurface(...)`.
-4. Accumulate total force and total torque: `τ += r × F`.
-5. Add engine thrust along the thrust axis, plus torque reaction and slipstream yaw.
-6. Add airframe parasitic drag (`definition.drag.airframeCD0` + `Engine.getPropDragCD0`) opposing velocity.
-7. Sanitise via `MathUtil.sanitizeVector` — **a single NaN permanently destroys a Roblox assembly**.
-8. Write to the `AeroForce` / `AeroTorque` constraints (convert N → Roblox units with `Units.newtonsToRobloxForceVector`).
+`controls` is `{ pitch, roll, yaw, throttle, flaps, brake }` — pitch/roll/yaw in −1..1, positive = nose up / roll right / nose right. `environment` is `{ windVelocity, tempOffsetC }`, both optional. Live numbers for the HUD are in `state.telemetry` (IAS, TAS, altitude, α, β, load factor, thrust, rpm, fuel, per-surface α/CL/CD).
 
-**Cache at spawn**, not per frame: `comLocal`, each surface's `offsetFromCoM = surface.offset - datumOffset - comLocal`.
+**The split that matters**: `computeForces(state, kinematics, dt, controls, env)` is pure — it reads nothing from the datamodel. `step()` only gathers kinematics off the assembly, calls it, and writes the constraints. That is what lets the tests assert on pitch stability, roll damping and weathervaning without Roblox simulating anything, and it is worth preserving.
 
-**Clamp `dt`** to `Constants.SIM.MAX_TIMESTEP` (1/20 s) so a frame hitch cannot launch the aircraft into orbit.
+**Deliberately not in this module**: gravity (Roblox applies it), ground handling (steering, brakes, rolling resistance), and input. Ground handling is the gap before the taxi part of the Phase 1 gate can be flown.
 
 ### Then, in order
-1. `InputController` — keyboard axes first (deterministic and verifiable), then mouse modes.
-2. `FlightController` — client frame loop, network ownership handling.
-3. `AircraftService` — server-side spawning.
-4. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
+1. `GroundHandling` — nose-wheel steering, brakes, rolling resistance. Needed for taxi.
+2. `InputController` — keyboard axes first (deterministic and verifiable), then mouse modes.
+3. `FlightController` — client frame loop, network ownership handling.
+4. `AircraftService` — server-side spawning.
+5. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
 
 **Phase 1 test gate**: taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. Do not proceed to Phase 2 until the user has flown it and signed off.
 
@@ -131,6 +147,8 @@ This is the module that makes it fly. Intended design, already worked out:
 - Parasitic drag must sit **outside** the stall-separation blend. Blending it away means a surface in exactly reversed flow produces zero drag and coasts forever.
 - The stall blend is centred ~3° *beyond* `alphaStall`, so peak CL occurs *at* the stated stall angle. Centring it on `alphaStall` puts CL_max several degrees early and well below the real value.
 - When splitting a wing into panels: halve the **area**, keep the **full wing's aspect ratio**. Induced drag depends on total span. Getting this wrong roughly doubles induced drag and the aircraft mysteriously won't climb.
+- **The thrust line is BELOW the centre of mass**, by about 0.28 m — the high wing and its fuel carry the balance point above the propeller shaft. So power produces a nose-**up** moment ("power up, nose up"), which is correct for a high-wing Cessna. A comment in the definition claimed the opposite for a while; the sign is now asserted by `FlightModel.runTests()` rather than trusted to prose.
+- **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
 
 ---
 

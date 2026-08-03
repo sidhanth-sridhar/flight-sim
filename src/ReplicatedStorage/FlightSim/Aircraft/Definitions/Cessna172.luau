@@ -239,8 +239,18 @@ Cessna172.engine = {
 	spoolTime = 0.35,
 	startTime = 1.5,
 
-	-- Propeller on the nose, thrust line just above the centre of mass, so
-	-- adding power produces a slight nose-down pitch - as it does in reality.
+	--[[
+		Propeller on the nose, on the fuselage centreline.
+
+		This sits about 0.28 m BELOW the centre of mass, because the high wing
+		and the fuel in it carry the balance point well above the propeller
+		shaft. Adding power therefore pitches the nose UP - the "power up,
+		nose up" behaviour characteristic of the high-wing Cessnas, and the
+		reason a go-around needs forward pressure on the yoke.
+
+		Verified by FlightModel.runTests(), which checks the sign of the arm
+		rather than trusting this comment.
+	]]
 	thrustOffset = Vector3.new(0, 0.05, -2.2),
 
 	--[[

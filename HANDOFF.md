@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 435 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 439 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
 
 🛫 **THE FLIGHT-TEST ENVIRONMENT IS NOW AN AIRPORT, NOT THE BASEPLATE.** Runway 18/36, 1,000 × 23 m, with a parallel taxiway, an apron, full markings and vertical reference objects. See §11 — including why the markings are load-bearing rather than decorative.
 
@@ -15,6 +15,8 @@
 Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and recovery, and landing were all flown. **The behaviour in the air was reported as right**: rotation at the expected speed, Vy pitch holding, clean turns, a predictable stall near the expected AoA with no deep-stall tendency, correct left-turning tendency answered by right rudder, and rudder authority that fades with airspeed as it should.
 
 ➡️ **NEXT TASK: re-fly the landing gate on the real runway.** The Phase 1 gate passed technically, but landings were judged on a featureless baseplate with no depth or speed cue, which is why the flare felt impossible. §11 exists to fix that. Ground effect (§10) is also modelled now, though it is worth only **~45 fpm of cushion out of ~900** — a high wing gets little of it, so the runway markings are expected to help far more than the physics did.
+
+⚖️ **The tailplane was rigged the wrong way round, and the aircraft could not be trimmed hands-off anywhere** (§13). Reported as "really hard to nose down on approach". It needed **−0.79 stick** at 65 kt with full flap and **−0.38 in cruise**, against a trim range of only ±0.35. `STAB_INCIDENCE` is now **+1.0°** and `trimLimit` **±0.7**; every configuration now trims hands-off. **No published performance figure moved.**
 
 🛞 **Nosewheel steering was rebuilt** (§12). Reported as too weak and too rudder-dependent; measured at a **207 m turn radius** with full pedal, now **19.3 m**. The nose wheel was being shoved sideways while pointed straight ahead; it is now actually steered.
 
@@ -128,18 +130,18 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (435 checks total)
+### Verified green (439 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
 | `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 | Client |
 | `Aerodynamics` | `Physics/Aerodynamics.luau` | 37/37 | Client |
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
-| `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 26/26 | Client |
+| `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 29/29 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 40/40 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 80/80 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 81/81 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
@@ -171,7 +173,7 @@ All emergent from honest coefficients — none of these were tuned to hit a targ
 - Rate of climb at Vy **783 ft/min** (published 730)
 - Glide ratio power-off **9.9:1** (published ~9)
 - Clean stall **52.9 kt**, full flap **45.4 kt** (published 48 / 40)
-- Static margin **+16% MAC** — solidly stable
+- Static margin **+14.2% MAC** — solidly stable (this line read +16% for a while; the suite has reported 14.2% throughout and rigging incidence cannot move it)
 - Static thrust **2780 N**, endurance **5.5 h**, burn **27.9 kg/h**
 
 ---
@@ -582,6 +584,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **A tail DOWNLOAD pitches the nose UP**, because it acts behind the centre of mass. On this aircraft the wing's AC is also ahead of the CoM, so wing lift is nose-up too — the two add rather than cancel, and the textbook "tail carries a download to balance the wing" picture is simply wrong here. Getting it backwards left the aeroplane untrimmable in every configuration for months, with nothing reporting it. **The CG is aft of the wing AC on a 172, so the tail must LIFT to trim.** See §13.
+- **Trim range must be measured against the aircraft's actual trim requirement, not chosen.** `trimLimit` was ±0.35 against a requirement spanning −0.43 to +0.65 — so the pilot flew every approach holding the stick off-centre. If a control cannot reach the condition the aeroplane needs, it is a missing control.
 - **Studio does not always step CLIENT physics in a Play session.** A plain unanchored part dropped from y = 60 on the Client datamodel did not move at all, with `Workspace.Gravity` correct at 9.8067 — while the identical test on the **Server** datamodel ran normally. Static suites are fine on the client, but **any test that needs the aircraft to actually move must run in the Server datamodel.** This cost a wrong diagnosis: a taxi measurement read 0.0 kt and looked like the steering change had broken thrust, when the force was reaching the constraint the whole time (1,462 N, verified) and nothing was being integrated.
 - **A sideways FORCE on a wheel that stays pointed straight ahead does not steer an aircraft.** The main tyres' lateral grip cancels the resulting rotation, and the two fight to a standstill — 1,300 N·m produced a 207 m turn radius. Steered wheels need their own rotated axes. See §12.
 - **Rojo reads `default.project.json` at serve start and never again.** Editing the project file while `rojo serve` is running does nothing, silently. Restart the server, then **reconnect the plugin in Studio** — killing the server drops the connection and it does not return on its own, after which no file syncs at all and it looks exactly like the subtree bug in §3. Full recovery is in §3.
@@ -814,5 +818,57 @@ Applied to the steered wheel only, deliberately. For a main wheel tracking strai
 ### One side effect, and it is correct
 **A stationary aircraft no longer steers at all**, however hard the pedals are pressed. Cornering now needs slip, and slip needs rolling. That is true of the real aeroplane — it turns on the ground by rolling, or by differential braking, which is not modelled. A test asserts it.
 
-### `GroundHandling`'s test rig had to move
+### `GroundHandling`'s test rig had to move (§12)
 Its fixture built a 400 m pad and a 1,111 kg aircraft at **the world origin** — which is now the middle of runway 18/36. Running the suite would have dropped a slab coincident with the runway surface and an aeroplane on the centreline in front of anyone on short final. Now at (−5,000, −5,000) on its own pad. Same class as the leaked rigs in §7; the airport turned it from untidy into dangerous.
+
+---
+
+## 13. Pitch trim — the tailplane was rigged backwards (2026-08-04)
+
+Reported by the pilot as "really hard to nose down when coming in for the landing", with a guess that the yoke's centre relative to the mouse was off. **The complaint was exactly right and the guess was not** — the cursor centre is provably neutral (§6g verified the GUI inset live, and a test asserts a centred cursor gives pitch and roll of exactly 0).
+
+### What was actually wrong
+
+Stick required to hold level flight, measured by solving for the attitude where the pitching moment is zero *and* lift equals weight:
+
+| configuration | before | after |
+|---|---|---|
+| cruise 100 kt | −0.38 | **−0.02** |
+| 65 kt clean, idle | +0.29 | +0.65 |
+| **65 kt full flap, idle** | **−0.79** | **−0.43** |
+| 70 kt full flap, power | −0.94 | −0.58 |
+| Vy climb 74 kt | — | +0.37 |
+
+The aeroplane needed **79% nose-down stick** to hold an approach, and trim reached only ±0.35 — so it could not be trimmed off. With `mouseExpo = 0.35` that meant holding the cursor about 80% of the way to the top of the screen for the whole approach, while judging the flare. There was no way to fly it hands-off anywhere in the envelope, including cruise.
+
+### Two sign errors, compounding
+
+Reading the per-surface moments showed the `Stabilizer` producing **CL 0.000 and 0 N** — carrying no load at all — while the wing produced +2,873 N·m nose-up with flaps down.
+
+1. **The wing's aerodynamic centre is 0.19 m AHEAD of the centre of mass**, so wing lift is a nose-**up** moment. That geometry is correct for a 172, whose CG range (35–47% MAC) is genuinely aft of the quarter-chord — so it is not the bug, but it inverts the usual textbook picture.
+2. **A tail download acts behind the CoM and therefore also pitches the nose up.** So `STAB_INCIDENCE = -2.0` was *adding* to the moment it was supposed to balance.
+
+The old comment on those constants asserted the opposite of both — "a download that balances the nose-down pitching moment of the cambered wing". Two wrong claims in one sentence, and nothing tested either of them.
+
+**With the CG aft of the wing AC, the tail must LIFT to trim**, so the incidence has to be positive. The first sweep I ran went the wrong way (−2 → −5 made it steadily worse) precisely because I reached for the textbook picture before checking the sign.
+
+### The fix, and why these numbers
+
+- **`STAB_INCIDENCE` −2.0° → +1.0°.** Chosen by measurement: it is the value that puts the cruise stick at −0.02 and centres the whole envelope (−0.43 to +0.65) about neutral rather than hard against the nose-down stop.
+- **`trimLimit` 0.35 → 0.7.** Derived from the span above, not felt. Trim exists so the yoke can sit neutral in any configuration; a limit less than half the aircraft's own trim requirement is a missing control, not a safety margin.
+
+### Nothing else moved
+
+This changes **trim, not stability** — static margin depends on lift slopes and moment arms, not on rigging incidence. Verified rather than assumed; every published figure is identical:
+
+| | before | after |
+|---|---|---|
+| Max level speed | 130 kt | **130.2 kt** |
+| Rate of climb at Vy | 783 ft/min | **783 ft/min** |
+| Glide ratio power-off | 9.9:1 | **9.88:1** |
+| Clean stall | 52.9 kt | **53.0 kt** |
+| Full-flap stall | 45.4 kt | **45.4 kt** |
+| Static margin | 14.2% MAC | **14.2% MAC** |
+
+### Three regression tests
+`Cessna172.runTests()` now asserts the wing AC is ahead of the CoM, that the tailplane is rigged to **lift** (a sign check, because it is the sign that was wrong and a CG change would silently flip it), and that the incidence stays in a range that keeps cruise trim near neutral. `InputController` asserts the trim range covers the aircraft's measured trim requirement, and its "trim is limited" check now derives from the constant instead of hardcoding 0.35.

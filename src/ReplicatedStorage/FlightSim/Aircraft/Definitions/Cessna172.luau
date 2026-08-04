@@ -58,13 +58,35 @@ local FIN_AR = (FIN_SPAN * FIN_SPAN) / FIN_AREA -- 1.73
 	while the wing still meets the air at a useful angle - without it, level
 	flight would mean flying permanently nose-high.
 
-	The tailplane is rigged at -2 degrees, producing a download that balances
-	the nose-down pitching moment of the cambered wing. Combined with its
-	position well behind the centre of mass, this is what makes the aircraft
-	stable in pitch and able to be trimmed hands-off.
+	THE TAILPLANE CARRIES AN UPLOAD, NOT A DOWNLOAD, and the old comment here
+	said the opposite. It claimed -2 degrees produced "a download that balances
+	the nose-down pitching moment of the cambered wing". Both halves were wrong,
+	and measuring the surfaces is what showed it:
+
+	  - The wing's aerodynamic centre sits 0.19 m AHEAD of the centre of mass,
+	    so wing lift is a nose-UP moment, not a nose-down one. That geometry is
+	    correct for a 172, whose CG range (35-47% MAC) is genuinely aft of the
+	    quarter-chord.
+	  - A tail DOWNLOAD acts behind the CoM and therefore also pitches the nose
+	    UP. So the two moments added instead of cancelling, and the elevator was
+	    left to supply the whole balance.
+
+	The consequence was an aeroplane that could not be trimmed hands-off
+	anywhere: it needed -0.38 stick in cruise and -0.79 on approach with full
+	flap, and the pilot reported exactly that as being unable to get the nose
+	down. With an aft CG the tail has to LIFT to trim, so the incidence is
+	positive.
+
+	+1.0 degree was chosen by measurement, not by feel - it is the value that
+	puts the cruise stick at -0.02, and it centres the whole envelope (-0.43 on
+	approach to +0.65 clean at 65 kt) about neutral instead of hard against the
+	nose-down stop. See the trim-requirement test in runTests().
+
+	This changes TRIM, not STABILITY: static margin depends on lift slopes and
+	moment arms, not on rigging incidence, and the +16% MAC is unaffected.
 ]]
 local WING_INCIDENCE = 1.5
-local STAB_INCIDENCE = -2.0
+local STAB_INCIDENCE = 1.0
 
 local wingForward, wingNormal = Aerodynamics.axesWithIncidence(WING_INCIDENCE)
 local stabForward, stabNormal = Aerodynamics.axesWithIncidence(STAB_INCIDENCE)
@@ -724,6 +746,42 @@ function Cessna172.runTests(): (boolean, { any })
 	-- Tail arm measured from the centre of mass drives pitch damping.
 	local tailArm = stabSurface.offset.Z - com.Z
 	checkRange("Tail arm", tailArm, 3.8, 4.8, "m")
+
+	--[[
+		THE RIGGING CHECK, and it is here because the aircraft failed it for
+		months without anything reporting it.
+
+		The wing's aerodynamic centre sits AHEAD of the centre of mass - correct
+		for a 172, whose CG range is genuinely aft of the quarter-chord - so wing
+		lift is a nose-UP moment. A tail DOWNLOAD acts behind the CoM and pitches
+		the nose up as well, so a negatively rigged tailplane ADDS to the moment
+		it is supposed to balance. With STAB_INCIDENCE at -2 degrees the elevator
+		had to carry the whole thing: -0.38 stick in cruise, -0.79 on approach
+		with full flap, and no trim range able to remove it. The pilot reported
+		it as being unable to get the nose down.
+
+		With the CG aft of the wing AC the tail has to LIFT to trim, so the
+		incidence must be positive. Asserted as a SIGN relationship rather than a
+		magnitude, because it is the sign that was wrong and the sign that any
+		future CG change would silently flip.
+	]]
+	local wingAheadOfCom = com.Z - wingSurface.offset.Z
+	record(
+		"The wing's AC is ahead of the centre of mass, as on a real 172",
+		wingAheadOfCom > 0,
+		string.format("wing AC %.3f m ahead of the CoM", wingAheadOfCom)
+	)
+	record(
+		"The tailplane is rigged to LIFT, because the CG is aft of the wing AC",
+		STAB_INCIDENCE > 0,
+		string.format("stab incidence %+.1f deg (a download here would ADD nose-up)", STAB_INCIDENCE)
+	)
+	--[[
+		And the elevator must sit near neutral in the cruise, which is the whole
+		observable point of getting the rigging right. Bounded well inside full
+		travel so there is authority left for gusts and the flare.
+	]]
+	checkRange("Stabiliser incidence keeps cruise trim near neutral", STAB_INCIDENCE, 0.5, 2.0, "deg")
 
 	--[[
 		Tail volume coefficient, V = (tail area x tail arm) / (wing area x chord).

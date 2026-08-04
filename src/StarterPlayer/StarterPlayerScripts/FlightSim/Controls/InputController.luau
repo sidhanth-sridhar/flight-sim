@@ -177,7 +177,21 @@ InputController.DEFAULTS = {
 	-- aircraft response, and the aircraft's own inertia does the rest.
 	controlSmoothTime = 0.06,
 
-	trimLimit = 0.35,
+	--[[
+		How far trim can bias the pitch command.
+
+		0.7, raised from 0.35, and the number is derived rather than felt: the
+		aircraft's trim requirement spans -0.43 (65 kt, full flap) to +0.65
+		(65 kt, clean) once the tailplane is rigged correctly. Trim that cannot
+		cover that range leaves the pilot holding the stick off-centre for the
+		whole approach, which is what they reported as being unable to get the
+		nose down.
+
+		Trim exists precisely so the yoke can sit neutral in any configuration.
+		A limit narrower than the aircraft's own trim requirement is not a safety
+		feature, it is a missing control - and this one was less than half of it.
+	]]
+	trimLimit = 0.7,
 
 	--[[
 		Altitude hold, as a cascade: altitude error sets a target vertical
@@ -1048,8 +1062,22 @@ function InputController.runTests(): (boolean, { any })
 	record("Trim biases the pitch command nose-up", state.trim > 0, string.format("trim %+.4f", state.trim))
 	record("Trim reaches the controls", state.controls.pitch > 0, string.format("pitch %+.4f", state.controls.pitch))
 
-	run(state, 600, { "TrimNoseUp" })
-	checkRange("Trim is limited", state.trim, 0.34, 0.36, "")
+	-- Long enough to reach the stop at trimRate, whatever the limit is set to.
+	run(state, math.ceil(InputController.DEFAULTS.trimLimit / InputController.DEFAULTS.trimRate * 60) + 120, { "TrimNoseUp" })
+	local limit = InputController.DEFAULTS.trimLimit
+	checkRange("Trim is limited", state.trim, limit - 0.01, limit + 0.01, "")
+
+	--[[
+		Trim must be able to cover the aircraft's ACTUAL trim requirement, or the
+		pilot flies the whole approach holding the stick off-centre - which is
+		precisely what was reported. Measured span with the tailplane rigged
+		correctly: -0.43 at 65 kt with full flap, +0.65 at 65 kt clean.
+	]]
+	record(
+		"Trim range covers the aircraft's trim requirement",
+		limit >= 0.65,
+		string.format("+/-%.2f against a requirement of -0.43..+0.65", limit)
+	)
 
 	state = fresh()
 	run(state, 120, { "TrimNoseDown" })

@@ -570,6 +570,40 @@ function FlightController.requestAircraft(aircraftId: string?)
 	end
 end
 
+-- =========================================================================
+-- READ-ONLY ACCESSORS
+-- =========================================================================
+
+--[[
+	What other controllers are allowed to know about the flight.
+
+	Three narrow readers rather than exposing `rig`, so nothing outside this
+	module can reach the flight model, the gear or the constraints and start
+	writing to them - the ownership rules in the handoff depend on this module
+	being the only writer.
+
+	They deliberately return nil rather than a stale value once the aircraft has
+	gone. CameraController calls these every frame instead of caching an
+	aircraft, which is exactly what stops it holding a destroyed model.
+]]
+function FlightController.getAircraft(): Model?
+	if rig and rig.model and rig.model.Parent then
+		return rig.model
+	end
+	return nil
+end
+
+-- The InputController systems struct: viewIndex, cameraHold, gearDown and the
+-- rest. Read-only by convention; writing to it would fight the input layer.
+function FlightController.getSystems(): any?
+	return if rig then rig.input.systems else nil
+end
+
+-- True only while the pilot is seated and the frame loop is actually running.
+function FlightController.isFlying(): boolean
+	return stepConnection ~= nil
+end
+
 function FlightController.Shutdown()
 	teardown()
 	initialised = false

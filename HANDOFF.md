@@ -6,7 +6,11 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 282 checks green across 10 suites.** Nine run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 304 checks green across 11 suites.** Ten run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+
+**Phase 2 has started: the camera system is built** (§6h) — cockpit / chase / free, cycled with V, world-locked while C is held. All three verified live.
+
+⚠️ **Phase 1 is not formally closed.** The debug HUD is still unbuilt and the flight gate has not been flown. The camera was built first on purpose — flying the gate through Roblox's default character camera would have been miserable — but the gate still owes a sign-off before Phase 2 continues.
 
 **The mouse is now PTFS-style**: free cursor, position = deflection, inverted. See §6g — including the GUI-inset trap, which would otherwise have baked in a permanent nose-up bias.
 
@@ -88,7 +92,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (282 checks total)
+### Verified green (304 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -101,6 +105,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 67/67 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 13/13 | Client |
+| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 22/22 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
 
 ```lua
@@ -371,6 +376,47 @@ And in flight: a cursor offset of +0.144 (mild nose-up) held pitch torque steadi
 ### Tests
 `InputController` went 65 → 67. Removed as meaningless: the two mouse-mode tests and the three X-recentre tests. Added: centre is neutral, returning to centre releases the controls, deflection is proportional to distance, off-screen clamps at full travel, **axes normalise independently** (270 px gives roll 0.180 but pitch 0.359 — the test that would catch the two axes being collapsed onto one radius), deadzone is exactly neutral, a neutral snapshot releases the yoke without clearing trim, and a half-screen offset commands the shaped value end to end.
 
+## 6h. `CameraController` — built and green (2026-08-04, Phase 2)
+
+`src/StarterPlayer/StarterPlayerScripts/FlightSim/Controllers/CameraController.luau`, 22/22. Started by the bootstrap — `CONTROLLER_ORDER` already listed it, so no wiring was needed.
+
+It is the consumer for the two fields `InputController` had been producing since Phase 1 with nothing on the other end: `systems.viewIndex` and `systems.cameraHold`. **The camera owns what those numbers mean**; the input layer knows only that there are `viewCount` of them.
+
+| View | Behaviour |
+|---|---|
+| 1 Cockpit | Eye anchored to the `PilotSeat`, rolls with the aircraft. Whatever encloses the eye is made locally invisible. |
+| 2 Chase | 18 m behind, 5.5 m above. Follows heading and pitch, **never roll**. Position smoothed, τ = 0.14 s. |
+| 3 Free | Handed to Roblox's `Custom` camera with the aircraft root as `CameraSubject`. |
+
+### It never reads the mouse, and that is the point
+The cursor is the yoke — its screen position *is* the deflection, and the edge is full travel. A camera that panned near the screen edge would swing the view exactly when the pilot is holding full aileron, taking the horizon away at the moment they most need it. So there is **no edge-panning, no drag-to-look, no cursor input of any kind**. Free view is not an exception: Roblox's Custom camera orbits on *right-drag*, and the yoke reads position rather than buttons, so the two cannot collide.
+
+**Free view clamps `CameraMinZoomDistance` to 8 studs** and restores it on exit. Without that, zooming in reaches first person, which locks the mouse to screen centre — freezing the yoke at neutral and taking the controls away with no explanation.
+
+### C is a world-lock, not a free-look
+While held, the camera keeps the world orientation and world-space offset it had when C went down; position still tracks the aircraft's *translation* so the pilot is not left behind at 130 kt. It uses no mouse input, so it cannot fight the yoke. Measured live: **camera turned 0.6° while the aircraft turned 101.5°** through a held yaw. Release eases back over 0.28 s rather than snapping, which the rigid cockpit view would otherwise do.
+
+The rejected alternative was a conventional free-look that pans with the cursor and freezes the yoke while held — on release the yoke would snap to wherever the cursor ended up, which is unpleasant low and slow.
+
+### Geometry that was chosen against the airframe, not by feel
+Eye at datum y = 0.75: the seat pan is at 0.25, the nose tops out at 0.625 and the wing centre section starts at 0.825. So the pilot sees **over** the nose, as in a real 172 where the cowling is prominent.
+
+In practice the eye is inside both `Cabin` and `WingCenter`, and both are hidden. Hiding the wing root is correct for a high-wing Cessna — you cannot see it from inside anyway — and the outer wings stay visible, which a test asserts.
+
+`occludingParts()` is a **containment** test, not a proximity one. Proximity would sweep up parts merely near the eye and leave the outer wings apparently floating unattached. The 0.12 m margin is sized against the camera's near plane (0.1 studs = 0.1 m at this scale), so a part close enough to slice through the view is caught before it can.
+
+### Two things worth not rediscovering
+- **Bind at `RenderPriority.Camera.Value + 1`.** Roblox's default camera writes `CFrame` at `Camera` priority, so anything scripted at or before it is overwritten the same frame and the camera simply does not move.
+- **`CFrame.lookAt` with a world-up hint is undefined when the look direction is vertical**, and this simulator reaches steep attitudes on its own — a measured stall departure hit −64°. The chase view falls back to the aircraft's own up vector; two tests cover straight up and straight down.
+
+### The test that was wrong before the code was
+"Chase camera does not roll" was first asserted on `up.Y > 0.99` and failed at 0.9747. The code was right: the camera sits 5.5 m above and looks at the aircraft 24 m away, so it is permanently pitched ~13° down, and `cos(13°) = 0.975`. **Bank shows up in `RightVector.Y`, not in `UpVector.Y`** — an up-vector test fails on a perfectly level camera. This is the third time an assertion, not the code, was the wrong one.
+
+### Coupling
+`FlightController` gained three narrow read-only accessors — `getAircraft()`, `getSystems()`, `isFlying()` — rather than exposing `rig`, so nothing outside it can reach the flight model or constraints and start writing to them. The camera calls them **every frame instead of caching an aircraft**, which is exactly what stops it holding a destroyed model: the answer becomes nil the frame the aeroplane goes away.
+
+`#CameraController.VIEWS` must equal `InputController.DEFAULTS.viewCount` or V skips a view or overruns. They are kept in step by **assertion, not dependency** — making the input layer require the camera would point the arrow the wrong way — so `runTests()` checks it and `Init()` warns.
+
 ### Then
 Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
 
@@ -407,3 +453,5 @@ Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vector
 - Do not build ahead of the current phase.
 - Ask rather than guess when something is ambiguous.
 - Report honestly: if tests fail, say so and show the output.
+- **Append to this handoff at the end of every task**, so the general outline stays current. A task is not done until §0 and the relevant section reflect it.
+- **Commit before moving on.** Once a task's suites pass, stage and commit it. Never leave work uncommitted at the end of a task.

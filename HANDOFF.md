@@ -6,15 +6,19 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 362 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 366 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
-**Phase 1 build work is complete.** The reset key (§6j) was the last item. The debug HUD (§6i) closed the systems before it; the camera (§6h) landed first, out of order, because flying the gate through Roblox's default character camera would have been miserable.
+# ✅ **PHASE 1 IS SIGNED OFF.** The flight gate was flown and passed on 2026-08-04 — see §9 for the pilot's report and what it found.
 
-➡️ **NEXT TASK: fly the Phase 1 flight gate.** Taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. **This one is the pilot's, not the assistant's.** Nothing further in Phase 2 starts until it is signed off. Everything needed to fly it now exists: an aeroplane that taxis and flies, three camera views, live numbers on screen, and a key that puts a wrecked aeroplane back on its wheels.
+Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and recovery, and landing were all flown. **The behaviour in the air was reported as right**: rotation at the expected speed, Vy pitch holding, clean turns, a predictable stall near the expected AoA with no deep-stall tendency, correct left-turning tendency answered by right rudder, and rudder authority that fades with airspeed as it should.
+
+➡️ **NEXT TASK: not yet chosen — ask the pilot.** The roadmap's natural next item is Phase 2 cockpit instruments replacing the debug HUD, but §9 turned up one open question (ground effect) that is Phase 1 physics rather than Phase 2 UI. The gate report is what decides the order, so do not assume.
 
 **What landed this session**
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
 - **`ViewToggle` on T** (§6k) — first person ↔ third person in one press, asked for as a "button". It is a **key** rather than an on-screen button, and §6k records why: the cursor is the yoke, so a button in a screen corner can only be clicked by dragging the controls to near-full deflection on the way to it.
+- **The board prompt now hides while somebody is aboard** (§9) — a gate finding, fixed.
+- **The landing model was reviewed against published figures and left alone** (§9). All three suspects the pilot named measured correct. The one real gap found is that **ground effect is not modelled**, which is also the only thing on the list that exists solely near the ground.
 
 **Landed the session before**
 - `CameraController` (§6h) — cockpit / chase / free on V, world-locked while C is held.
@@ -30,7 +34,7 @@
 
 **Committed** through the PTFS control change; the working tree is clean.
 
-**Phase 1 remaining**: the flight gate only — taxi, take off, coordinated turn, deliberate stall, recover, land. Every system it needs is built and green.
+**Phase 1 remaining**: nothing. The gate was flown and passed — §9.
 
 **Verified live this session, not just in tests**: the server spawns the aircraft, grants the client network ownership, the client adopts it and runs the frame loop, and boarding moves the aircraft **0.000 m**. Getting to that last number took three fixes — see §6e, because two of them are not obvious and both were found by measuring rather than reasoning.
 
@@ -101,7 +105,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (362 checks total)
+### Verified green (366 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -116,7 +120,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
-| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
+| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 32/32 | **Server** |
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -552,6 +556,7 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **A "best glide L/D" is not an approach sink rate, and confusing them nearly caused a wrong tuning fix.** The full-flap best-L/D point sits at a speed nobody approaches at, so comparing it against a remembered glide-ratio figure says nothing about how the aeroplane actually lands. Measure the operational condition — trimmed for L = W at the speed actually flown — before touching a coefficient. See §9.
 - **An on-screen button cannot be a flight control in this game.** The cursor is the yoke, so moving it to a corner to click something commands near-full deflection on both axes on the way there — a top-right button is full nose-down and full right roll. Anything the pilot needs *in flight* has to be a key. This is the same constraint §6i states as "nothing in the HUD may be `Active` or a `GuiButton`", arrived at from the other direction. Non-interactive `TextLabel`s are fine and absorb nothing.
 - **`table.clone` is shallow, and `InputController.DEFAULTS` has nested tables.** `altHold` and `toggleViews` must each be cloned in `new()` or every `InputController` in the game shares one, and a per-player rebind silently rebinds everybody's. It cost nothing this time only because the omission was caught while adding the second one.
 - **A binding in `DEFAULT_BINDINGS` is not proof `update()` consumes it.** `ResetAircraft` is listed there to be rebindable and to be covered by the collision test, but is read by `FlightController` off `InputBegan`, because it has to work when there is no aircraft and therefore no frame loop. `poll()` still reports it as held; nothing acts on that. See §6j.
@@ -571,3 +576,61 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - Report honestly: if tests fail, say so and show the output.
 - **Append to this handoff at the end of every task**, so the general outline stays current. A task is not done until §0 and the relevant section reflect it.
 - **Commit before moving on.** Once a task's suites pass, stage and commit it. Never leave work uncommitted at the end of a task.
+
+---
+
+## 9. Phase 1 flight gate — flown and passed (2026-08-04)
+
+**Signed off by the pilot.** Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and recovery, and landing were all flown on the flat baseplate.
+
+**Reported good, verified in the air rather than in a test:**
+- Takeoff roll and rotation — natural, tracked the expected speeds
+- Climb — pitch for Vy held well, HUD numbers consistent with the model
+- Coordinated turns — clean
+- Deliberate stall and recovery — stalled predictably near the expected AoA and speed, recovered without drama, **no deep-stall tendency**
+- Forward slip — worked correctly
+- AoA and stall indication — matched what the aircraft actually did
+- **Left-turning tendency on takeoff was correct**, and right rudder answered it
+- Rudder responsive at speed, and **correctly unresponsive at low speed** — no rudder authority without airflow
+
+Also confirmed by the pilot, and worth recording because it looks like a bug and is not: **S does not give true power-off.** A running engine keeps its idle floor (§Engine, `idlePowerFraction = 0.05`). True power-off is **E**.
+
+### Finding 1: the board prompt stayed up after boarding — FIXED
+
+The `BoardPrompt` on the `PilotSeat` remained visible for the whole flight. Never actionable — the seat was taken, and `Sit()` on an occupied seat does nothing — but cosmetic in the middle of the windscreen.
+
+`AircraftService.attachBoardPrompt` now sets `prompt.Enabled = occupant == nil` in the seat's existing Occupant handler. Two details:
+- **The prompt is created before the handler now**, not after it. It has to exist for the handler to close over.
+- **`Enabled` is set from `occupant` directly, not inside the branches below it.** Those branches are about the *previous* occupant and have a nil path that does nothing; hanging the re-enable off that path would strand the prompt hidden forever on any route through it — a crash death being the obvious one.
+
+Server-side, so it replicates: every player stops seeing the prompt on an occupied aeroplane.
+
+Tested with a real `Sit()` against a synthetic character rather than by poking the property, because `Occupant` is read-only and it is the seat's own signal the fix hangs off — a fixture that set the flag by hand would test the assignment and not the wiring. `AircraftService` 28 → 32.
+
+### Finding 2: landing is hard — the model was reviewed and left ALONE
+
+All three suspects the pilot named were measured against published C172 figures. **All three are correct.** Nothing was tuned.
+
+**Idle-thrust float — correct.** The 5% power floor gives 6.7 kW, which is 377 N static and only **148 N at 65 kt** — 9% of the 1,652 N of drag in the landing configuration, worth about 88 fpm of reduced sink. Small and real, which is what it should be.
+
+**Approach sink rates — correct.** Trimmed for L = W at each speed, idle power:
+
+| configuration | model | real C172 |
+|---|---|---|
+| full flap, idle, 60 kt | **784 fpm** | ~750–800 |
+| full flap, idle, 65 kt | **909 fpm** | ~800–900 |
+| clean, idle, 65 kt | **563 fpm** | ~600 |
+
+**Flare authority — correct.** Full aft stick trims to 14.4° AoA against a 13.9° stall, so the elevator can reach CLmax and the flare is not blocked. At 60 kt full flap the wing reaches L/W 1.88 — 0.88 g of excess, which arrests a 909 fpm descent in about 0.5 s and 1.2 m of height. That is a normal flare, not a marginal one.
+
+⚠️ **One measurement nearly caused a wrong fix, recorded so it is not repeated.** Comparing *full-flap best-glide L/D* (7.19 in the model) against the folk figure of "5:1 with full flaps" suggested flap drag was ~40% too low, and a sweep of `flapDragEffect` was already running before the error showed up. **Those are not the same quantity.** The model's best-L/D point with full flap sits at 52.6 kt, which is a speed nobody approaches at; at the speeds actually flown the sink rates are right, as the table above shows. Operational numbers, not polar summaries. `flapDragEffect` is unchanged at 0.045.
+
+### The one real gap: ground effect is not modelled
+
+`FlightModel`'s own comment lists it as future work. Within about one wingspan (11 m) of the ground a real light aircraft loses a large fraction of its induced drag, and that is what produces the **cushion in the flare** — the aeroplane settles rather than arrives, and the flare becomes forgiving of being a foot high or a foot low.
+
+Without it the pilot must arrest *all* of the sink with elevator alone, at exactly the right height, with no help. **That matches the report precisely: everything in the air felt right, and only the last few feet were hard** — which is the signature of a defect that exists solely near the ground.
+
+It is additive and bounded — zero above one wingspan — so it cannot touch any validated figure in §4, all of which are measured well clear of the ground. **Not built: it is a new physics feature rather than a fix, and the pilot chooses whether it comes before the Phase 2 instruments.**
+
+Absent that, the honest answer on landing is **pilot technique**, with one control-scheme note worth knowing: the flare needs the pitch command to go from roughly 0 to 0.9, which with `mouseExpo = 0.35` means dragging the cursor about **87% of the way from centre to the bottom of the screen** — and any sideways drift on the way is roll, because one cursor carries both axes.

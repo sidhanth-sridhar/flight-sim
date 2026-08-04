@@ -422,8 +422,38 @@ local function attachBoardPrompt(model: Model, definition: any, owner: Player?)
 	]]
 	local seatedCharacter: Model? = nil
 
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "BoardPrompt"
+	prompt.ActionText = "Board"
+	prompt.ObjectText = definition.name
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 12
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = seat
+
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
 		local occupant = seat.Occupant
+
+		--[[
+			Hide the prompt while somebody is aboard.
+
+			Reported from the Phase 1 gate: "Board" stayed on screen for the whole
+			flight. It was never actionable - the seat is taken, and Sit() on an
+			occupied seat does nothing - so this is cosmetic, but it is cosmetic in
+			the middle of the windscreen for the entire flight.
+
+			Set from `occupant` directly rather than inside the branches below,
+			and that is the point of it being its own line. The bookkeeping under
+			it is about the PREVIOUS occupant and has a nil-seatedCharacter path
+			that does nothing; hanging the re-enable off that path would leave the
+			prompt hidden forever on any route through it - a crash death being
+			the obvious one. Enabled is a plain function of who is sitting there
+			now, so it cannot drift out of step with reality.
+
+			Server-side, so it replicates: every player stops seeing the prompt on
+			an occupied aeroplane, not just the pilot.
+		]]
+		prompt.Enabled = occupant == nil
 
 		if occupant then
 			local character = occupant.Parent
@@ -439,15 +469,6 @@ local function attachBoardPrompt(model: Model, definition: any, owner: Player?)
 			seatedCharacter = nil
 		end
 	end)
-
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "BoardPrompt"
-	prompt.ActionText = "Board"
-	prompt.ObjectText = definition.name
-	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = 12
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = seat
 
 	prompt.Triggered:Connect(function(player)
 		--[[
@@ -959,11 +980,69 @@ function AircraftService.runTests(): (boolean, { any })
 
 	-- 5. Boarding -----------------------------------------------------------
 	local seat = a:FindFirstChild("PilotSeat")
+	local boardPrompt = seat and seat:FindFirstChild("BoardPrompt") :: ProximityPrompt?
 	record(
 		"Has a board prompt on the pilot seat",
-		seat ~= nil and seat:FindFirstChild("BoardPrompt") ~= nil,
+		boardPrompt ~= nil,
 		seat and "BoardPrompt present" or "no PilotSeat"
 	)
+	record(
+		"The prompt is showing on an empty aircraft",
+		boardPrompt ~= nil and boardPrompt.Enabled,
+		"Enabled = true with nobody aboard"
+	)
+
+	--[[
+		The prompt must go away once somebody is in the seat.
+
+		Driven with a REAL Sit() against a synthetic character rather than by
+		poking the property, because Occupant is read-only - the only way to
+		change it is to actually seat a humanoid, and it is the seat's own
+		Occupant signal that this fix hangs off. A fixture that set the flag by
+		hand would test the assignment and not the wiring.
+
+		Reported from the Phase 1 gate: "Board" stayed on screen for the whole
+		flight.
+	]]
+	local dummy = Instance.new("Model")
+	dummy.Name = "__BoardPromptTestCharacter"
+	local dummyRoot = Instance.new("Part")
+	dummyRoot.Name = "HumanoidRootPart"
+	dummyRoot.Size = Vector3.new(0.5, 1, 0.3)
+	dummyRoot.CFrame = (seat :: BasePart).CFrame
+	dummyRoot.Parent = dummy
+	local dummyHumanoid = Instance.new("Humanoid")
+	dummyHumanoid.Parent = dummy
+	dummy.PrimaryPart = dummyRoot
+	dummy.Parent = workspace
+
+	;(seat :: VehicleSeat):Sit(dummyHumanoid)
+	-- Occupant is set by the engine, and the property-changed signal it drives is
+	-- deferred; one step is enough for both to land.
+	task.wait()
+
+	local seatedOk = (seat :: VehicleSeat).Occupant == dummyHumanoid
+	record(
+		"Setup: the dummy is actually seated",
+		seatedOk,
+		seatedOk and "Occupant set" or "Sit() did not take - the check below proves nothing"
+	)
+	record(
+		"The board prompt hides once somebody is aboard",
+		boardPrompt ~= nil and not boardPrompt.Enabled,
+		string.format("Enabled = %s while occupied", tostring(boardPrompt and boardPrompt.Enabled))
+	)
+
+	dummyHumanoid.Sit = false
+	;(seat :: VehicleSeat):Sit(nil :: any)
+	task.wait()
+	record(
+		"...and comes back when the seat is vacated",
+		boardPrompt ~= nil and boardPrompt.Enabled,
+		string.format("Enabled = %s after standing up", tostring(boardPrompt and boardPrompt.Enabled))
+	)
+
+	dummy:Destroy()
 
 	-- 6. Slots --------------------------------------------------------------
 	local b = AircraftService.spawn(nil)

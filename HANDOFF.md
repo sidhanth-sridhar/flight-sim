@@ -872,3 +872,54 @@ This changes **trim, not stability** — static margin depends on lift slopes an
 
 ### Three regression tests
 `Cessna172.runTests()` now asserts the wing AC is ahead of the CoM, that the tailplane is rigged to **lift** (a sign check, because it is the sign that was wrong and a CG change would silently flip it), and that the incidence stays in a range that keeps cruise trim near neutral. `InputController` asserts the trim range covers the aircraft's measured trim requirement, and its "trim is limited" check now derives from the constant instead of hardcoding 0.35.
+
+---
+
+## 14. Plan — Phases 2 to 4
+
+Written 2026-08-04, at the pilot's request, **before** starting Phase 2. The rule from §8 still holds: each phase ends with a gate the pilot flies and signs off, and nothing downstream begins until they do.
+
+Two phases already ran out of order and it is worth knowing why, because the roadmap in memory still reads as though they have not:
+- **`CameraController` (§6h)** landed during Phase 1 — flying the gate through Roblox's default character camera would have been miserable.
+- **`AirportService` (§11)** is a Phase 3 item, brought forward because the Phase 1 landing gate could not be judged on a featureless baseplate. Phase 3 therefore starts from a working airport rather than nothing.
+
+### Phase 2 — Cockpit instruments ← NEXT, and the only one to build now
+
+**Goal:** replace reading raw numbers with reading instruments, so the aircraft can be flown on the panel rather than on the debug HUD.
+
+**Scope**
+1. **An instrument framework.** A shared module owning the redraw loop at `Constants.SIM.INSTRUMENT_HZ`, the needle-angle maths, and the dial/tick drawing. Individual gauges should be data — arc ranges, tick spacing, needle mapping — not bespoke code each.
+2. **The six-pack**, in the standard layout: airspeed, attitude, altimeter, turn coordinator, heading, vertical speed.
+3. **Engine and fuel**: tachometer, fuel quantity, and the AoA/stall indication added in §15.
+4. **The debug HUD stays**, on a toggle key. It is the diagnostic that found two real bugs (§6i, §15) and the gauges do not replace it.
+
+**Constraints that are already known, and are not negotiable**
+- **Nothing may be `Active` or a `GuiButton`** (§6i). The cursor is the yoke and covers the whole screen; an input-absorbing element eats the flight controls. A test counts them and requires zero.
+- **`IgnoreGuiInset` stays false**, which sidesteps the coordinate trap in §6g by construction.
+- **Units convert at this boundary and nowhere else.** The physics stays pure SI; m/s become knots and radians become degrees here, and nothing converted travels back.
+- **Arcs come from `Cessna172.limits`**, which already carries vs0/vs1/vx/vy/vfe/vno/vne for exactly this purpose. The white and green arcs and the redline are then the aircraft's real numbers rather than drawn by eye.
+
+**How to test it.** The needle mapping is a pure function of a telemetry value, so it can be driven with synthetic numbers: 0 kt sits at the start of the dial, Vne at the redline, and the arcs land on the published speeds. That is the same shape as every other suite here — assert against the published figure, not against what the code currently draws.
+
+**Gate:** fly a circuit on instruments — hold an altitude on the altimeter, a speed on the ASI, and a heading on the DI, and confirm the AoA indication marks the stall.
+
+### Phase 3 — The world
+
+**Goal:** somewhere to fly *to*. Depends on Phase 2 only for the navigation display.
+
+- **Terrain.** The single largest known trap is already documented: **`FlightModel`'s ground probe assumes nothing** now that it raycasts (§11), but `AirportService` still assumes its pavement sits at y = 0. Terrain means the airport has to be placed *on* it, and the runway surface becomes whatever the terrain says.
+- **More than one airport.** `AirportService` is already a registry keyed by runway id; it needs a layer above that keyed by airport, and `AircraftService` needs to ask which airport a player is spawning at rather than assuming the only one.
+- **Navigation points** already exist per runway (threshold, aiming point, the circuit). Phase 3 extends them between airports.
+- **Streaming.** Roblox's max part size is 2,048 studs and the current field is exactly that; anything larger needs several parts and a streaming config.
+
+### Phase 4 — Flight tablet
+
+**Goal:** choose an aircraft and a destination without leaving the aeroplane.
+
+- Departure and destination pickers reading the Phase 3 airport registry.
+- Distance and bearing to destination, which is `AirportService` navigation data presented rather than new physics.
+- Aircraft picker driven by `Aircraft/Registry.luau`, which already maps id → definition and is the only thing that crosses the network at spawn.
+- **The tablet is the first thing in this project that genuinely wants to absorb input.** The cursor-is-the-yoke rule (§6g, §7) means it cannot simply be a clickable UI while flying — it needs either a modal state that releases the yoke, or to be usable only on the ground. **Decide that before building it, not during.**
+
+### Deliberately not planned yet
+Phase 5 (weather, wind layers, more aircraft) and Phase 6 (audio, damage, persistence, tutorial) stay as headings only. Planning them now would be guessing about an aircraft that does not exist yet.

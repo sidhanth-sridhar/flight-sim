@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 431 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 435 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
 
 🛫 **THE FLIGHT-TEST ENVIRONMENT IS NOW AN AIRPORT, NOT THE BASEPLATE.** Runway 18/36, 1,000 × 23 m, with a parallel taxiway, an apron, full markings and vertical reference objects. See §11 — including why the markings are load-bearing rather than decorative.
 
@@ -16,9 +16,11 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 
 ➡️ **NEXT TASK: re-fly the landing gate on the real runway.** The Phase 1 gate passed technically, but landings were judged on a featureless baseplate with no depth or speed cue, which is why the flare felt impossible. §11 exists to fix that. Ground effect (§10) is also modelled now, though it is worth only **~45 fpm of cushion out of ~900** — a high wing gets little of it, so the runway markings are expected to help far more than the physics did.
 
+🛞 **Nosewheel steering was rebuilt** (§12). Reported as too weak and too rudder-dependent; measured at a **207 m turn radius** with full pedal, now **19.3 m**. The nose wheel was being shoved sideways while pointed straight ahead; it is now actually steered.
+
 **Open items for the pilot**, in order:
 1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
-2. Nosewheel steering sensitivity — reported as too rudder-dependent on the ground. See §12.
+2. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
 3. Then Phase 2 cockpit instruments.
 
 **What landed this session**
@@ -126,7 +128,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (431 checks total)
+### Verified green (435 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -136,7 +138,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 26/26 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 40/40 | Client |
-| `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
+| `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 80/80 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
@@ -223,7 +225,9 @@ Roblox's solver already gives us *contact* — the aircraft rests and rolls on r
 
 **`liftVertical` is not optional in spirit.** Every gear force scales with `weight − lift`, so passing 0 leaves the aircraft braking and steering at full authority right up to rotation. Pass the vertical component of the aero force computed the same frame.
 
-**Steering is a cornering force at the nose wheel, not a commanded yaw rate.** The yaw emerges from `r × F`. That is what makes steering authority fade as lift unloads the nose wheel and vanish entirely when it lifts — handing over to the rudder exactly when it should. `Cessna172.gear.steeringRate` was replaced by `steeringAuthority` (fraction of available grip at full pedal) and `tyreFriction` for this reason.
+**Steering is a cornering force at the nose wheel, not a commanded yaw rate.** The yaw emerges from `r × F`. That is what makes steering authority fade as lift unloads the nose wheel and vanish entirely when it lifts — handing over to the rudder exactly when it should. `Cessna172.gear.steeringRate` was replaced by `tyreFriction` and a steering term for this reason.
+
+⚠️ **That steering term is now an ANGLE, not a force fraction — see §12.** `steeringAuthority = 0.55` was replaced by `steeringAngle = 10°` after the old model measured a 207 m turn radius. The principle above is unchanged; the wheel is simply aimed before the grip acts on it.
 
 ### Wiring it up (the FlightController's job)
 `FlightModel.applyForces` **overwrites**, it does not accumulate. Sum both contributors and write once:
@@ -578,6 +582,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **Studio does not always step CLIENT physics in a Play session.** A plain unanchored part dropped from y = 60 on the Client datamodel did not move at all, with `Workspace.Gravity` correct at 9.8067 — while the identical test on the **Server** datamodel ran normally. Static suites are fine on the client, but **any test that needs the aircraft to actually move must run in the Server datamodel.** This cost a wrong diagnosis: a taxi measurement read 0.0 kt and looked like the steering change had broken thrust, when the force was reaching the constraint the whole time (1,462 N, verified) and nothing was being integrated.
+- **A sideways FORCE on a wheel that stays pointed straight ahead does not steer an aircraft.** The main tyres' lateral grip cancels the resulting rotation, and the two fight to a standstill — 1,300 N·m produced a 207 m turn radius. Steered wheels need their own rotated axes. See §12.
 - **Rojo reads `default.project.json` at serve start and never again.** Editing the project file while `rojo serve` is running does nothing, silently. Restart the server, then **reconnect the plugin in Studio** — killing the server drops the connection and it does not return on its own, after which no file syncs at all and it looks exactly like the subtree bug in §3. Full recovery is in §3.
 - **Anything sitting at the world origin is now sitting on the runway.** `Workspace.SpawnLocation` was, with its top face a metre up. `AirportService.runTests()` sweeps the whole runway and taxiway for obstructions because of it — one probe point would not have found it either.
 - **`force.Y` is not lift, and `force.Z` is not drag.** Lift and drag are resolved about the *relative wind*, not the world axes, so at any real angle of attack the drag vector has a Y component and the lift vector a Z one. An assertion of the form "this change must not affect lift" written against `force.Y` will fail on correct code. Assert on the surface telemetry's **CL and CD** instead — they are dimensionless and isolate the term being changed. See §10.
@@ -763,3 +769,50 @@ It also closes the §0 note about aircraft parking 30 m from the spawn pad: **th
 ### Why the airport is built in code
 
 `AircraftBuilder` already builds the aircraft from a definition, and the airport follows it. A JSON tree of 130 parts would be unreadable, undiffable and untestable, whereas constants can be asserted — that the runway part matches the registered dimensions, that the top face is exactly y = 0, that no marking is collidable or queryable. The grass stays with Rojo because a runtime-built field would leave Studio's Edit view with no ground at all.
+
+---
+
+## 12. Nose wheel steering — rebuilt (2026-08-04)
+
+Reported by the pilot as "not sensitive enough, entirely reliant on rudder". **Both halves of that were worth measuring, and the measurement disagreed with the diagnosis while confirming the complaint.**
+
+### What the measurement actually showed
+
+The nose wheel was already doing nearly all the work — gear yaw moment against aerodynamic yaw moment, full pedal:
+
+| ground speed | gear | rudder | ratio |
+|---|---|---|---|
+| 2 kt | 1,576 N·m | 1.7 N·m | 924 : 1 |
+| 10 kt | 1,303 N·m | 43 N·m | 31 : 1 |
+| 19 kt | 954 N·m | 171 N·m | 5.6 : 1 |
+| 39 kt | 286 N·m | 682 N·m | 0.4 : 1 |
+
+So it was never rudder-dependent. But the aircraft **still would not turn**: full pedal at 12 kt gave **5.8° in five seconds, 1.7°/s, a 207 m turn radius**, against about 10 m for a real 172.
+
+### Why 1,300 N·m turned nothing
+
+All three wheels shared **one fuselage-fixed lateral axis**, and steering was a sideways *force* applied at a nose wheel that stayed **pointed straight ahead**. Meanwhile the main tyres' lateral grip cancels sideways motion within a single timestep — so the mains were vetoing precisely the rotation the nose was requesting. The two fought, and the mains won.
+
+A real steered wheel does not push sideways. It **points**, and the aircraft follows because the wheel rolls where it is aimed.
+
+### The fix
+
+Each wheel now has **its own** rolling and lateral axes; the steered one is rotated by `steerAngle`. The cornering force then emerges from slip angle through the grip machinery that was already there. `steeringAuthority = 0.55` (a fraction of grip) became **`steeringAngle = 10°`** — the real pedals-only figure, which with the 1.8 m wheelbase gives an Ackermann radius of 1.8/tan(10°) = **10.2 m**.
+
+This keeps §6b's principle exactly: steering is still a force and the yaw still comes from `r × F`. The wheel is merely aimed first.
+
+**Measured after, same test:** **88.9° in five seconds, 20.3°/s, a 19.3 m radius** at 13 kt. Larger than the 10.2 m ideal because the speed fade has already pulled the angle back to ~7° by 13 kt, plus real tyre slip — which is the behaviour wanted, not an error.
+
+### A tyre curve was needed to make the speed fade work again
+
+The first version broke "steering authority fades with speed" — 2,943 N·m at 5 m/s against 2,984 N·m at 24 m/s. The one-timestep lateral cancellation is effectively **infinite cornering stiffness**, so the tyre sat at its grip limit for *any* steering angle, and reducing the angle from 10° to 0.4° left it just as saturated.
+
+The steered wheel therefore got a real tyre curve: cornering force rises with slip angle and saturates at **`tyreSlipAngle = 6°`**, the ordinary figure for a pneumatic tyre. A 10° taxi input is past saturation and pulls full grip; the fraction of a degree left at rotation speed produces almost nothing, which is what hands the aircraft to the rudder.
+
+Applied to the steered wheel only, deliberately. For a main wheel tracking straight the slip is incidental and tiny, so infinite stiffness is a fine approximation and the existing lateral-grip tests cover it; for the steered wheel the slip is *commanded* and large, and it is exactly the thing being modelled.
+
+### One side effect, and it is correct
+**A stationary aircraft no longer steers at all**, however hard the pedals are pressed. Cornering now needs slip, and slip needs rolling. That is true of the real aeroplane — it turns on the ground by rolling, or by differential braking, which is not modelled. A test asserts it.
+
+### `GroundHandling`'s test rig had to move
+Its fixture built a 400 m pad and a 1,111 kg aircraft at **the world origin** — which is now the middle of runway 18/36. Running the suite would have dropped a slab coincident with the runway surface and an aeroplane on the centreline in front of anyone on short final. Now at (−5,000, −5,000) on its own pad. Same class as the leaked rigs in §7; the airport turned it from untidy into dangerous.

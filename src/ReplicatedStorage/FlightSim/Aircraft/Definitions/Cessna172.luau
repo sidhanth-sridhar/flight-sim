@@ -300,20 +300,41 @@ Cessna172.gear = {
 	},
 
 	--[[
-		Steering is modelled as a real cornering FORCE at the nose wheel, not
-		as a commanded yaw rate. The yaw then emerges from r x F like every
-		other moment in this project.
+		How far the nose wheel turns at full pedal, in radians.
 
-		That choice buys two behaviours for free, both of which matter on the
-		takeoff roll: steering authority falls away as lift unloads the nose
-		wheel, and disappears entirely the moment the nose wheel leaves the
-		ground - which is exactly when the rudder has to take over.
+		10 degrees is the real figure for a 172 on rudder pedals alone. With a
+		1.8 m wheelbase that gives a turn radius of 1.8 / tan(10 deg) = 10.2 m,
+		which is what the aeroplane actually does on a taxiway. (Real 172s reach
+		about 30 degrees using differential braking on top of the pedals; that is
+		not modelled, so this is the pedals-only figure and correctly so.)
 
-		Expressed as the fraction of the tyre's available grip used at full
-		pedal. Well under 1.0, because a nose wheel steered to the limit of
-		adhesion would simply skid.
+		An ANGLE, not a force fraction, and that replaced `steeringAuthority =
+		0.55` for a measured reason. Steering used to be a sideways shove at a
+		nose wheel that stayed pointed straight ahead, while all three wheels
+		shared one lateral axis - so the mains' grip cancelled the very rotation
+		the nose was asking for. Full rudder at 12 kt turned the aircraft 5.8
+		degrees in five seconds: a 207 m radius. Pointing the wheel instead makes
+		the cornering force emerge from slip angle, as a tyre's does.
+
+		The yaw still emerges from r x F, and the two behaviours that mattered on
+		the takeoff roll still come for free: authority falls away as lift
+		unloads the nose wheel, and vanishes the moment it leaves the ground -
+		which is exactly when the rudder takes over.
 	]]
-	steeringAuthority = 0.55,
+	steeringAngle = math.rad(10),
+
+	--[[
+		Slip angle at which a tyre reaches its maximum cornering force.
+
+		6 degrees is the ordinary figure for a pneumatic tyre. Below it the
+		cornering force rises roughly in proportion to slip; above it the tyre is
+		sliding and there is no more to be had.
+
+		Used by the steered wheel, and it is what makes the speed fade work: a
+		10-degree taxi input is past saturation and pulls full grip, while the
+		fraction of a degree left at rotation speed produces almost nothing.
+	]]
+	tyreSlipAngle = math.rad(6),
 	-- Steering is progressively reduced above this speed; the rudder does the
 	-- work by then, and full-authority nose wheel steering at speed is how
 	-- real aircraft depart the side of the runway.

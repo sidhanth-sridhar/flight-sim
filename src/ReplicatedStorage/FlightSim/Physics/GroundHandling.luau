@@ -65,6 +65,8 @@ local abs = math.abs
 local clamp = math.clamp
 local max = math.max
 local min = math.min
+local cos = math.cos
+local sin = math.sin
 
 -- =========================================================================
 -- TUNING
@@ -342,12 +344,38 @@ function GroundHandling.computeForces(
 	local steerInput = clamp(controls.yaw or 0, -1, 1)
 
 	--[[
-		Nose wheel steering fades with speed. Full authority at 60 kt would
+		Nose wheel steering fades with speed. Full deflection at 60 kt would
 		make the aircraft dartingly unstable and is how real aircraft leave the
 		side of the runway; by then the rudder has the airflow to do the job.
 	]]
 	local groundSpeedAlongRunway = velocity:Dot(rollDir)
 	local steerFade = 1 - clamp(abs(groundSpeedAlongRunway) / max(gear.steeringFadeSpeed, 0.1), 0, 1)
+
+	--[[
+		THE STEERING ANGLE - how far the nose wheel is actually turned.
+
+		This replaced a sideways FORCE at the nose wheel, and the difference is
+		the whole reason taxiing worked badly. Measured before the change: full
+		rudder at 12 kt turned the aircraft 5.8 degrees in five seconds, a
+		207 m radius, against about 10 m for a real 172.
+
+		The old model shoved the nose sideways while leaving the nose wheel
+		POINTED STRAIGHT AHEAD. Meanwhile all three wheels shared one
+		fuselage-fixed lateral axis, and the mains' grip cancels sideways motion
+		within a single timestep - so the two main tyres were vetoing exactly the
+		rotation the nose was asking for. The nose wheel produced 1,300 N*m and
+		the aircraft still would not turn.
+
+		A real steered wheel does not push sideways. It POINTS, and the aircraft
+		follows because the wheel rolls where it is aimed. So the steered wheel
+		now gets its own rolling and lateral axes, rotated by this angle, and the
+		existing grip machinery does the rest - the cornering force emerges from
+		slip angle exactly as it should, rather than being asserted.
+
+		This keeps the principle in the module header intact: steering is still a
+		force and the yaw still comes from r x F. The wheel is merely aimed first.
+	]]
+	local steerAngle = steerInput * gear.steeringAngle * steerFade
 
 	telemetry.groundSpeed = groundSpeedAlongRunway
 	telemetry.lateralSpeed = velocity:Dot(lateralDir)
@@ -360,8 +388,24 @@ function GroundHandling.computeForces(
 		local armWorld = cf:VectorToWorldSpace(wheel.arm)
 		local wheelVelocity = velocity + omega:Cross(armWorld)
 
-		local vRoll = wheelVelocity:Dot(rollDir)
-		local vLat = wheelVelocity:Dot(lateralDir)
+		--[[
+			This wheel's OWN axes. A fixed wheel uses the fuselage's; a steered
+			one is rotated by the steering angle, which is what makes it guide
+			the aircraft rather than merely push it.
+
+			Built by leaning rollDir toward lateralDir rather than with an
+			axis-angle rotation, because lateralDir is already known to point
+			right (see the cross-product note above) - so a positive angle is
+			unambiguously a turn to the right, with no handedness to get wrong.
+		]]
+		local wheelRoll, wheelLat = rollDir, lateralDir
+		if wheel.steering and steerAngle ~= 0 then
+			wheelRoll = (rollDir * cos(steerAngle) + lateralDir * sin(steerAngle)).Unit
+			wheelLat = wheelRoll:Cross(groundNormal).Unit
+		end
+
+		local vRoll = wheelVelocity:Dot(wheelRoll)
+		local vLat = wheelVelocity:Dot(wheelLat)
 
 		local loadFraction = wheel.share / groundedShare
 		local wheelLoad = totalLoad * loadFraction
@@ -382,21 +426,52 @@ function GroundHandling.computeForces(
 			is a skid, and it is the correct behaviour rather than a failure.
 		]]
 		local lateralNeeded = -wheelMass * vLat / dt
-		local lateralForce = clamp(lateralNeeded, -gripLimit, gripLimit)
-		wheelForce += lateralDir * lateralForce
+		local lateralLimit = gripLimit
 
-		-- ---- Steering ----------------------------------------------------
-		if wheel.steering and steerFade > 0 then
-			--[[
-				A cornering force at the steered wheel. Positive yaw input
-				means nose right; the nose wheel achieves that by pushing the
-				NOSE sideways, and since it sits ahead of the centre of mass
-				the resulting r x F yaws the aircraft the right way with no
-				sign conventions needed here.
-			]]
-			local steerForce = steerInput * gear.steeringAuthority * gripLimit * steerFade
-			wheelForce += lateralDir * steerForce
-			telemetry.steeringForce += steerForce
+		--[[
+			The steered wheel gets a real tyre curve: cornering force rises with
+			SLIP ANGLE and saturates, rather than jumping straight to the limit.
+
+			Needed because the clamp above is effectively infinite stiffness -
+			cancel all sideways motion in one timestep, then clip. For a main
+			wheel tracking straight that is a fine approximation, because the
+			slip is incidental and tiny either way. For the steered wheel the
+			slip is COMMANDED and large, so infinite stiffness meant the tyre sat
+			at its grip limit for any steering angle at all - and the speed fade
+			then did nothing, because reducing the angle from 10 degrees to 0.4
+			left the tyre just as saturated. runTests() caught exactly that:
+			2,943 N*m at 5 m/s against 2,984 N*m at 24 m/s, when the second
+			should have been a small fraction of the first.
+
+			With the curve, a 10-degree taxi input is past saturation and pulls
+			full grip, while the 0.4 degrees left at rotation speed produces
+			almost nothing - which is what hands the aircraft to the rudder.
+		]]
+		if wheel.steering then
+			local slip = math.atan2(abs(vLat), max(abs(vRoll), 1e-4))
+			lateralLimit = gripLimit * clamp(slip / max(gear.tyreSlipAngle, 1e-4), 0, 1)
+		end
+
+		local lateralForce = clamp(lateralNeeded, -lateralLimit, lateralLimit)
+		wheelForce += wheelLat * lateralForce
+
+		--[[
+			On a steered wheel that lateral force IS the cornering force, and
+			there is deliberately no second term adding to it.
+
+			Because the wheel is aimed across the direction of travel, rolling
+			forward gives it a sideways velocity in its own frame; the grip
+			cancels that, and the resulting force at a point ahead of the centre
+			of mass yaws the aircraft. Slip angle produces cornering, which is
+			what a tyre actually does.
+
+			It also means a stationary aircraft does not turn however hard the
+			pedals are pressed - correct, and true of the real aeroplane, which
+			needs to be rolling (or using differential braking, which is not
+			modelled) before the nose wheel can do anything.
+		]]
+		if wheel.steering then
+			telemetry.steeringForce += lateralForce
 		end
 
 		-- ---- Rolling resistance and brakes -------------------------------
@@ -428,7 +503,7 @@ function GroundHandling.computeForces(
 			local stoppingForce = wheelMass * abs(vRoll) / dt
 			retarding = min(retarding, stoppingForce)
 
-			wheelForce += rollDir * (retarding * direction)
+			wheelForce += wheelRoll * (retarding * direction)
 		end
 
 		totalForce += wheelForce
@@ -474,12 +549,23 @@ function GroundHandling.runTests(): (boolean, { any })
 
 	print("=== GroundHandling: verification ===")
 
-	-- Something to roll on. Built rather than assumed, so the suite does not
-	-- depend on whatever happens to be in the place file.
+	--[[
+		Something to roll on, built rather than assumed so the suite does not
+		depend on whatever happens to be in the place file.
+
+		FIVE KILOMETRES FROM THE ORIGIN, and that is not cosmetic any more. This
+		pad used to sit at (0, 0, 0) with a 400 m span - which is now the middle
+		of runway 18/36. It would drop a 400 m slab coincident with the runway
+		surface and a 1,111 kg test aircraft on the centreline, in front of
+		anybody on short final. Same class of problem as the leaked rigs in §7,
+		and the airport is what turned it from untidy into dangerous.
+	]]
+	local TEST_ORIGIN = Vector3.new(-5000, 0, -5000)
+
 	local pad = Instance.new("Part")
 	pad.Name = "__GroundTestPad"
 	pad.Size = Vector3.new(400, 4, 400)
-	pad.Position = Vector3.new(0, -2, 0) -- top surface at y = 0
+	pad.Position = TEST_ORIGIN + Vector3.new(0, -2, 0) -- top surface at y = 0
 	pad.Anchored = true
 	pad.Parent = workspace
 
@@ -489,7 +575,7 @@ function GroundHandling.runTests(): (boolean, { any })
 		exactly on the pad's surface.
 	]]
 	local GROUND_Y = 1.30
-	local model = AircraftBuilder.build(Cessna172, CFrame.new(0, GROUND_Y, 0), workspace)
+	local model = AircraftBuilder.build(Cessna172, CFrame.new(TEST_ORIGIN + Vector3.new(0, GROUND_Y, 0)), workspace)
 	local state = GroundHandling.new(model, Cessna172)
 
 	local dt = 1 / 60
@@ -505,9 +591,15 @@ function GroundHandling.runTests(): (boolean, { any })
 		return c
 	end
 
+	--[[
+		The cframe POSITION matters here, not just the rotation: computeForces
+		raycasts from the centre of mass to find the wheels' contact, so a
+		synthetic state has to sit over the test pad or every wheel reports
+		airborne and the whole suite measures nothing.
+	]]
 	local function onGround(speedMs: number, lateralMs: number?, omega: Vector3?): any
 		return {
-			cframe = CFrame.new(0, GROUND_Y, 0),
+			cframe = CFrame.new(TEST_ORIGIN + Vector3.new(0, GROUND_Y, 0)),
 			velocity = Vector3.new(lateralMs or 0, 0, -(speedMs or 0)),
 			angularVelocity = omega or Vector3.zero,
 			altitude = 0,
@@ -673,11 +765,62 @@ function GroundHandling.runTests(): (boolean, { any })
 		string.format("%.6f N of steering force", state.telemetry.steeringForce)
 	)
 
+	-- 8b. The steered wheel corners by SLIP ANGLE ----------------------------
+	--[[
+		These pin down the change from a commanded sideways force to a pointed
+		wheel. The old model shoved the nose sideways with authority that did not
+		depend on rolling at all; the new one develops its cornering force
+		because a wheel aimed across the direction of travel has sideways
+		velocity in its own frame.
+
+		The visible consequence, and the one worth asserting: a STATIONARY
+		aircraft cannot steer however hard the pedals are pressed. That is
+		correct and true of the real aeroplane - a 172 turns on the ground by
+		rolling, or by differential braking, which is not modelled.
+	]]
+	local _, tStationary = GroundHandling.computeForces(state, onGround(0), dt, controlsWith({ yaw = 1 }), 0)
+	record(
+		"A stationary aircraft does not steer - cornering needs slip",
+		abs(tStationary.Y) < 1e-6,
+		string.format("%.6f N*m at rest with full pedal", tStationary.Y)
+	)
+
+	local _, tCreep = GroundHandling.computeForces(state, onGround(1), dt, controlsWith({ yaw = 1 }), 0)
+	local _, tTaxi = GroundHandling.computeForces(state, onGround(5), dt, controlsWith({ yaw = 1 }), 0)
+	record(
+		"Cornering force appears as soon as it rolls",
+		abs(tCreep.Y) > 1e-3 and abs(tTaxi.Y) >= abs(tCreep.Y),
+		string.format("1 m/s: %.0f N*m, 5 m/s: %.0f N*m", abs(tCreep.Y), abs(tTaxi.Y))
+	)
+
+	--[[
+		THE number this change was made for.
+
+		A steered wheel turns the aircraft about the Ackermann centre, so the
+		steady turn radius is wheelbase / tan(steering angle). Asserted against
+		the geometry rather than against whatever the code produces, and the
+		target is a real one: a 172 turns on a taxiway in about 10 m.
+
+		Before the change this was 207 m, measured live at 12 kt with full pedal.
+	]]
+	local nose, mainZ
+	for _, w in Cessna172.gear.wheels do
+		if w.steering then nose = w.offset.Z else mainZ = w.offset.Z end
+	end
+	local wheelbase = abs(mainZ - nose)
+	local turnRadius = wheelbase / math.tan(Cessna172.gear.steeringAngle)
+	checkRange("Geometric turn radius matches a real 172", turnRadius, 8, 14, "m")
+	record(
+		"Wheelbase is the real figure",
+		wheelbase > 1.4 and wheelbase < 2.2,
+		string.format("%.2f m nose to mains", wheelbase)
+	)
+
 	-- 9. Numerical safety ----------------------------------------------------
 	local fWild, tWild = GroundHandling.computeForces(
 		state,
 		{
-			cframe = CFrame.new(0, GROUND_Y, 0) * CFrame.Angles(0.4, 1.2, 0.3),
+			cframe = CFrame.new(TEST_ORIGIN + Vector3.new(0, GROUND_Y, 0)) * CFrame.Angles(0.4, 1.2, 0.3),
 			velocity = Vector3.new(120, -40, 90),
 			angularVelocity = Vector3.new(20, -15, 10),
 			altitude = 0,
@@ -700,7 +843,7 @@ function GroundHandling.runTests(): (boolean, { any })
 	local fVertical = GroundHandling.computeForces(
 		state,
 		{
-			cframe = CFrame.new(0, GROUND_Y, 0) * CFrame.Angles(math.rad(90), 0, 0),
+			cframe = CFrame.new(TEST_ORIGIN + Vector3.new(0, GROUND_Y, 0)) * CFrame.Angles(math.rad(90), 0, 0),
 			velocity = Vector3.new(0, -10, 0),
 			angularVelocity = Vector3.zero,
 			altitude = 0,

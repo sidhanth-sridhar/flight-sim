@@ -100,6 +100,21 @@ InputController.DEFAULT_BINDINGS = {
 	Pause = Enum.KeyCode.P,
 
 	--[[
+		Reset the aircraft. Backspace, specified by the pilot.
+
+		The recovery path from an aeroplane on its back: it asks the server for a
+		spawn, and the server treats a request from a player who already has an
+		aircraft as "replace it". Until this existed the only way back into the air
+		was to die or respawn from the Roblox menu.
+
+		It is listed here so it is rebindable and so the collision test covers it,
+		but update() deliberately does NOT consume it. Reset has to work when there
+		is no aircraft to reset - and update() only runs while one is being flown.
+		FlightController listens for it directly; see the note there.
+	]]
+	ResetAircraft = Enum.KeyCode.Backspace, -- specified
+
+	--[[
 		X (RecenterStick) and M (MouseModeToggle) were removed when the yoke
 		became absolute. Neither could still mean anything: there are no mouse
 		modes left, and Roblox exposes no API to warp the cursor, so "recentre
@@ -1166,6 +1181,45 @@ function InputController.runTests(): (boolean, { any })
 		seen[key] = action
 	end
 	record("No two actions share a key", collision == nil, collision or "all bindings unique")
+
+	-- 14. Reset ---------------------------------------------------------------
+	record(
+		"Backspace is bound to ResetAircraft",
+		InputController.DEFAULT_BINDINGS.ResetAircraft == Enum.KeyCode.Backspace,
+		tostring(InputController.DEFAULT_BINDINGS.ResetAircraft)
+	)
+
+	--[[
+		Reset is deliberately inert HERE. FlightController owns it, because it has
+		to work with no aircraft in existence and update() only runs while one is
+		being flown. This asserts the key cannot quietly acquire a second meaning:
+		holding it must not move a single control or flip a single system flag.
+	]]
+	state = fresh()
+	run(state, 120, { "ResetAircraft" })
+	local resetControls, resetSystems = state.controls, state.systems
+	record(
+		"Holding reset moves no control",
+		resetControls.pitch == 0 and resetControls.roll == 0 and resetControls.yaw == 0
+			and resetControls.throttle == 0 and resetControls.brake == 0 and resetControls.flaps == 0,
+		string.format("pitch %+.3f, throttle %.3f, brake %.3f", resetControls.pitch, resetControls.throttle, resetControls.brake)
+	)
+	record(
+		"Holding reset flips no system",
+		not resetSystems.engineCommanded and not resetSystems.paused
+			and not resetSystems.altitudeHold and resetSystems.viewIndex == 1,
+		string.format("viewIndex %d, engine %s", resetSystems.viewIndex, tostring(resetSystems.engineCommanded))
+	)
+
+	-- poll() walks the bindings table, so it reports the key as held. That is
+	-- harmless but worth pinning down: it is how a rebound reset key stays
+	-- discoverable, and it must not have been dropped from the snapshot.
+	state = fresh()
+	record(
+		"poll() knows about the reset binding",
+		state.bindings.ResetAircraft == Enum.KeyCode.Backspace,
+		"present in the per-player binding table"
+	)
 
 	local passCount = 0
 	for _, r in results do

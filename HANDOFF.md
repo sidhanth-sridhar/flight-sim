@@ -6,13 +6,16 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 340 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 351 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
-**Every Phase 1 system is now built.** The debug HUD (§6i) was the last one. The camera (§6h) landed first, out of order, because flying the gate through Roblox's default character camera would have been miserable.
+**Phase 1 build work is complete.** The reset key (§6j) was the last item. The debug HUD (§6i) closed the systems before it; the camera (§6h) landed first, out of order, because flying the gate through Roblox's default character camera would have been miserable.
 
-➡️ **NEXT TASK: fly the Phase 1 flight gate.** Taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. **This one is the pilot's, not the assistant's.** Nothing further in Phase 2 starts until it is signed off. Everything needed to fly it now exists: an aeroplane that taxis and flies, three camera views, and live numbers on screen.
+➡️ **NEXT TASK: fly the Phase 1 flight gate.** Taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. **This one is the pilot's, not the assistant's.** Nothing further in Phase 2 starts until it is signed off. Everything needed to fly it now exists: an aeroplane that taxis and flies, three camera views, live numbers on screen, and a key that puts a wrecked aeroplane back on its wheels.
 
 **What landed this session**
+- **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
+
+**Landed the session before**
 - `CameraController` (§6h) — cockpit / chase / free on V, world-locked while C is held.
 - `DebugHud` (§6i) — raw numbers, 30 Hz with per-frame peak capture.
 - The seated pilot is now **invisible** as well as massless and non-collidable (§6e).
@@ -26,12 +29,11 @@
 
 **Committed** through the PTFS control change; the working tree is clean.
 
-**Phase 1 remaining**: the raw-numbers debug HUD (IAS, altitude, AoA, G-load, thrust, force vectors — no gauges). Then the flight gate — taxi, take off, coordinated turn, deliberate stall, recover, land — which the pilot flies before Phase 2.
+**Phase 1 remaining**: the flight gate only — taxi, take off, coordinated turn, deliberate stall, recover, land. Every system it needs is built and green.
 
 **Verified live this session, not just in tests**: the server spawns the aircraft, grants the client network ownership, the client adopts it and runs the frame loop, and boarding moves the aircraft **0.000 m**. Getting to that last number took three fixes — see §6e, because two of them are not obvious and both were found by measuring rather than reasoning.
 
 **Open questions for the pilot**, none blocking:
-- **No reset-aircraft key.** Requesting a spawn replaces your existing aircraft, so the recovery path from an aeroplane on its back is currently *die, or respawn from the Roblox menu*. Binding a key is a one-line change but the bindings are yours — say which key.
 - Pause (P) is a stopgap that zeroes control forces; it is not a real pause and probably should not be bound until designed.
 - The `Controls/` vs `Controllers/` folder split is deliberate for now — the rename was flagged as a separate task.
 - Aircraft park 30 m south of the spawn pad, which is a short walk. §6e says why they cannot park on it.
@@ -98,7 +100,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (340 checks total)
+### Verified green (351 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -109,8 +111,8 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 34/34 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 67/67 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 22/22 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 71/71 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 22/22 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
@@ -130,7 +132,7 @@ Also built and working: `Constants`, `MathUtil`, `Signal`, `Units`, `Remotes` (1
 1. **Centre-of-mass frame mismatch.** Roblox reports `AssemblyCenterOfMass` relative to the **root part**; the definition measures offsets from a **datum**. They are different origins. Fixed by storing a `DatumOffset` attribute on the root at build time and converting in `measure()`.
 2. **Cylinder volume.** Roblox computes mass from *true geometric* volume, not the bounding box — a cylinder is only π/4 of its box, so wheels came out 21% light. Fixed with a `SHAPE_VOLUME_FACTOR` table.
 
-Nothing is currently unverified. Phase 1 is four modules from complete: `FlightController`, `AircraftService`, the debug HUD, and then the flight gate.
+Nothing is currently unverified, and nothing is left to build in Phase 1. Only the flight gate remains, and it is flown rather than written.
 
 ### Real physics results achieved so far
 
@@ -233,13 +235,15 @@ InputController.rebind(ic, action, keyCode)
 3. **Altitude hold engaged and disconnected on the same frame** — real, and the worst of the three. Fixed by capturing the stick position at engagement and disconnecting on *movement away from it*. See §7 for why absolute deflection cannot work in Direct mouse mode.
 
 ### Bindings
-Pilot-specified (do not change): **W/S** throttle ramp, **A/D** rudder, **F/G** flap detents down/up, **C** camera hold, **R** altitude hold, **E** engine toggle, mouse = pitch/roll.
+Pilot-specified (do not change): **W/S** throttle ramp, **A/D** rudder, **F/G** flap detents down/up, **C** camera hold, **R** altitude hold, **E** engine toggle, **Backspace** reset aircraft, mouse = pitch/roll.
 
 Chosen here, open to review: **B** brake, **V** cycle view, **, / .** trim down/up, **L** gear (G was taken; inert on the fixed-gear 172), **P** pause.
 
 **X and M were removed** when the yoke became absolute — see §6g.
 
 **C is momentary** (held only while down); **R latches**. Bindings live in `InputController.DEFAULT_BINDINGS` and are overridable per player via `rebind()`, which is what the settings menu will drive. A test asserts no two actions share a key.
+
+**Backspace is the one binding `update()` does not consume** — it is listed there to be rebindable and to be covered by the collision test, but `FlightController` reads it directly. See §6j for why, because the reason is not stylistic.
 
 ### The complete frame loop `FlightController` has to write
 
@@ -462,6 +466,30 @@ Redraw is `Constants.SIM.INSTRUMENT_HZ`. But **load factor and force magnitude a
 ### It found a bug on its first flight
 It displayed `RPM -0` on a stationary aeroplane. Not a formatting artefact: `Engine.update`'s windmilling branch used `math.min(airspeedMs * 12, ...)`, and `airspeedMs` is the **forward** component, which drifts slightly negative on a parked aircraft — so the tachometer read backwards. Now clamped at zero, with a regression test asserting rpm stays ≥ 0 at −3 m/s of forward airspeed. This is exactly what the HUD is for.
 
+## 6j. Reset on Backspace — built and green (2026-08-04, closes Phase 1 build work)
+
+`ResetAircraft = Enum.KeyCode.Backspace` in `InputController.DEFAULT_BINDINGS`; consumed by `FlightController`. The pilot named the key. This closes the open question §0 had been carrying since the service landed: the recovery path from an aeroplane on its back was *die, or respawn from the Roblox menu*.
+
+**No new server code, and none was needed.** `AircraftService` already treats a spawn request from a player who has an aircraft as *replace it* (§6e), so a reset **is** a request — `FlightController.requestAircraft()`, the same call `Humanoid.Died` already made. There is no reset remote and no second adoption path.
+
+### The pilot does NOT have to be seated, and that decided where the code lives
+
+The obvious home was `InputController.update()`, alongside every other latched action, and it would have been wrong. `update()` only runs inside the frame loop; the frame loop only runs while the pilot is sitting in a working aircraft. The situations worth resetting from are exactly the ones where that is not true — an aeroplane on its back that will not let you back into the seat, a wreck you climbed out of, or no aircraft at all because a request failed. **Requiring a flyable aeroplane in order to recover from an unflyable one is circular.**
+
+So the binding lives in `InputController` — rebindable, and swept up by the existing "no two actions share a key" test — but `update()` deliberately ignores it, and `FlightController` connects `UserInputService.InputBegan` as a **lifetime** connection rather than a rig one. Two `InputController` tests pin the key down as inert there: holding it must move no control and flip no system flag, so it cannot quietly acquire a second meaning later.
+
+### Edge-triggered structurally, plus a cooldown for mashing
+`InputBegan` fires once per physical press, so holding Backspace cannot respawn repeatedly — the rising edge is a property of the signal, not something this module remembers. What `InputBegan` does *not* stop is **mashing**, and each reset is an `InvokeServer` round trip that despawns an aircraft and builds another, so five jabs would queue five spawns and hand back the last aeroplane. `RESET_COOLDOWN = 1.0 s`.
+
+### Backspace is the key you press to fix a typo
+Which makes the guard against consuming it while a text box has focus more than housekeeping — deleting a character must never also delete the aeroplane. Both `gameProcessedEvent` and the existing `isTyping()` check are applied.
+
+### Testing a keyboard without a keyboard
+`FlightController.shouldReset(keyCode, blocked, boundKey, now, lastAt)` is pure and exported, the same shape as `AircraftService.evaluate()`. Six checks drive it directly: the bound key accepts, another key does not, a blocked press does not, a second press inside the cooldown is dropped and one after it is not, and a rebound key is honoured while the old one goes quiet. Comparing against a `boundKey` **passed in** rather than a constant is what makes `rebind()` work, and the last check is what asserts it.
+
+### Verified live, not only in tests
+Real Backspace press, `1` aircraft before and `1` after, but a different model instance — and the server log carries the whole chain: `Reset requested` → `Despawned c172_… (slot 0)` → `Spawned Cessna 172S Skyhawk (c172) at slot 0` → `Adopted`. **Pressed while standing on the apron, never having boarded**, which is precisely the case a seated-only reset would have failed.
+
 ### Then
 **Phase 1 test gate — the only thing left in Phase 1**: taxi, take off, coordinated turn, deliberate stall, recover, land, on the flat baseplate. **The pilot flies it and signs off.** Do not proceed further into Phase 2 until that happens.
 
@@ -485,7 +513,8 @@ It displayed `RPM -0` on a stationary aeroplane. Not a formatting artefact: `Eng
 - **`string.format("%.0f", x)` rounds halves to EVEN**, so `1204.5` prints as `1204`, not `1205`. A test fixture sitting on an exact `.5` boundary is testing the C library's rounding mode, not your code. Cost one wrong assertion.
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
-- **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). During a crash the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once.
+- **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **A binding in `DEFAULT_BINDINGS` is not proof `update()` consumes it.** `ResetAircraft` is listed there to be rebindable and to be covered by the collision test, but is read by `FlightController` off `InputBegan`, because it has to work when there is no aircraft and therefore no frame loop. `poll()` still reports it as held; nothing acts on that. See §6j.
 - **Studio's command bar has its OWN module cache, separate from the running server's.** `require(SomeService)` from the command bar returns a *second copy* of the module with its own state — its `Init()` has never run, and its bookkeeping tables are empty. This is why `AircraftService.runTests()` reported "0 active" while a live aircraft sat in the workspace, and why its first test spawn tried to park on top of that live aeroplane. Slot occupancy is therefore checked against the world, and `runTests()` registers its collision groups itself.
 - **Roblox sanitises NaN inside property setters.** A NaN velocity is stored as `(0, 0, 0)` and a NaN CFrame position as `y = -1,000,000`. So a NaN check cannot be tested through the datamodel — the assertion would only prove Roblox scrubs NaN. Test the pure predicate directly. (The −1,000,000 does trip the altitude floor, so a position that has gone numerically bad is still caught.)
 - **`BasePart:IsNetworkOwner()` does not exist on the client** — *"IsNetworkOwner is not a valid member of Part"*. A client-side ownership check is dead code that silently never fires. Verify with `GetNetworkOwner()` on the server. (`ReceiveAge == 0` is the usable client-side hint, and was used to confirm the handover by hand.)

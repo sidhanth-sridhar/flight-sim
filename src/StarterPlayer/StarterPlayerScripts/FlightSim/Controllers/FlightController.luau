@@ -94,6 +94,18 @@ local min = math.min
 ]]
 local RIG_WAIT_TIMEOUT = 10
 
+--[[
+	Shortest gap between two accepted reset requests.
+
+	InputBegan already fires once per physical press, so holding Backspace cannot
+	repeat - that is the edge trigger, and it is structural rather than something
+	this module has to remember. The cooldown is for MASHING: each reset is an
+	InvokeServer round trip that despawns an aircraft and builds another, and a
+	pilot jabbing the key while nothing appears to happen would queue a handful of
+	spawns and get the last one, several aeroplanes later.
+]]
+local RESET_COOLDOWN = 1.0
+
 -- =========================================================================
 -- STATE
 -- =========================================================================
@@ -111,6 +123,10 @@ local rigConnections: { RBXScriptConnection } = {}
 
 local stepConnection: RBXScriptConnection? = nil
 local initialised = false
+
+-- os.clock() of the last accepted reset. Starts far enough in the past that the
+-- first press is never inside the cooldown.
+local lastResetAt = -math.huge
 
 --[[
 	Reused every frame rather than reallocated. One small table per frame per
@@ -547,6 +563,93 @@ local function adopt(model: Model)
 end
 
 -- =========================================================================
+-- RESET
+-- =========================================================================
+
+--[[
+	Backspace asks the server for a fresh aircraft.
+
+	The server treats a spawn request from a player who already has an aircraft as
+	"replace it" (see AircraftService), so a request IS the reset - there is no
+	separate remote and no new server code. Before this, the only route back into
+	the air after putting an aeroplane on its back was to die or respawn the
+	character from the Roblox menu.
+
+	THE PILOT DOES NOT HAVE TO BE SEATED, and that is the whole point.
+
+	The obvious place for this was InputController.update(), alongside every other
+	latched action. It would have been wrong. update() only runs inside the frame
+	loop, the frame loop only runs while the pilot is sitting in a working
+	aircraft, and the situations worth resetting from are precisely the ones where
+	that is not true: an aeroplane on its back that will not let you back into the
+	seat, a wreck you climbed out of, or no aircraft at all because the last
+	request failed. Requiring a flyable aeroplane in order to recover from an
+	unflyable one is circular. So the key is bound in InputController -
+	rebindable, and covered by its collision test - but consumed here, on a
+	connection that lives as long as the client does.
+
+	It is still edge-triggered like every other latch, and structurally so:
+	InputBegan fires once per physical press, so holding Backspace cannot respawn
+	repeatedly. RESET_COOLDOWN covers mashing, which InputBegan does not.
+]]
+
+--[[
+	Which key currently resets.
+
+	The live aircraft's own binding table when there is one, so rebind() is
+	honoured; the defaults otherwise - because reset has to work when there is no
+	aircraft, and therefore no per-player bindings, to read.
+]]
+local function resetKey(): Enum.KeyCode
+	if rig then
+		return rig.input.bindings.ResetAircraft
+	end
+	return InputController.DEFAULT_BINDINGS.ResetAircraft
+end
+
+--[[
+	Pure, and exported so runTests() can drive it without a keyboard.
+
+	`blocked` is true when the press belongs to something else - Roblox's own UI
+	consumed it, or a text box has focus. That matters more for this key than any
+	other: Backspace is what a pilot presses to correct a typo in chat, and
+	deleting a character should never also delete their aeroplane.
+]]
+function FlightController.shouldReset(
+	keyCode: Enum.KeyCode,
+	blocked: boolean,
+	boundKey: Enum.KeyCode,
+	now: number,
+	lastAt: number
+): boolean
+	if blocked then
+		return false
+	end
+	if keyCode ~= boundKey then
+		return false
+	end
+	return (now - lastAt) >= RESET_COOLDOWN
+end
+
+local function onInputBegan(input: InputObject, gameProcessed: boolean)
+	if input.UserInputType ~= Enum.UserInputType.Keyboard then
+		return
+	end
+
+	local now = os.clock()
+	if not FlightController.shouldReset(input.KeyCode, gameProcessed or isTyping(), resetKey(), now, lastResetAt) then
+		return
+	end
+
+	lastResetAt = now
+	log("Reset requested")
+
+	-- On its own thread: InvokeServer yields, and yielding inside an input
+	-- handler stalls every other listener on that signal.
+	task.spawn(FlightController.requestAircraft)
+end
+
+-- =========================================================================
 -- INIT
 -- =========================================================================
 
@@ -578,13 +681,20 @@ function FlightController.Init()
 	table.insert(connections, player.CharacterRemoving:Connect(stopLoop))
 
 	--[[
+		Backspace resets the aircraft, from wherever the pilot is standing.
+
+		A lifetime connection rather than a rig one, deliberately: the key must
+		still work when there is no rig - see the note above resetKey().
+	]]
+	table.insert(connections, UserInputService.InputBegan:Connect(onInputBegan))
+
+	--[[
 		Dying gets you a fresh aircraft.
 
 		The server treats a spawn request from a player who already has one as
-		"replace it", so this is currently the only route back into the air
-		after putting an aeroplane on its back: die, or respawn the character
-		from the Roblox menu. There is no reset-aircraft key yet - binding one
-		is a decision for the pilot, since the bindings are theirs.
+		"replace it", which is what Backspace above uses too. Death is the other
+		route in, and it stays: an aeroplane can be lost in ways that also kill
+		the pilot.
 
 		Death rather than CharacterAdded, deliberately. The initial character
 		may arrive either side of this controller starting, so requesting on
@@ -998,6 +1108,65 @@ function FlightController.runTests(): (boolean, { any })
 		"release() zeroes both constraints",
 		aeroForce.Force == Vector3.zero,
 		"zeroed"
+	)
+
+	--[[
+		9. Reset.
+
+		Driven through the pure predicate rather than through UserInputService,
+		which needs a real key press. What is left to Roblox - InputBegan firing
+		once per physical press - is the edge trigger itself, and it is structural
+		rather than something this module implements and could get wrong.
+	]]
+	local RESET = InputController.DEFAULT_BINDINGS.ResetAircraft
+	record(
+		"The reset binding this module reads still exists",
+		RESET ~= nil,
+		tostring(RESET)
+	)
+
+	record(
+		"The bound key resets",
+		FlightController.shouldReset(RESET, false, RESET, 100, -math.huge),
+		"accepted"
+	)
+	record(
+		"Any other key does not",
+		not FlightController.shouldReset(Enum.KeyCode.W, false, RESET, 100, -math.huge),
+		"W ignored"
+	)
+
+	--[[
+		THE one that matters for this particular key. Backspace is what a pilot
+		presses to correct a typo, and deleting a character must never also delete
+		their aeroplane.
+	]]
+	record(
+		"Reset is ignored while the press belongs to the UI",
+		not FlightController.shouldReset(RESET, true, RESET, 100, -math.huge),
+		"blocked press ignored"
+	)
+
+	-- Mashing. InputBegan already stops a HELD key repeating; this is what stops
+	-- five jabs queueing five spawns and handing back the last aeroplane.
+	record(
+		"A second press inside the cooldown is dropped",
+		not FlightController.shouldReset(RESET, false, RESET, 100 + RESET_COOLDOWN * 0.5, 100),
+		string.format("%.1f s cooldown", RESET_COOLDOWN)
+	)
+	record(
+		"A press after the cooldown is accepted",
+		FlightController.shouldReset(RESET, false, RESET, 100 + RESET_COOLDOWN * 1.5, 100),
+		"accepted"
+	)
+
+	-- Rebinding is honoured, because the predicate compares against the key it is
+	-- given rather than a constant of its own.
+	record(
+		"A rebound reset key is honoured, and the old one released",
+		FlightController.shouldReset(Enum.KeyCode.Delete, false, Enum.KeyCode.Delete, 100, -math.huge)
+			and not FlightController.shouldReset(RESET, false, Enum.KeyCode.Delete, 100, -math.huge),
+		"Delete accepted, Backspace ignored"
 	)
 	end
 

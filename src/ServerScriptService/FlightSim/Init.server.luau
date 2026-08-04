@@ -122,20 +122,52 @@ end
 	Services are added here as they are built, each as a ModuleScript under
 	ServerScriptService/FlightSim/Services exposing an Init() function.
 
-	Phase 1: AircraftService  - spawning, ownership, validation
-	Phase 3: AirportService   - runway registry, navigation points
-	Phase 4: FlightPlanService
-	Phase 5: WeatherService
-	Phase 6: PlayerDataService
+	Built: AirportService   - the world: runway, taxiway, apron, navigation
+	       AircraftService  - spawning, ownership, validation
+	Later: FlightPlanService, WeatherService, PlayerDataService
+
+	SERVICE_ORDER exists because Services:GetChildren() returns whatever order
+	Roblox feels like, and "whatever order Roblox feels like" is exactly the
+	category of startup bug the note at the top of this file says one explicit
+	sequence removes. The airport is listed first because it is the world every
+	other service places things in.
+
+	Anything not named here still starts, after the listed ones, so adding a
+	service cannot silently fail to run - it just does not get to choose when.
 ]]
+local SERVICE_ORDER = {
+	"AirportService",
+	"AircraftService",
+}
+
 local function startServices()
 	local servicesFolder = script.Parent:FindFirstChild("Services")
 	if not servicesFolder then
 		return 0
 	end
 
-	local started = 0
+	-- Listed services first, in order; then everything else.
+	local ordered: { Instance } = {}
+	local seen: { [Instance]: boolean } = {}
+
+	for _, name in SERVICE_ORDER do
+		local module = servicesFolder:FindFirstChild(name)
+		if module then
+			table.insert(ordered, module)
+			seen[module] = true
+		else
+			warn(string.format("[FlightSim:Server] SERVICE_ORDER names '%s', which does not exist.", name))
+		end
+	end
+
 	for _, module in servicesFolder:GetChildren() do
+		if not seen[module] then
+			table.insert(ordered, module)
+		end
+	end
+
+	local started = 0
+	for _, module in ordered do
 		if module:IsA("ModuleScript") then
 			-- One failing service must not prevent the rest from starting, so
 			-- each is isolated and its failure reported rather than thrown.

@@ -47,6 +47,15 @@ local Remotes = require(FlightSim.Net.Remotes)
 local Registry = require(FlightSim.Aircraft.Registry)
 local AircraftBuilder = require(FlightSim.Aircraft.AircraftBuilder)
 
+--[[
+	A sibling service, required directly rather than looked up at Init time.
+
+	Safe in either start order: everything this module asks AirportService is a
+	pure function of its constants and works the moment it is required. Only the
+	airport's GEOMETRY needs Init(), and nothing here needs the geometry.
+]]
+local AirportService = require(script.Parent:WaitForChild("AirportService"))
+
 local AircraftService = {}
 
 -- =========================================================================
@@ -58,23 +67,22 @@ local AircraftService = {}
 local CONTAINER_NAME = "Aircraft"
 
 --[[
-	Where aircraft park.
+	How high an aircraft's origin sits when its tyres are resting on the ground.
 
-	y = 1.30 m is the height at which the tyres rest exactly on a surface whose
-	top face is y = 0 - derived in GroundHandling.runTests(). Spawning higher
-	means the aircraft free-falls before anyone reaches it; spawning lower means
-	Roblox resolves the interpenetration by launching it.
+	1.30 m, derived in GroundHandling.runTests() for a surface whose top face is
+	y = 0. Spawning higher means the aircraft free-falls before anyone reaches
+	it; spawning lower means Roblox resolves the interpenetration by launching
+	it. This is a fact about the 172's gear geometry, which is why it lives here
+	with the aircraft rather than with the tarmac.
 
-	The 30 m offset is not arbitrary and was measured, not guessed. Parking on
-	the origin puts the aircraft on top of Workspace.SpawnLocation - a 12 x 12 m
-	pad whose top face is at y = 1.00 - which does two unhelpful things at once:
-	the aeroplane rests a metre above the runway on a ledge it must roll off to
-	take off, and the player materialises INSIDE it. A Roblox character is a
-	collidable 1.9 m body that spawns unannounced; the first observed live spawn
-	shoved a parked 1,111 kg aircraft 4.5 m across the apron before it settled.
-	Thirty metres clears the pad entirely and costs the pilot a short walk.
+	WHERE aircraft park is now AirportService's answer, not this module's. They
+	sit on the apron, facing runway 36. The old constant was CFrame.new(0, 1.30,
+	-30) - 30 m south of the world origin on a bare baseplate, offset only to
+	keep clear of Workspace.SpawnLocation, whose 12 x 12 m pad the aeroplane
+	would otherwise have rested on top of. The apron makes that moot: it is 300 m
+	from the origin and nothing else is on it.
 ]]
-local SPAWN_ORIGIN = CFrame.new(0, 1.30, -30)
+local SPAWN_HEIGHT = 1.30
 
 --[[
 	Lateral spacing between parked aircraft, in metres.
@@ -309,18 +317,21 @@ local function getContainer(): Folder
 end
 
 --[[
-	Slot 0 sits on the origin; the rest alternate right and left of it, so a
-	handful of aircraft stay clustered around the spawn point instead of
-	trailing off in one direction.
+	Where slot N parks, on the airport's apron.
+
+	The layout belongs to AirportService - it owns where the tarmac is - and the
+	SPACING belongs here, because it is derived from the aircraft's 11 m span
+	rather than from the apron. This module adds the gear height on top of the
+	surface CFrame it is given.
+
+	AirportService answers this from constants and needs no Init() to do it,
+	which is what makes the call safe: Init.server.luau starts services in
+	whatever order Services:GetChildren() returns, so this may well run before
+	the airport's geometry exists. The numbers are right either way.
 ]]
 local function slotCFrame(slot: number): CFrame
-	if slot == 0 then
-		return SPAWN_ORIGIN
-	end
-
-	local step = math.ceil(slot / 2)
-	local side = if slot % 2 == 1 then 1 else -1
-	return SPAWN_ORIGIN * CFrame.new(side * step * SPAWN_SPACING, 0, 0)
+	local surface = AirportService.apronSlotCFrame(slot, SPAWN_SPACING)
+	return surface * CFrame.new(0, SPAWN_HEIGHT, 0)
 end
 
 --[[
@@ -974,8 +985,42 @@ function AircraftService.runTests(): (boolean, { any })
 	-- 4. Parked on the ground, not falling or embedded ----------------------
 	record(
 		"Parks on the ground rather than spawning airborne",
-		math.abs(root.Position.Y - SPAWN_ORIGIN.Position.Y) < 0.01,
+		math.abs(root.Position.Y - SPAWN_HEIGHT) < 0.01,
 		string.format("y = %.3f m", root.Position.Y)
+	)
+
+	-- 4b. Parked at the airport, not at the old origin -----------------------
+	--[[
+		The three things that have to be true of a real spawned aircraft once the
+		apron owns placement. AirportService tests the slot ARITHMETIC; these
+		test that a genuine 1,111 kg aeroplane came out where the arithmetic
+		said, which is the part that would silently break if the two modules ever
+		disagreed about what a slot CFrame means.
+	]]
+	local apron = AirportService.APRON_CENTRE
+	record(
+		"Spawns on the apron rather than at the world origin",
+		math.abs(root.Position.X - apron.X) < AirportService.APRON_SIZE.X / 2
+			and math.abs(root.Position.Z - apron.Z) < AirportService.APRON_SIZE.Y / 2,
+		string.format("(%.0f, %.0f) against an apron at (%.0f, %.0f)", root.Position.X, root.Position.Z, apron.X, apron.Z)
+	)
+
+	--[[
+		THE one that matters for safety. An aeroplane materialising on the
+		centreline in front of somebody on short final is the worst thing this
+		service could do, and it is a one-constant mistake away.
+	]]
+	local runway36 = AirportService.getRunway("36") :: any
+	record(
+		"A spawned aircraft is nowhere near the runway",
+		math.abs(root.Position.X) > runway36.width / 2 + 11,
+		string.format("%.0f m off the centreline, runway is %.1f m wide", math.abs(root.Position.X), runway36.width)
+	)
+
+	record(
+		"A parked aircraft already faces runway 36",
+		root.CFrame.LookVector:Dot(runway36.direction) > 0.99,
+		string.format("look %s", tostring(root.CFrame.LookVector))
 	)
 
 	-- 5. Boarding -----------------------------------------------------------

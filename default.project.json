@@ -34,20 +34,45 @@
         "$properties": {
           "Anchored": true,
           "Color": [
-            0.38823,
-            0.37254,
-            0.38823
+            0.30588,
+            0.43921,
+            0.21960
           ],
+          "Material": "Grass",
           "Locked": true,
           "Position": [
             0,
-            -10,
+            -10.05,
             0
           ],
           "Size": [
-            512,
+            2048,
             20,
-            512
+            2048
+          ]
+        }
+      },
+
+      "SpawnLocation": {
+        "$className": "SpawnLocation",
+        "$properties": {
+          "Anchored": true,
+          "Locked": true,
+          "Neutral": true,
+          "Color": [
+            0.55686,
+            0.57254,
+            0.58823
+          ],
+          "Position": [
+            -150,
+            -0.5,
+            340
+          ],
+          "Size": [
+            12,
+            1,
+            12
           ]
         }
       }

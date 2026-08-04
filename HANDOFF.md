@@ -6,13 +6,20 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 378 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 431 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+
+🛫 **THE FLIGHT-TEST ENVIRONMENT IS NOW AN AIRPORT, NOT THE BASEPLATE.** Runway 18/36, 1,000 × 23 m, with a parallel taxiway, an apron, full markings and vertical reference objects. See §11 — including why the markings are load-bearing rather than decorative.
 
 # ✅ **PHASE 1 IS SIGNED OFF.** The flight gate was flown and passed on 2026-08-04 — see §9 for the pilot's report and what it found.
 
 Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and recovery, and landing were all flown. **The behaviour in the air was reported as right**: rotation at the expected speed, Vy pitch holding, clean turns, a predictable stall near the expected AoA with no deep-stall tendency, correct left-turning tendency answered by right rudder, and rudder authority that fades with airspeed as it should.
 
-➡️ **NEXT TASK: fly a few landings and judge the flare (§10), then Phase 2 cockpit instruments.** Ground effect is now modelled — but it is worth **only ~45 fpm of cushion out of ~900**, because a high wing gets little of it. That is the physically correct answer rather than a disappointing one, and it means **it will not by itself make landings easy**. If the flare still feels wrong after flying it, the cause is elsewhere and §10 lists where to look next.
+➡️ **NEXT TASK: re-fly the landing gate on the real runway.** The Phase 1 gate passed technically, but landings were judged on a featureless baseplate with no depth or speed cue, which is why the flare felt impossible. §11 exists to fix that. Ground effect (§10) is also modelled now, though it is worth only **~45 fpm of cushion out of ~900** — a high wing gets little of it, so the runway markings are expected to help far more than the physics did.
+
+**Open items for the pilot**, in order:
+1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
+2. Nosewheel steering sensitivity — reported as too rudder-dependent on the ground. See §12.
+3. Then Phase 2 cockpit instruments.
 
 **What landed this session**
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
@@ -74,7 +81,20 @@ These were decided deliberately and are expensive to reverse. Do not change them
 - Edit files in `src/`. **Never** edit scripts inside Studio — they are overwritten on the next sync.
 - Anything present in Studio but absent from `src/` gets **deleted** from Studio when Rojo syncs a managed folder.
 - Studio is for *running tests and flying*, not authoring.
-- `default.project.json` manages only the three `FlightSim` folders, plus `Workspace.Baseplate` and `Lighting`. `Workspace.World` is **not** version-controlled yet — worth adding before Phase 3.
+- `default.project.json` manages the three `FlightSim` folders, `Lighting`, and two `Workspace` instances: **`Baseplate`** (the 2,048 m grass field) and **`SpawnLocation`** (on the apron). The airport itself is **built in code** by `AirportService` — see §11 for why that is better than a JSON tree of 130 parts.
+
+⚠️ **Rojo reads `default.project.json` at SERVE START and never again.** Editing the project file while `rojo serve` is running changes nothing at all — no error, no warning, and the served tree keeps the old definition. This cost real time: the baseplate was resized in JSON four times before it was clear the server had never read any of them.
+
+**The full recovery, in order** — all three steps are needed:
+```bash
+# 1. restart the server so it reads the new project file
+taskkill /F /IM rojo.exe ; rojo serve default.project.json
+# 2. verify YOUR side before blaming Studio
+rojo build default.project.json -o probe.rbxlx   # then grep it
+```
+3. **Reconnect the Rojo plugin in Studio.** Killing the server drops the connection and the plugin does not come back on its own. Until it is reconnected, *no* file syncs — which looks exactly like the §3 subtree bug and is not.
+
+⚠️ **`Workspace.Baseplate` from the Studio template is NOT Rojo's**, so Rojo silently refuses to patch its properties — the same trap as the `StarterPlayerScripts` subtree below, now confirmed for `Workspace` instances too. **Delete it in Studio and let Rojo recreate it.** It comes back with the properties the JSON actually specifies. The same applies to `SpawnLocation`.
 
 **Studio MCP tools** (if available) should be used only to run test suites, inspect state, and start/stop Play. Not to edit scripts.
 
@@ -106,7 +126,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (366 checks total)
+### Verified green (431 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -115,13 +135,14 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 26/26 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
-| `FlightModel` | `Physics/FlightModel.luau` | 38/38 | Client |
+| `FlightModel` | `Physics/FlightModel.luau` | 40/40 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 80/80 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
-| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 32/32 | **Server** |
+| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
+| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -557,6 +578,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **Rojo reads `default.project.json` at serve start and never again.** Editing the project file while `rojo serve` is running does nothing, silently. Restart the server, then **reconnect the plugin in Studio** — killing the server drops the connection and it does not return on its own, after which no file syncs at all and it looks exactly like the subtree bug in §3. Full recovery is in §3.
+- **Anything sitting at the world origin is now sitting on the runway.** `Workspace.SpawnLocation` was, with its top face a metre up. `AirportService.runTests()` sweeps the whole runway and taxiway for obstructions because of it — one probe point would not have found it either.
 - **`force.Y` is not lift, and `force.Z` is not drag.** Lift and drag are resolved about the *relative wind*, not the world axes, so at any real angle of attack the drag vector has a Y component and the lift vector a Z one. An assertion of the form "this change must not affect lift" written against `force.Y` will fail on correct code. Assert on the surface telemetry's **CL and CD** instead — they are dimensionless and isolate the term being changed. See §10.
 - **Comparing a force at two altitudes confounds DENSITY with whatever you meant to measure.** Air is thinner at 400 m than at 30 m, so the drag differs for reasons unrelated to your term. Compare coefficients, or hold altitude fixed and vary the one thing under test. Also §10.
 - **A "best glide L/D" is not an approach sink rate, and confusing them nearly caused a wrong tuning fix.** The full-flap best-L/D point sits at a speed nobody approaches at, so comparing it against a remembered glide-ratio figure says nothing about how the aeroplane actually lands. Measure the operational condition — trimmed for L = W at the speed actually flown — before touching a coefficient. See §9.
@@ -675,7 +698,7 @@ Aerodynamics.solveSurface(..., flap, heightAboveGround?)
 
 **Drag only; the lift curve is untouched.** Changing CL near the ground would move the stall speed there and quietly invalidate the figures in §4. A test asserts CL is bit-identical in and out of ground effect.
 
-⚠️ **Ground is assumed at y = 0.** True of the Phase 1 baseplate, and **not** true of the Phase 3 world. When terrain arrives this needs the ground height under the aircraft — one raycast per frame shared with `GroundHandling`, not one per surface.
+✅ **Ground was assumed at y = 0 — no longer.** That note stood until the airport landed; `Kinematics.groundY` is now measured by a raycast in `readKinematics`. See §11 for where it lives and why it is not inside `computeForces`.
 
 ### Two wrong assertions, both caught by the suite
 
@@ -685,3 +708,58 @@ Both were tests failing against correct code, which is now the fourth and fifth 
 2. **Comparing drag at two altitudes confounds density with ground effect.** 30 m vs 400 m differ because the air is thinner, not because of this term.
 
 Both were fixed by asserting on the wing's own **CL and CD** — dimensionless and density-free, so they isolate exactly the thing being changed. A third bound (`reduction < 8%`) was picked by eye and failed at a correct 8.97%; the ceiling is now derived instead, from the fact that a CD reduction can never exceed the induced-term reduction that causes it.
+
+---
+
+## 11. The airport — built and green (2026-08-04)
+
+`src/ServerScriptService/FlightSim/Services/AirportService.luau`, 48/48, Server datamodel. **This replaces the bare baseplate as the flight-test environment.**
+
+### The markings are load-bearing, not decoration
+
+The gate was flown on a featureless grey plane and the landing reported as extremely hard. §9 measured the approach and the flare against published figures and both were correct — so the problem was never the flight model, it was that **there was nothing to see**. No depth cue, no closure cue, nothing to judge the last five metres against.
+
+So each marking is there for a reason:
+- **Centreline dashes are a ruler.** 30 m painted, 20 m gap — a 50 m period, one every 1.6 s at 60 kt. That is how closure rate is read without an instrument.
+- **Edge markers are the depth cue.** 0.8 m posts every 60 m down both sides. Objects of known size passing at a known spacing give height; flat paint cannot.
+- **The aiming point** (300 m in, the real figure for a runway under 1,200 m) is what the approach is actually flown at.
+
+### Layout
+
+| Element | Dimension |
+|---|---|
+| Runway 18/36 | 1,000 × 23 m (3,280 × 75 ft), along the Z axis |
+| Taxiway Alpha | parallel, 15 m wide, 60 m west, connectors + hold-shorts at both thresholds |
+| Apron | 180 × 100 m, west of Alpha, 7 spawn slots at 18 m |
+| Field | 2,048 m grass — Roblox's max part size, and it contains the whole circuit |
+
+**-Z is north.** There is no magnetic model, so a designator is just the world heading over ten: taking off toward -Z is runway 36. That was chosen because aircraft already spawned facing -Z, so `SPAWN_ORIGIN` needed no rotation — only a new position.
+
+### Data is available before Init(), geometry is not
+
+Every question-answering function — `getRunway`, `navPoints`, `apronSlotCFrame` — is a pure function of the constants and works the moment the module is required. Only `build()` touches the world.
+
+That is a **load-order fix, not tidiness**: `Init.server.luau` started services by walking `Services:GetChildren()`, whose order Roblox does not define, and `AircraftService` asks for an apron slot during its own `Init()`. Making the answer pure means the race cannot exist. An explicit `SERVICE_ORDER` was added to the bootstrap as well, listing the airport first — belt and braces, and consistent with what that file already says about explicit ordering.
+
+### The ground is now a raycast, closing §10's note
+
+`Kinematics` gained `groundY`, measured by one downward ray in `readKinematics` — **not** in `computeForces`, which stays pure. §6 calls that purity out as worth preserving and it is what lets the aero model be tested without Roblox simulating anything; a raycast inside it would have ended that for one term.
+
+The ray is capped at 1.2 × the largest declared `groundEffectSpan`, so it can only find ground that could matter, and returns `nil` above that — which is almost always, making the early-out free. `nil` means no ground effect, which is a real answer beyond the edge of the field.
+
+Deliberately **not** shared with `GroundHandling`'s probes: those are per wheel and about a tyre radius long. They answer "is this wheel touching?", which is a different question and stops far short of the distance ground effect still cares about.
+
+Verified live: **4.5e-8 over the runway, −0.050 over the grass, nil at 400 m.**
+
+### Two real bugs the suite caught immediately
+
+1. **The circuit did not fit the world.** `CIRCUIT_EXTENSION = 800` put the upwind point at Z = −1,300, three hundred metres past the edge of a ±1,024 m field — a pilot flying the circuit would have been over open space. Now 450, and asserted.
+2. **`Workspace.SpawnLocation` was sitting on the runway.** Its 12 × 12 m pad has its top face at y = 1.00 (§6e) and it was on the world origin, which the runway now runs through — a one-metre ledge in the middle of the takeoff roll. It is now on the apron at (−150, 340), **flush at y = 0**, and Rojo-managed.
+
+That second one generalises, so `runTests()` now **sweeps the whole runway and taxiway** for obstructions rather than probing one point. Anything dropped into `Workspace` near the origin lands on the runway and nothing else would report it.
+
+It also closes the §0 note about aircraft parking 30 m from the spawn pad: **the pilot now materialises on the apron beside their aeroplane.**
+
+### Why the airport is built in code
+
+`AircraftBuilder` already builds the aircraft from a definition, and the airport follows it. A JSON tree of 130 parts would be unreadable, undiffable and untestable, whereas constants can be asserted — that the runway part matches the registered dimensions, that the top face is exactly y = 0, that no marking is collidable or queryable. The grass stays with Rojo because a runtime-built field would leave Studio's Edit view with no ground at all.

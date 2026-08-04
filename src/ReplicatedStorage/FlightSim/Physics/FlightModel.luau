@@ -116,6 +116,23 @@ export type Kinematics = {
 	velocity: Vector3, -- centre of mass velocity, m/s, world
 	angularVelocity: Vector3, -- rad/s, world
 	altitude: number, -- m above sea level
+
+	--[[
+		The y of the ground directly beneath, or nil when there is none within
+		reach. Consumed only by ground effect.
+
+		It arrives HERE, in the kinematics, rather than being raycast inside
+		computeForces - and that placement is the whole point. computeForces is
+		pure: it reads nothing from the datamodel, which is what lets the test
+		suite assert on pitch stability, roll damping and weathervaning without
+		Roblox simulating anything. A raycast inside it would end that property
+		for one term. readKinematics is already the impure half, so the ray goes
+		there and the number travels in like every other measurement.
+
+		nil means "no ground found within a wingspan", which is a real answer and
+		not a missing one: with no ground below, there is no ground effect.
+	]]
+	groundY: number?,
 }
 
 local DEFAULT_CONTROLS: Controls = {
@@ -184,12 +201,40 @@ function FlightModel.new(model: Model, definition: any)
 
 	local mass = root.AssemblyMass
 
+	--[[
+		How far down readKinematics has to look for the ground.
+
+		Ground effect is identically 1 at and above one wingspan, so a ray longer
+		than the largest declared span could only find ground that cannot matter.
+		The 20% margin covers the aircraft being nose-high with a wing lower than
+		the centre of mass, which is exactly the attitude a flare is flown in.
+
+		Zero when no surface declares a span, and then no ray is cast at all -
+		an aircraft with no ground effect pays nothing for the feature.
+	]]
+	local groundProbeReach = 0
+	for _, entry in surfaces do
+		local span = entry.surface.groundEffectSpan
+		if span and span > groundProbeReach then
+			groundProbeReach = span
+		end
+	end
+	groundProbeReach *= 1.2
+
+	local probeParams = RaycastParams.new()
+	probeParams.FilterType = Enum.RaycastFilterType.Exclude
+	probeParams.FilterDescendantsInstances = { model }
+	probeParams.IgnoreWater = false
+
 	local state = {
 		model = model,
 		definition = definition,
 		root = root,
 		aeroForce = aeroForce,
 		aeroTorque = aeroTorque,
+
+		groundProbeReach = groundProbeReach,
+		groundProbeParams = probeParams,
 
 		-- Cached geometry (body frame, metres)
 		datumOffset = datumOffset,
@@ -349,13 +394,15 @@ function FlightModel.computeForces(
 			down from it and already accounts for bank, so the low wing in a turn
 			correctly sits closer to the ground than the high one.
 
-			GROUND IS ASSUMED AT y = 0, which is true of the Phase 1 baseplate and
-			will not be true of the Phase 3 world. When terrain arrives this needs
-			the ground height under the aircraft - one raycast per frame, shared
-			with GroundHandling, not one per surface. Until then a wrong assumption
-			here would only ever be visible within 10.5 m of the ground.
+			The ground's own height comes from the kinematics, measured by one
+			raycast in readKinematics. It used to be assumed to be y = 0, which
+			was true of the bare baseplate; with a real airport the runway is
+			crowned 5 cm above the grass, and beyond the field there is no ground
+			at all. nil therefore means no ground effect, which is correct rather
+			than defensive.
 		]]
-		local surfaceHeight = altitude + armWorld.Y
+		local groundY = kinematics.groundY
+		local surfaceHeight = if groundY then (altitude + armWorld.Y) - groundY else nil
 
 		local force, alpha, cl, cd, q = Aerodynamics.solveSurface(
 			surface,
@@ -533,17 +580,48 @@ end
 
 	This is one half of the stud/metre boundary; everything downstream of it is
 	pure SI. Exposed separately from step() because anything else that
-	contributes force - GroundHandling, and later damage or ground effect -
-	needs the same kinematics, and reading them twice per frame would be both
-	wasteful and a chance for the two readings to disagree.
+	contributes force - GroundHandling, and later damage - needs the same
+	kinematics, and reading them twice per frame would be both wasteful and a
+	chance for the two readings to disagree.
+
+	It is also the ONLY place in this module that touches the world, which is
+	what keeps computeForces pure and the whole aerodynamic model testable
+	without Roblox simulating anything. The ground probe below belongs here for
+	that reason and no other.
 ]]
 function FlightModel.readKinematics(state: any): Kinematics
 	local root = state.root
+	local com = root.AssemblyCenterOfMass
+
+	--[[
+		One ray per frame, straight down from the centre of mass, no longer than
+		ground effect can reach.
+
+		Deliberately NOT shared with GroundHandling's probes. Those are per
+		wheel and about the length of a tyre radius - they answer "is this wheel
+		touching?", which is a different question from "how far below is the
+		surface?" and cannot answer it, because they stop well short of the
+		distance ground effect still cares about.
+
+		nil when nothing is found, which happens legitimately: beyond the edge of
+		the field, and any time the aircraft is more than a wingspan up - which
+		is almost always, and is the case this early-out makes free.
+	]]
+	local groundY: number? = nil
+	if state.groundProbeReach > 0 then
+		local reach = Units.metersToStuds(state.groundProbeReach)
+		local hit = workspace:Raycast(com, Vector3.new(0, -reach, 0), state.groundProbeParams)
+		if hit then
+			groundY = Units.studsToMeters(hit.Position.Y)
+		end
+	end
+
 	return {
 		cframe = root.CFrame,
 		velocity = root.AssemblyLinearVelocity / Constants.STUDS_PER_METER,
 		angularVelocity = root.AssemblyAngularVelocity, -- rad/s: no length scale
-		altitude = Units.studsToMeters(root.AssemblyCenterOfMass.Y),
+		altitude = Units.studsToMeters(com.Y),
+		groundY = groundY,
 	}
 end
 
@@ -969,12 +1047,19 @@ function FlightModel.runTests(): (boolean, { any })
 		Flown slow and flapped, because induced drag is the term being changed and
 		it dominates exactly there.
 	]]
-	local function nearGroundKin(altitudeM: number): Kinematics
+	--[[
+		`groundY` is stated explicitly rather than left to default, and that is
+		now the honest way to write this: the ground is wherever the raycast in
+		readKinematics found it, and a synthetic kinematics table that omits it
+		is describing an aircraft with no ground beneath it at all.
+	]]
+	local function nearGroundKin(altitudeM: number, groundY: number?): Kinematics
 		return {
 			cframe = CFrame.Angles(math.rad(8), 0, 0),
 			velocity = Vector3.new(0, 0, -55 * KT),
 			angularVelocity = Vector3.zero,
 			altitude = altitudeM,
+			groundY = if groundY == nil then 0 else groundY,
 		}
 	end
 
@@ -1051,6 +1136,46 @@ function FlightModel.runTests(): (boolean, { any })
 		"No ground effect at altitude, to the last bit",
 		math.abs(cdHigh - cdMid) < 1e-12,
 		string.format("CD identical at 30 m and 400 m (%.8f)", cdMid)
+	)
+
+	--[[
+		THE check that the airport made necessary.
+
+		Ground effect must follow the GROUND, not the altimeter. An aeroplane
+		1.2 m over a surface raised to y = 20 is in exactly as much ground effect
+		as one 1.2 m over a surface at y = 0 - the altimeter reads 21.2 in one
+		case and 1.2 in the other, and it is the difference that matters. Before
+		the raycast this module assumed the ground was at y = 0, and this is the
+		assertion that assumption would have failed.
+	]]
+	local function coefficientsAt(altitudeM: number, groundY: number?): number
+		FlightModel.computeForces(state, {
+			cframe = CFrame.Angles(math.rad(8), 0, 0),
+			velocity = Vector3.new(0, 0, -55 * KT),
+			angularVelocity = Vector3.zero,
+			altitude = altitudeM,
+			groundY = groundY,
+		}, dt, landingControls, nil)
+		return state.telemetry.surfaces[wingIndex].cd
+	end
+
+	local cdOverRaisedGround = coefficientsAt(21.2, 20)
+	record(
+		"Ground effect follows the ground, not the altimeter",
+		math.abs(cdOverRaisedGround - cdFlare) < 1e-12,
+		string.format("CD %.6f at 1.2 m over y=20 vs %.6f at 1.2 m over y=0", cdOverRaisedGround, cdFlare)
+	)
+
+	--[[
+		And no ground at all is a real answer, not a missing one. Off the edge of
+		the field the raycast finds nothing; the wing must then behave exactly as
+		it does at altitude rather than falling back to a y = 0 that is not there.
+	]]
+	local cdNoGround = coefficientsAt(1.2, nil)
+	record(
+		"No ground beneath means no ground effect",
+		math.abs(cdNoGround - cdAloft) < 1e-12,
+		string.format("CD %.6f with groundY nil, against %.6f at 30 m", cdNoGround, cdAloft)
 	)
 
 	-- 12. Wind -------------------------------------------------------------

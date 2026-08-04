@@ -6,13 +6,17 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 331 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 340 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
 **Every Phase 1 system is now built.** The debug HUD (§6i) was the last one. The camera (§6h) landed first, out of order, because flying the gate through Roblox's default character camera would have been miserable.
 
-➡️ **The only thing left in Phase 1 is the flight gate itself** — taxi, take off, coordinated turn, deliberate stall, recover, land. **The pilot flies it and signs off.** Nothing further in Phase 2 should start until that happens.
+➡️ **NEXT TASK: fly the Phase 1 flight gate.** Taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. **This one is the pilot's, not the assistant's.** Nothing further in Phase 2 starts until it is signed off. Everything needed to fly it now exists: an aeroplane that taxis and flies, three camera views, and live numbers on screen.
 
-**The HUD earned its keep on its first flight**, which is the entire argument for building it: it showed `RPM -0` on a parked aeroplane, which turned out to be a real (if small) bug in `Engine` — windmilling rpm was not clamped at zero. Fixed, with a regression test. See §6i.
+**What landed this session**
+- `CameraController` (§6h) — cockpit / chase / free on V, world-locked while C is held.
+- `DebugHud` (§6i) — raw numbers, 30 Hz with per-frame peak capture.
+- The seated pilot is now **invisible** as well as massless and non-collidable (§6e).
+- Two real bugs found by the new tools, not by reasoning: windmilling **RPM read negative** when parked, and restoring pilot transparency **clobbered the HumanoidRootPart**. Both fixed with regression tests. See §7.
 
 **The mouse is now PTFS-style**: free cursor, position = deflection, inverted. See §6g — including the GUI-inset trap, which would otherwise have baked in a permanent nose-up bias.
 
@@ -94,7 +98,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (331 checks total)
+### Verified green (340 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -106,7 +110,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `FlightModel` | `Physics/FlightModel.luau` | 34/34 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 67/67 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 13/13 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 22/22 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 22/22 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
@@ -311,6 +315,16 @@ Boarding a server-spawned aircraft threw it across the apron. The number to watc
 
 Server-side `Massless` is set on seated characters too, so the server and the client agree the aircraft weighs 1,111 kg rather than 1,122 kg.
 
+### The seated pilot is also invisible (2026-08-04)
+`FlightController.setCharacterNeutralised()` now hides the body as well as making it massless and non-collidable. The cockpit camera sits at the pilot's eye, inside a 5.7 m avatar folded into a 1.5 m cabin, so without this the view is filled with the inside of the pilot's own head — the same problem as the solid cabin shell, and the same fix.
+
+Three things it has to get right, each of which was a bug before it was a comment:
+- **Decals need their own pass.** A Decal is a *child* of a part, not a property, so `Transparency = 1` on the head does not hide the face. Miss it and the face floats with no head behind it.
+- **Original transparency is recorded, not assumed to be zero** — the `HumanoidRootPart` ships at 1 and must go back to 1.
+- **Restore only what was hidden.** See §7; defaulting to 0 was a live bug.
+
+It is a **local** change: client property writes do not replicate, so other players still see a pilot sitting in the aeroplane. Only the person flying it stops seeing their own body.
+
 ### Things this service decides, open to review
 - **Warn-only limit checks.** `Constants.LIMITS` are generous (400 m/s, 20 km), so anything tripping them in Phase 1 is far more likely to be our own physics bug than a cheating client, and deleting the pilot's aircraft mid-test destroys the evidence. `ENFORCE_LIMITS = false` flips it.
 - **Spawn slots** alternate ±18 m about the apron and are reclaimed on despawn. Occupancy is checked against the *world*, not just our bookkeeping — see §7 for the Studio-specific reason that matters.
@@ -465,6 +479,8 @@ It displayed `RPM -0` on a stationary aeroplane. Not a formatting artefact: `Eng
 - **A `runTests()` that errors mid-suite leaks its rig into the workspace**, and in Studio that debris survives into the next Play session — where a leftover aircraft looks exactly like a double-spawn bug. It cost real time to diagnose once. `FlightController.runTests` now wraps its body in a `pcall` and destroys the rig either way; **`AircraftBuilder`, `FlightModel` and `GroundHandling` still destroy on the last line and have the same flaw.** If a Play session shows more aircraft than expected, clean `workspace` in *Edit* first.
 - **Altitude hold disconnects on stick MOVEMENT, not absolute deflection.** In Direct mouse mode the stick holds wherever it was put, so testing absolute deflection meant a pilot flying with real pitch input would press R and have it engage and disconnect on the same frame — a dead key with no feedback. The reference position is captured at engagement.
 - **Cross-product order for the lateral axis.** `rollDir:Cross(groundNormal)` points to the aircraft's right; `groundNormal:Cross(rollDir)` points left. Getting it backwards inverts nose-wheel steering and the reported skid direction *without* breaking lateral grip, because grip is sign-symmetric — so the tests that would catch it are the steering ones, not the friction ones. This was caught on the first `GroundHandling` run.
+- **A "restore" that defaults to a hardcoded value will clobber something.** Pilot invisibility recorded each part's transparency on the way in, then restored, with a fallback of 0 when nothing was recorded — and the fallback fired, because the restore path runs BEFORE the hide path ever does: `adopt()` calls `onOccupantChanged()` the moment an aircraft is assigned, long before anyone sits. That set the `HumanoidRootPart` — which ships at 1 and is meant to stay hidden — to fully opaque. **Restore only what you actually changed; touch nothing else.** The unit test missed it entirely because a synthetic fixture never reproduces the real call ordering. The live check did.
+- **Windmilling RPM read NEGATIVE on a parked aircraft.** `Engine.update` used `math.min(airspeedMs * 12, ...)` for a dead engine, and `airspeedMs` is the *forward* component, which drifts slightly negative when stationary — so the tachometer ran backwards. Now clamped at zero. Found by the debug HUD showing `RPM -0` on its first flight, which is precisely what that HUD is for.
 - **The client bootstrap only scans `Controllers/`.** A module anywhere else — `Controls/`, `UI/Instruments/` — is never started by `CONTROLLER_ORDER`, whatever it is called, and fails **silently**. Give it a thin owner in `Controllers/` instead (see §6i).
 - **`string.format("%.0f", x)` rounds halves to EVEN**, so `1204.5` prints as `1204`, not `1205`. A test fixture sitting on an exact `.5` boundary is testing the C library's rounding mode, not your code. Cost one wrong assertion.
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.

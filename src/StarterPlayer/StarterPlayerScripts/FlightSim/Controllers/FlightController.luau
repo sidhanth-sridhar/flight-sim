@@ -222,20 +222,84 @@ end
 
 	Making the parts massless and non-collidable fixes both exactly: the
 	assembly keeps the mass and balance the physics was built around, and the
-	pilot stops fighting the aeroplane. They are invisible from the cockpit
-	view anyway, which is where Phase 2 puts the camera.
+	pilot stops fighting the aeroplane.
+
+	AND INVISIBLE, which is the third thing.
+
+	The cockpit camera sits at the pilot's eye, inside a 5.7 m body folded into
+	a 1.5 m cabin - so without this the view is filled with the inside of the
+	pilot's own head. Hiding the body is the same class of fix as hiding the
+	cabin shell in CameraController: the aeroplane is solid boxes and so is the
+	avatar.
+
+	ORIGINAL TRANSPARENCY IS RECORDED, NOT ASSUMED TO BE ZERO. Restoring
+	everything to 0 would make the HumanoidRootPart visible - it ships at
+	Transparency = 1 and is meant to stay that way - leaving a large block
+	stuck through the middle of the character when they climb out. So each
+	value is captured on the way in and put back exactly.
+
+	DECALS NEED THEIR OWN PASS. A Decal is a child of a part, not a property of
+	it, and setting a part to Transparency = 1 does NOT hide the decals on it.
+	Miss this and the pilot's face floats in the cockpit with no head behind it.
+
+	This is a LOCAL change and deliberately so: property writes from the client
+	do not replicate, so other players still see a pilot sitting in the
+	aeroplane. Only the person flying it stops seeing their own body.
 ]]
-local function setCharacterNeutralised(character: Model?, neutralised: boolean)
+local originalTransparency: { [Instance]: number } = {}
+
+local function applyTransparency(item: Instance, neutralised: boolean)
+	if neutralised then
+		if originalTransparency[item] == nil then
+			originalTransparency[item] = (item :: any).Transparency
+		end
+		(item :: any).Transparency = 1
+		return
+	end
+
+	--[[
+		Restore ONLY what we hid. Nothing recorded means we never touched this
+		part, and writing a default over it would be inventing a value.
+
+		This is not hypothetical caution - it was a live bug. The restore path
+		runs before the hide path ever does: adopt() calls onOccupantChanged()
+		the moment an aircraft is assigned, long before anyone sits down, and
+		that takes the "not seated" branch. With a fallback of 0 it set the
+		HumanoidRootPart - which ships at Transparency = 1 and is meant to stay
+		there - to fully opaque, leaving a large block through the middle of the
+		character. The unit test missed it because a synthetic fixture never
+		reproduces that ordering; a real boarding does.
+	]]
+	local original = originalTransparency[item]
+	if original ~= nil then
+		(item :: any).Transparency = original
+	end
+end
+
+function FlightController.setCharacterNeutralised(character: Model?, neutralised: boolean)
 	if not character then
 		return
 	end
-	for _, part in character:GetDescendants() do
-		if part:IsA("BasePart") then
-			part.Massless = neutralised
-			part.CanCollide = not neutralised
+
+	for _, item in character:GetDescendants() do
+		if item:IsA("BasePart") then
+			-- Unchanged from before invisibility was added; the mass and
+			-- collision behaviour in the notes above depends on exactly this.
+			item.Massless = neutralised
+			item.CanCollide = not neutralised
+			applyTransparency(item, neutralised)
+		elseif item:IsA("Decal") then
+			-- Covers Texture too, which inherits from Decal.
+			applyTransparency(item, neutralised)
 		end
 	end
+
+	if not neutralised then
+		table.clear(originalTransparency)
+	end
 end
+
+local setCharacterNeutralised = FlightController.setCharacterNeutralised
 
 --[[
 	Where the yoke is, in screen pixels, and the screen it is measured against.
@@ -746,6 +810,125 @@ function FlightController.runTests(): (boolean, { any })
 		select(1, FlightController.stepFrame(testRig, 0, snap())) == Vector3.zero,
 		"returned zero"
 	)
+
+	--[[
+		4b. Neutralising the pilot.
+
+		Driven against a synthetic character rather than a real one, because a
+		real character needs a player and this is the only seam worth testing:
+		the rest is Roblox event plumbing. The fixture deliberately includes the
+		two things that break a naive implementation - a part that is ALREADY
+		transparent, like the HumanoidRootPart, and a Decal, which is a child of
+		a part rather than a property of it.
+	]]
+	local fakeCharacter = Instance.new("Model")
+	fakeCharacter.Name = "__TestCharacter"
+
+	local torso = Instance.new("Part")
+	torso.Name = "Torso"
+	torso.Transparency = 0
+	torso.Parent = fakeCharacter
+
+	local head = Instance.new("Part")
+	head.Name = "Head"
+	head.Transparency = 0
+	head.Parent = fakeCharacter
+
+	-- Ships at Transparency = 1 and must go back to 1, not to 0.
+	local hrp = Instance.new("Part")
+	hrp.Name = "HumanoidRootPart"
+	hrp.Transparency = 1
+	hrp.Parent = fakeCharacter
+
+	-- An accessory's Handle is a BasePart descendant, so it is covered too.
+	local accessory = Instance.new("Accessory")
+	accessory.Parent = fakeCharacter
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Transparency = 0
+	handle.Parent = accessory
+
+	local face = Instance.new("Decal")
+	face.Name = "face"
+	face.Transparency = 0
+	face.Parent = head
+
+	fakeCharacter.Parent = workspace
+
+	--[[
+		THE ordering test, and the one that caught a live bug.
+
+		The restore path runs BEFORE the hide path ever does - adopt() calls
+		onOccupantChanged() as soon as an aircraft is assigned, long before
+		anyone sits in it. A restore that defaults to 0 therefore clobbers any
+		part that ships transparent, and the HumanoidRootPart is exactly that.
+		Verified on a real avatar: it came back opaque.
+	]]
+	FlightController.setCharacterNeutralised(fakeCharacter, false)
+	record(
+		"Restoring before ever hiding leaves parts untouched",
+		hrp.Transparency == 1 and torso.Transparency == 0,
+		string.format("HRP still %.0f, torso still %.0f", hrp.Transparency, torso.Transparency)
+	)
+
+	FlightController.setCharacterNeutralised(fakeCharacter, true)
+	record(
+		"Seated pilot goes invisible",
+		torso.Transparency == 1 and head.Transparency == 1 and handle.Transparency == 1,
+		string.format("torso %.0f, head %.0f, accessory %.0f", torso.Transparency, head.Transparency, handle.Transparency)
+	)
+	record(
+		"The face decal is hidden too, not left floating",
+		face.Transparency == 1,
+		string.format("decal transparency %.0f", face.Transparency)
+	)
+	record(
+		"Massless and non-collidable still applied",
+		torso.Massless and not torso.CanCollide and head.Massless,
+		"mass and collision behaviour unchanged"
+	)
+
+	FlightController.setCharacterNeutralised(fakeCharacter, false)
+	record(
+		"Standing up makes the pilot visible again",
+		torso.Transparency == 0 and head.Transparency == 0 and handle.Transparency == 0 and face.Transparency == 0,
+		string.format("torso %.0f, head %.0f, accessory %.0f, decal %.0f",
+			torso.Transparency, head.Transparency, handle.Transparency, face.Transparency)
+	)
+	--[[
+		THE check that stops a visible bug: restoring blindly to 0 would leave
+		a large opaque block stuck through the character, because the
+		HumanoidRootPart is meant to stay invisible.
+	]]
+	record(
+		"An already-invisible part is restored to invisible, not to 0",
+		hrp.Transparency == 1,
+		string.format("HumanoidRootPart back to %.0f (must be 1)", hrp.Transparency)
+	)
+	record(
+		"Mass and collision restored on exit",
+		not torso.Massless and torso.CanCollide,
+		"massless = false, collidable = true"
+	)
+
+	-- Toggling repeatedly must not drift the stored originals.
+	for _ = 1, 5 do
+		FlightController.setCharacterNeutralised(fakeCharacter, true)
+		FlightController.setCharacterNeutralised(fakeCharacter, false)
+	end
+	record(
+		"Repeated boarding does not drift the restored values",
+		torso.Transparency == 0 and hrp.Transparency == 1,
+		string.format("after 5 cycles: torso %.0f, HRP %.0f", torso.Transparency, hrp.Transparency)
+	)
+
+	record(
+		"A nil character is a no-op, not an error",
+		pcall(FlightController.setCharacterNeutralised, nil, true),
+		"returned without erroring"
+	)
+
+	fakeCharacter:Destroy()
 
 	-- 5. Engine command wiring.
 	record("Engine starts stopped", not testRig.flightModel.engine.running, "running = false")

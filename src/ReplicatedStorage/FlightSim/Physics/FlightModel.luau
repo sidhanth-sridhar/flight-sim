@@ -342,13 +342,29 @@ function FlightModel.computeForces(
 		]]
 		local pointVelocity = Aerodynamics.getPointVelocity(vAir, omega, armWorld)
 
+		--[[
+			This surface's own height above the ground, for ground effect.
+
+			`altitude` is the centre of mass; armWorld.Y carries the surface up or
+			down from it and already accounts for bank, so the low wing in a turn
+			correctly sits closer to the ground than the high one.
+
+			GROUND IS ASSUMED AT y = 0, which is true of the Phase 1 baseplate and
+			will not be true of the Phase 3 world. When terrain arrives this needs
+			the ground height under the aircraft - one raycast per frame, shared
+			with GroundHandling, not one per surface. Until then a wrong assumption
+			here would only ever be visible within 10.5 m of the ground.
+		]]
+		local surfaceHeight = altitude + armWorld.Y
+
 		local force, alpha, cl, cd, q = Aerodynamics.solveSurface(
 			surface,
 			cf,
 			pointVelocity,
 			density,
 			controlFor(surface, c),
-			flaps
+			flaps,
+			surfaceHeight
 		)
 
 		totalForce += force
@@ -940,6 +956,101 @@ function FlightModel.runTests(): (boolean, { any })
 			state.telemetry.airspeedIndicated / KT,
 			state.telemetry.airspeedTrue / KT
 		)
+	)
+
+	-- 11b. Ground effect ----------------------------------------------------
+	--[[
+		Two heights, SAME speed and SAME attitude, 1.2 m and 30 m.
+
+		The pair is chosen so density cannot explain the difference: 30 m of
+		altitude changes air density by about 0.3%, while 30 m is comfortably more
+		than the 11 m span at which ground effect is defined to vanish. So
+		whatever separates these two numbers is ground effect and nothing else.
+		Flown slow and flapped, because induced drag is the term being changed and
+		it dominates exactly there.
+	]]
+	local function nearGroundKin(altitudeM: number): Kinematics
+		return {
+			cframe = CFrame.Angles(math.rad(8), 0, 0),
+			velocity = Vector3.new(0, 0, -55 * KT),
+			angularVelocity = Vector3.zero,
+			altitude = altitudeM,
+		}
+	end
+
+	--[[
+		Asserted on the WING'S OWN COEFFICIENTS, not on the force vector, and the
+		first version of this test got that wrong twice in a way worth recording.
+
+		`force.Y` is not lift. Lift and drag are resolved about the relative wind,
+		so at 8 degrees of alpha the drag vector has a real Y component - reducing
+		drag moved force.Y by 38 N and an "in ground effect lift is unchanged"
+		assertion failed against correct code. Likewise force.Z at two altitudes
+		is not a clean comparison, because DENSITY changes with altitude and
+		swamps the thing being measured.
+
+		CL and CD are dimensionless and density-free, so they isolate exactly what
+		this term does and nothing else.
+	]]
+	local landingControls = controlsWith({ flaps = 1 })
+	local wingIndex = 1 -- WingLeft
+
+	local function wingCoefficients(altitudeM: number): (number, number)
+		FlightModel.computeForces(state, nearGroundKin(altitudeM), dt, landingControls, nil)
+		local w = state.telemetry.surfaces[wingIndex]
+		return w.cl, w.cd
+	end
+
+	local clAloft, cdAloft = wingCoefficients(30)
+	local clFlare, cdFlare = wingCoefficients(1.2)
+
+	record(
+		"Ground effect reduces the wing's drag coefficient in the flare",
+		cdFlare < cdAloft,
+		string.format("CD %.5f at 30 m -> %.5f at 1.2 m", cdAloft, cdFlare)
+	)
+
+	--[[
+		DRAG ONLY. This model does not touch the lift curve, so any change here
+		would mean the induced term had leaked into CL - which would move the
+		stall speed near the ground and quietly invalidate the figures in §4.
+	]]
+	record(
+		"Ground effect does not change the lift coefficient",
+		math.abs(clFlare - clAloft) < 1e-12,
+		string.format("CL %.6f vs %.6f", clAloft, clFlare)
+	)
+
+	--[[
+		And it must be SMALL - the assertion most likely to catch a later
+		"improvement".
+
+		The 172's wing sits 2.1 m up on an 11 m span. A high wing gets little
+		ground effect; that is a real property of the aeroplane and the reason it
+		does not float like a low-wing trainer. A version of this producing a
+		dramatic cushion would be wrong, so the upper bound is asserted as firmly
+		as the lower one.
+
+		THE CEILING IS NOT A GUESS, and the first attempt at it was - 8% picked by
+		eye, which failed at a perfectly correct 8.97%. The reduction in CD can
+		never exceed the reduction in the INDUCED term alone, because parasitic
+		drag is untouched; at h/b = 0.19 the Wieselsberger factor is ~0.90, so
+		~10% is the hard physical ceiling and anything at or under it is
+		consistent. 12% leaves room for the test condition moving without letting
+		a genuinely dramatic version (30%+) through.
+	]]
+	local reduction = (cdAloft - cdFlare) / cdAloft
+	checkRange("Ground effect is a few percent, not a cushion", reduction * 100, 3.0, 12.0, "%")
+
+	-- Clear of the ground it must cost exactly nothing, or every figure measured
+	-- in cruise would have quietly moved. Coefficients again, so that the density
+	-- difference between the two heights cannot be mistaken for the term.
+	local _, cdHigh = wingCoefficients(400)
+	local _, cdMid = wingCoefficients(30)
+	record(
+		"No ground effect at altitude, to the last bit",
+		math.abs(cdHigh - cdMid) < 1e-12,
+		string.format("CD identical at 30 m and 400 m (%.8f)", cdMid)
 	)
 
 	-- 12. Wind -------------------------------------------------------------

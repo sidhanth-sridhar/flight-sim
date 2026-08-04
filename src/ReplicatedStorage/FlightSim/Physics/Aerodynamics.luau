@@ -49,6 +49,8 @@ local exp = math.exp
 local atan2 = math.atan2
 local sqrt = math.sqrt
 local pi = math.pi
+local max = math.max
+local clamp = math.clamp
 
 -- =========================================================================
 -- TUNING CONSTANTS
@@ -113,6 +115,22 @@ export type Surface = {
 	controlEffect: number, -- change in CL per unit control deflection (-1..1)
 	flapEffect: number, -- change in CL per unit flap extension (0..1)
 	flapDragEffect: number, -- change in CD0 at full flap
+
+	--[[
+		Full span for ground effect, m. nil means this surface has none.
+
+		It cannot be derived from aspectRatio and area here, and that is exactly
+		why it is stated. A wing split into panels keeps the FULL wing's aspect
+		ratio but half its area (see the handoff), so sqrt(AR * area) on a panel
+		returns 7.78 m for an 11 m wing - a 30% error, straight into a term that
+		goes as the square of it.
+
+		Left nil on the tail and fin deliberately. Both are small, both sit
+		higher than the wing, and a horizontal stabiliser's own vortex system
+		contributes little of the aircraft's induced drag; modelling it would add
+		a term nobody could measure in flight.
+	]]
+	groundEffectSpan: number?,
 
 	-- Integration metadata ------------------------------------------------
 	-- Ignored by the solver; read by FlightModel to decide which control axis
@@ -267,6 +285,10 @@ function Aerodynamics.newSurface(props: { [string]: any }): Surface
 		flapEffect = props.flapEffect or 0,
 		flapDragEffect = props.flapDragEffect or 0,
 
+		-- nil, not 0: zero would be a span, and a zero span is a divide waiting
+		-- to happen. nil means "this surface has no ground effect".
+		groundEffectSpan = props.groundEffectSpan,
+
 		controlAxis = props.controlAxis,
 		controlSign = props.controlSign or 1,
 	}
@@ -392,11 +414,61 @@ end
 	reachable in a tailslide or a fully developed spin, and "rare" is not the
 	same as "never" once players start experimenting.
 ]]
-function Aerodynamics.dragCoefficient(alpha: number, cl: number, surface: Surface, flapDeflection: number?): number
+--[[
+	Ground effect, as a multiplier on INDUCED drag only.
+
+	Near the ground the wing's trailing vortices cannot fully develop, the
+	downwash behind the wing is reduced, and the induced drag falls with it.
+	This is what gives a light aircraft its cushion in the flare - the aeroplane
+	stops decelerating as briskly and settles rather than arriving.
+
+	The standard Wieselsberger relation, in the form McCormick gives it:
+
+		phi = (16h/b)^2 / (1 + (16h/b)^2)
+
+	h is the height of the WING above the ground and b is the full span. Note
+	that it is the ratio that matters, which is why this is largely a low-wing
+	aeroplane's phenomenon: the Cessna's wing sits 2.10 m up on a 10.5 m span,
+	h/b = 0.20, and phi is 0.91 - a 9% reduction. A low-wing trainer at h/b =
+	0.08 gets phi = 0.62. The 172 not floating much is a real property of the
+	aircraft, not a shortcoming of this function.
+
+	Returns exactly 1 at and above one full span, so the term costs nothing and
+	changes nothing for the whole of normal flight - every figure validated in
+	the handoff is measured far above this.
+
+	MIN_GROUND_EFFECT floors it. The formula tends to zero as h does, which
+	would leave a wing resting ON the ground with no induced drag at all; that
+	is outside what the relation describes rather than a real prediction, and
+	an aeroplane sliding on its belly should not coast further for it.
+]]
+local MIN_GROUND_EFFECT = 0.25
+
+function Aerodynamics.groundEffectFactor(heightM: number, span: number): number
+	-- NaN-safe: an unknown height must not silently become a huge drag change.
+	if span <= 0 or heightM ~= heightM or span ~= span then
+		return 1
+	end
+	if heightM >= span then
+		return 1
+	end
+
+	local ratio = 16 * max(heightM, 0) / span
+	local rsq = ratio * ratio
+	return clamp(rsq / (1 + rsq), MIN_GROUND_EFFECT, 1)
+end
+
+--[[
+	`groundEffect` multiplies the induced term only, and defaults to 1.
+
+	Parasitic drag is deliberately untouched: skin friction and form drag do not
+	care how high the wing is. Only the vortex system does.
+]]
+function Aerodynamics.dragCoefficient(alpha: number, cl: number, surface: Surface, flapDeflection: number?, groundEffect: number?): number
 	local flap = flapDeflection or 0
 
 	local parasitic = surface.cd0 + surface.flapDragEffect * flap
-	local induced = (cl * cl) / (pi * surface.oswald * surface.aspectRatio)
+	local induced = (cl * cl) / (pi * surface.oswald * surface.aspectRatio) * (groundEffect or 1)
 
 	local s = sin(alpha)
 	local separated = 2 * s * s
@@ -465,7 +537,18 @@ function Aerodynamics.solveSurface(
 	pointVelocity: Vector3,
 	density: number,
 	control: number?,
-	flap: number?
+	flap: number?,
+	--[[
+		This surface's own height above the ground, m. nil disables ground
+		effect for the call.
+
+		PER SURFACE, not per aircraft, and that is worth the extra argument: in a
+		bank the low wing is closer to the ground than the high one and gets more
+		of the effect, which is a real force asymmetry that helps pick a dropped
+		wing up in the flare. The caller already has each surface's world-space
+		moment arm, so this costs it one addition.
+	]]
+	heightAboveGround: number?
 ): (Vector3, number, number, number, number)
 	-- Airflow expressed in the aircraft's own axes.
 	local vLocal = bodyCFrame:VectorToObjectSpace(pointVelocity)
@@ -511,8 +594,13 @@ function Aerodynamics.solveSurface(
 
 	local camberShift = surface.controlEffect * (control or 0) + surface.flapEffect * (flap or 0)
 
+	local groundEffect = 1
+	if surface.groundEffectSpan and heightAboveGround then
+		groundEffect = Aerodynamics.groundEffectFactor(heightAboveGround, surface.groundEffectSpan)
+	end
+
 	local cl = Aerodynamics.liftCoefficient(alpha, surface, camberShift)
-	local cd = Aerodynamics.dragCoefficient(alpha, cl, surface, flap)
+	local cd = Aerodynamics.dragCoefficient(alpha, cl, surface, flap, groundEffect)
 
 	local lift = q * surface.area * cl
 	local drag = q * surface.area * cd
@@ -684,6 +772,87 @@ function Aerodynamics.runTests(): (boolean, { any })
 		"Symmetric aerofoil is antisymmetric",
 		math.abs(clPos + clNeg) < 1e-6,
 		string.format("+5deg=%.5f, -5deg=%.5f", clPos, clNeg)
+	)
+
+	-- 3b. GROUND EFFECT ---------------------------------------------------
+	--[[
+		The property that matters most is that it is INERT in normal flight.
+		Every performance figure in the handoff - max speed, climb, glide, both
+		stall speeds - is measured well clear of the ground, and this term must
+		not move any of them by so much as a rounding error.
+	]]
+	local SPAN = 11.0
+	record(
+		"No ground effect at one span or above",
+		Aerodynamics.groundEffectFactor(SPAN, SPAN) == 1
+			and Aerodynamics.groundEffectFactor(SPAN * 3, SPAN) == 1
+			and Aerodynamics.groundEffectFactor(1000, SPAN) == 1,
+		"factor is exactly 1 at 11 m, 33 m and 1000 m"
+	)
+
+	-- Monotonic: closer to the ground is always less induced drag, never more.
+	local monotonic = true
+	local previous = 0
+	for h = 0, 12, 0.25 do
+		local f = Aerodynamics.groundEffectFactor(h, SPAN)
+		if f < previous - 1e-9 then
+			monotonic = false
+		end
+		previous = f
+	end
+	record("Ground effect strengthens monotonically toward the ground", monotonic, "no reversals over 0..12 m")
+
+	--[[
+		The real aeroplane, at the height it actually lands at.
+
+		The Cessna's wing sits 2.10 m up on an 11 m span. That is h/b = 0.19,
+		which the Wieselsberger relation puts at about 0.90 - a ~10% cut in
+		induced drag. Asserted as a RANGE around the published relation rather
+		than against whatever the code produces, and deliberately asserted as
+		SMALL: a high wing gets little ground effect, and a version of this that
+		produced a dramatic cushion would be wrong.
+	]]
+	checkRange("Ground effect at the 172's touchdown height", Aerodynamics.groundEffectFactor(2.10, SPAN), 0.87, 0.93, "")
+	checkRange("A low-wing at h/b = 0.08 gets far more", Aerodynamics.groundEffectFactor(0.88, SPAN), 0.55, 0.68, "")
+
+	record(
+		"The floor stops a grounded wing having zero induced drag",
+		Aerodynamics.groundEffectFactor(0, SPAN) >= MIN_GROUND_EFFECT,
+		string.format("%.3f at h = 0", Aerodynamics.groundEffectFactor(0, SPAN))
+	)
+
+	-- Bad inputs must be inert rather than catastrophic: a NaN height silently
+	-- multiplying induced drag by NaN would take the whole force vector with it.
+	record(
+		"A NaN or zero-span input is inert, not destructive",
+		Aerodynamics.groundEffectFactor(0 / 0, SPAN) == 1 and Aerodynamics.groundEffectFactor(1, 0) == 1,
+		"factor 1 for NaN height and for zero span"
+	)
+
+	-- And it must actually reach the drag coefficient, induced term only.
+	local geWing = Aerodynamics.newSurface({
+		name = "GEWing",
+		area = WING_AREA,
+		aspectRatio = WING_AR,
+		offset = Vector3.new(0, 0, 0),
+		airfoil = Aerodynamics.Airfoils.CAMBERED,
+		groundEffectSpan = SPAN,
+	})
+	local clHigh = Aerodynamics.liftCoefficient(math.rad(8), geWing)
+	local cdFree = Aerodynamics.dragCoefficient(math.rad(8), clHigh, geWing, 0, 1)
+	local cdGround = Aerodynamics.dragCoefficient(math.rad(8), clHigh, geWing, 0, Aerodynamics.groundEffectFactor(2.10, SPAN))
+	record(
+		"Ground effect lowers CD, and only through the induced term",
+		cdGround < cdFree and cdGround > geWing.cd0,
+		string.format("CD %.5f -> %.5f (parasitic floor %.4f)", cdFree, cdGround, geWing.cd0)
+	)
+
+	-- A surface that declares no span is untouched however low it flies.
+	local noGE = Aerodynamics.newSurface({ name = "NoGE", area = 2, aspectRatio = 4, offset = Vector3.new(0, 0, -4) })
+	record(
+		"A surface without a declared span gets no ground effect",
+		noGE.groundEffectSpan == nil,
+		"groundEffectSpan is nil, so solveSurface skips it"
 	)
 
 	-- 4. THE STALL -------------------------------------------------------

@@ -6,19 +6,20 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 366 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 378 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
 # ✅ **PHASE 1 IS SIGNED OFF.** The flight gate was flown and passed on 2026-08-04 — see §9 for the pilot's report and what it found.
 
 Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and recovery, and landing were all flown. **The behaviour in the air was reported as right**: rotation at the expected speed, Vy pitch holding, clean turns, a predictable stall near the expected AoA with no deep-stall tendency, correct left-turning tendency answered by right rudder, and rudder authority that fades with airspeed as it should.
 
-➡️ **NEXT TASK: not yet chosen — ask the pilot.** The roadmap's natural next item is Phase 2 cockpit instruments replacing the debug HUD, but §9 turned up one open question (ground effect) that is Phase 1 physics rather than Phase 2 UI. The gate report is what decides the order, so do not assume.
+➡️ **NEXT TASK: fly a few landings and judge the flare (§10), then Phase 2 cockpit instruments.** Ground effect is now modelled — but it is worth **only ~45 fpm of cushion out of ~900**, because a high wing gets little of it. That is the physically correct answer rather than a disappointing one, and it means **it will not by itself make landings easy**. If the flare still feels wrong after flying it, the cause is elsewhere and §10 lists where to look next.
 
 **What landed this session**
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
 - **`ViewToggle` on T** (§6k) — first person ↔ third person in one press, asked for as a "button". It is a **key** rather than an on-screen button, and §6k records why: the cursor is the yoke, so a button in a screen corner can only be clicked by dragging the controls to near-full deflection on the way to it.
 - **The board prompt now hides while somebody is aboard** (§9) — a gate finding, fixed.
-- **The landing model was reviewed against published figures and left alone** (§9). All three suspects the pilot named measured correct. The one real gap found is that **ground effect is not modelled**, which is also the only thing on the list that exists solely near the ground.
+- **The landing model was reviewed against published figures and left alone** (§9). All three suspects the pilot named measured correct.
+- **Ground effect is now modelled** (§10) — the one real gap §9 found. Induced drag only, standard Wieselsberger, inert above one wingspan. Measured cushion: **45–48 fpm, 5–7%**.
 
 **Landed the session before**
 - `CameraController` (§6h) — cockpit / chase / free on V, world-locked while C is held.
@@ -110,11 +111,11 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
 | `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 | Client |
-| `Aerodynamics` | `Physics/Aerodynamics.luau` | 29/29 | Client |
+| `Aerodynamics` | `Physics/Aerodynamics.luau` | 37/37 | Client |
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 26/26 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
-| `FlightModel` | `Physics/FlightModel.luau` | 34/34 | Client |
+| `FlightModel` | `Physics/FlightModel.luau` | 38/38 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 80/80 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
@@ -556,6 +557,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **`force.Y` is not lift, and `force.Z` is not drag.** Lift and drag are resolved about the *relative wind*, not the world axes, so at any real angle of attack the drag vector has a Y component and the lift vector a Z one. An assertion of the form "this change must not affect lift" written against `force.Y` will fail on correct code. Assert on the surface telemetry's **CL and CD** instead — they are dimensionless and isolate the term being changed. See §10.
+- **Comparing a force at two altitudes confounds DENSITY with whatever you meant to measure.** Air is thinner at 400 m than at 30 m, so the drag differs for reasons unrelated to your term. Compare coefficients, or hold altitude fixed and vary the one thing under test. Also §10.
 - **A "best glide L/D" is not an approach sink rate, and confusing them nearly caused a wrong tuning fix.** The full-flap best-L/D point sits at a speed nobody approaches at, so comparing it against a remembered glide-ratio figure says nothing about how the aeroplane actually lands. Measure the operational condition — trimmed for L = W at the speed actually flown — before touching a coefficient. See §9.
 - **An on-screen button cannot be a flight control in this game.** The cursor is the yoke, so moving it to a corner to click something commands near-full deflection on both axes on the way there — a top-right button is full nose-down and full right roll. Anything the pilot needs *in flight* has to be a key. This is the same constraint §6i states as "nothing in the HUD may be `Active` or a `GuiButton`", arrived at from the other direction. Non-interactive `TextLabel`s are fine and absorb nothing.
 - **`table.clone` is shallow, and `InputController.DEFAULTS` has nested tables.** `altHold` and `toggleViews` must each be cloned in `new()` or every `InputController` in the game shares one, and a per-player rebind silently rebinds everybody's. It cost nothing this time only because the omission was caught while adding the second one.
@@ -634,3 +637,51 @@ Without it the pilot must arrest *all* of the sink with elevator alone, at exact
 It is additive and bounded — zero above one wingspan — so it cannot touch any validated figure in §4, all of which are measured well clear of the ground. **Not built: it is a new physics feature rather than a fix, and the pilot chooses whether it comes before the Phase 2 instruments.**
 
 Absent that, the honest answer on landing is **pilot technique**, with one control-scheme note worth knowing: the flare needs the pitch command to go from roughly 0 to 0.9, which with `mouseExpo = 0.35` means dragging the cursor about **87% of the way from centre to the bottom of the screen** — and any sideways drift on the way is roll, because one cursor carries both axes.
+
+*(Ground effect was subsequently built — §10. Read the measured magnitude there before assuming it changed the landing.)*
+
+---
+
+## 10. Ground effect — built and green (2026-08-04)
+
+The gap §9 identified, now modelled. Induced drag only, and **it is worth far less than it sounds**: read the measurement before forming an expectation of it.
+
+```lua
+Aerodynamics.groundEffectFactor(heightM, span) -> number   -- pure, 0.25..1
+Aerodynamics.dragCoefficient(alpha, cl, surface, flap, groundEffect?)
+Aerodynamics.solveSurface(..., flap, heightAboveGround?)
+```
+
+**The relation**, as McCormick gives Wieselsberger: `phi = (16h/b)^2 / (1 + (16h/b)^2)`, multiplying the induced term. `h` is the height of the **wing**, `b` the **full span**. Returns exactly 1 at and above one span, so it costs nothing and changes nothing for the whole of normal flight.
+
+### It is small, and that is the correct answer
+
+| condition | 30 m | in the flare | cushion |
+|---|---|---|---|
+| 65 kt full flap | 909 fpm | **864 fpm** | 45 fpm (5.0%) |
+| 60 kt full flap | 785 fpm | **738 fpm** | 47 fpm (5.9%) |
+| 55 kt full flap | 690 fpm | **641 fpm** | 48 fpm (7.0%) |
+| 65 kt clean | 564 fpm | **526 fpm** | 39 fpm (6.9%) |
+
+**Because it is a high wing.** The 172's wing sits **2.10 m up on an 11 m span** — h/b = 0.19, giving phi ≈ 0.90, a ~10% cut in induced drag and ~5–7% in total. A low-wing trainer at h/b = 0.08 gets phi ≈ 0.62. The 172 not floating much is a real property of the aeroplane, and a version of this that produced a dramatic cushion would be **wrong**. The upper bound is asserted as firmly as the lower one for exactly that reason.
+
+**So this did not fix landing**, and was never going to. If the flare still feels wrong, look at approach speed discipline first (the model floats if flown fast, correctly), then at the cursor-travel note at the end of §9.
+
+### Three decisions worth not re-litigating
+
+**Per surface, not per aircraft.** `solveSurface` takes each surface's own height. `FlightModel` already has `armWorld` for every surface, so `altitude + armWorld.Y` costs one addition — and it means **in a bank the low wing gets more effect than the high one**, a real force asymmetry that helps pick up a dropped wing in the flare.
+
+**`groundEffectSpan` is declared, never derived.** A wing split into panels keeps the **full** wing's aspect ratio but **half** its area (see §7), so `sqrt(AR * area)` on a panel returns 7.78 m for an 11 m wing — a 30% error straight into a squared term. It is `nil` on the tail and fin deliberately: both are small, both sit higher, and modelling them would add a term nobody could measure in flight.
+
+**Drag only; the lift curve is untouched.** Changing CL near the ground would move the stall speed there and quietly invalidate the figures in §4. A test asserts CL is bit-identical in and out of ground effect.
+
+⚠️ **Ground is assumed at y = 0.** True of the Phase 1 baseplate, and **not** true of the Phase 3 world. When terrain arrives this needs the ground height under the aircraft — one raycast per frame shared with `GroundHandling`, not one per surface.
+
+### Two wrong assertions, both caught by the suite
+
+Both were tests failing against correct code, which is now the fourth and fifth time in this project.
+
+1. **`force.Y` is not lift.** Lift and drag resolve about the *relative wind*, so at 8° of alpha the drag vector has a real Y component — reducing drag moved `force.Y` by 38 N and an "in ground effect, lift is unchanged" assertion failed against perfectly correct code.
+2. **Comparing drag at two altitudes confounds density with ground effect.** 30 m vs 400 m differ because the air is thinner, not because of this term.
+
+Both were fixed by asserting on the wing's own **CL and CD** — dimensionless and density-free, so they isolate exactly the thing being changed. A third bound (`reduction < 8%`) was picked by eye and failed at a correct 8.97%; the ceiling is now derived instead, from the fact that a CD reduction can never exceed the induced-term reduction that causes it.

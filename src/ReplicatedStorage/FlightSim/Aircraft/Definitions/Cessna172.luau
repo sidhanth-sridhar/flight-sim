@@ -147,6 +147,13 @@ Cessna172.surfaces = {
 		-- drag, which is exactly what makes a steep, slow approach possible.
 		flapEffect = 0.60,
 		flapDragEffect = 0.045,
+
+		--[[
+			The FULL span, not this panel's. Ground effect is a property of the
+			whole vortex system, and sqrt(AR * area) on a half-panel would give
+			7.78 m for an 11 m wing - a 30% error into a squared term.
+		]]
+		groundEffectSpan = WING_SPAN,
 	}),
 
 	Aerodynamics.newSurface({
@@ -165,6 +172,7 @@ Cessna172.surfaces = {
 
 		flapEffect = 0.60,
 		flapDragEffect = 0.045,
+		groundEffectSpan = WING_SPAN,
 	}),
 
 	--[[

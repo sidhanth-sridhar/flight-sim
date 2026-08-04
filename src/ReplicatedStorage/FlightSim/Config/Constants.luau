@@ -45,7 +45,15 @@ Constants.GRAVITY_MS2 = 9.80665
 -- does NOT, which is why we force UseJumpPower off.
 
 Constants.CHARACTER = {
-	WALK_SPEED = 4.5, -- m/s, brisk walk
+	--[[
+		A jog, not a walk, and knowingly faster than a person moves.
+
+		At 1 stud = 1 m the world is 20x larger in feet-on-the-ground terms than
+		a normal Roblox place, so a realistic 1.4 m/s walk makes crossing an
+		apron a chore. The aircraft park 30 m from the spawn pad, which is the
+		trip that has to not be annoying.
+	]]
+	WALK_SPEED = 7.0, -- m/s (~25 km/h)
 	JUMP_HEIGHT = 0.9, -- m, a realistic standing jump
 	USE_JUMP_POWER = false,
 }

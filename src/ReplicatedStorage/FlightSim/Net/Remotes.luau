@@ -48,7 +48,9 @@ local MANIFEST: { [string]: { kind: RemoteKind, direction: string, purpose: stri
 	RequestSpawnAircraft = {
 		kind = "Function",
 		direction = "Client -> Server",
-		purpose = "Ask the server to spawn an aircraft; returns success + model reference.",
+		purpose = "Ask the server to spawn an aircraft by id; returns (accepted, reasonIfNot). "
+			.. "The aircraft itself arrives on AircraftAssigned, so the client has one adoption path, not two. "
+			.. "Requesting again replaces the player's existing aircraft.",
 	},
 	RequestDespawnAircraft = {
 		kind = "Event",

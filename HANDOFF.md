@@ -4,25 +4,27 @@
 
 ---
 
-## 0. Resume here — state at 2026-08-03
+## 0. Resume here — state at 2026-08-04
 
-**All 251 checks green across 9 suites.** Run them in **Play mode, Client datamodel** (see the warning in §4).
+**All 282 checks green across 10 suites.** Nine run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
-**Uncommitted** — nothing from this session is committed; HEAD is `407054e`:
-```
- M HANDOFF.md
- M default.project.json                     # explicit $className; conventional, fixed nothing (§3)
- ?? .../FlightSim/Controls/                 # InputController.luau      65/65
- ?? .../FlightSim/Controllers/              # FlightController.luau     13/13
-```
+**The mouse is now PTFS-style**: free cursor, position = deflection, inverted. See §6g — including the GUI-inset trap, which would otherwise have baked in a permanent nose-up bias.
 
-**Phase 1 remaining**: `AircraftService` (server spawning, replaces FlightController's test spawn), then the raw-numbers debug HUD. Then the flight gate — taxi, take off, coordinated turn, deliberate stall, recover, land — which the pilot flies before Phase 2.
+**The aircraft now taxis, rotates and flies** — verified with real keyboard and mouse input, not just tests. Measured: 0 → 65.9 kt in 340 m of ground roll, rotation at 56 kt, climb to 45 m. Holding full back-stick then produced a genuine stall, wing drop and spiral departure, which is the model behaving correctly rather than a fault.
+
+**A bug that made the whole simulator look dead was found and fixed** — the tyres were glued to the runway. See §6f. It predated the server migration and was not caused by it; it had simply never been exposed, because nobody had taxied before.
+
+**Committed** through the PTFS control change; the working tree is clean.
+
+**Phase 1 remaining**: the raw-numbers debug HUD (IAS, altitude, AoA, G-load, thrust, force vectors — no gauges). Then the flight gate — taxi, take off, coordinated turn, deliberate stall, recover, land — which the pilot flies before Phase 2.
+
+**Verified live this session, not just in tests**: the server spawns the aircraft, grants the client network ownership, the client adopts it and runs the frame loop, and boarding moves the aircraft **0.000 m**. Getting to that last number took three fixes — see §6e, because two of them are not obvious and both were found by measuring rather than reasoning.
 
 **Open questions for the pilot**, none blocking:
-- Spawn height: currently 100 m, so the aircraft free-falls before you reach it. `SPAWN_CFRAME` in FlightController; `CFrame.new(0, 1.30, 0)` parks it.
+- **No reset-aircraft key.** Requesting a spawn replaces your existing aircraft, so the recovery path from an aeroplane on its back is currently *die, or respawn from the Roblox menu*. Binding a key is a one-line change but the bindings are yours — say which key.
 - Pause (P) is a stopgap that zeroes control forces; it is not a real pause and probably should not be bound until designed.
 - The `Controls/` vs `Controllers/` folder split is deliberate for now — the rename was flagged as a separate task.
-- Three DeepSeek findings were reviewed this session: two were real bugs, one was half a real bug. See §6c and §7.
+- Aircraft park 30 m south of the spawn pad, which is a short walk. §6e says why they cannot park on it.
 
 ---
 
@@ -86,19 +88,24 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (251 checks total)
+### Verified green (282 checks total)
 
-| Module | Path | Checks |
-|---|---|---|
-| `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 |
-| `Aerodynamics` | `Physics/Aerodynamics.luau` | 29/29 |
-| `Engine` | `Physics/Engine.luau` | 23/23 |
-| `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 25/25 |
-| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 |
-| `FlightModel` | `Physics/FlightModel.luau` | 34/34 |
-| `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 65/65 |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 13/13 |
+| Module | Path | Checks | Datamodel |
+|---|---|---|---|
+| `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 | Client |
+| `Aerodynamics` | `Physics/Aerodynamics.luau` | 29/29 | Client |
+| `Engine` | `Physics/Engine.luau` | 23/23 | Client |
+| `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 26/26 | Client |
+| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
+| `FlightModel` | `Physics/FlightModel.luau` | 34/34 | Client |
+| `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 67/67 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 13/13 | Client |
+| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
+
+```lua
+require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
+```
 
 ⚠️ **Run the suites in PLAY mode, not Edit.** `require` caches per session, and the Edit session accumulates stale copies as modules are edited — a module edited after it was first required will keep serving the old copy for the rest of the session, which shows up as `attempt to call a nil value` on a function you can see in the file. Entering Play creates a fresh DataModel with a clean cache. Use `datamodel_type: "Client"`; the server has no `UserInputService` and cannot load `InputController`.
 
@@ -216,7 +223,9 @@ InputController.rebind(ic, action, keyCode)
 ### Bindings
 Pilot-specified (do not change): **W/S** throttle ramp, **A/D** rudder, **F/G** flap detents down/up, **C** camera hold, **R** altitude hold, **E** engine toggle, mouse = pitch/roll.
 
-Chosen here, open to review: **B** brake, **V** cycle view, **, / .** trim down/up, **L** gear (G was taken; inert on the fixed-gear 172), **X** recentre stick, **M** mouse mode, **P** pause.
+Chosen here, open to review: **B** brake, **V** cycle view, **, / .** trim down/up, **L** gear (G was taken; inert on the fixed-gear 172), **P** pause.
+
+**X and M were removed** when the yoke became absolute — see §6g.
 
 **C is momentary** (held only while down); **R latches**. Bindings live in `InputController.DEFAULT_BINDINGS` and are overridable per player via `rebind()`, which is what the settings menu will drive. A test asserts no two actions share a key.
 
@@ -264,9 +273,106 @@ It owns only sequencing and lifecycle. `stepFrame(rig, dt, snapshot)` is factore
 - **Input is dropped while a text box is focused**, or typing "was" in chat flies the aircraft.
 - **Pause zeroes the constraints** rather than leaving the last force applied, which would accelerate the aircraft indefinitely. This is a stopgap, not a real pause — Roblox keeps simulating, so the aircraft becomes an unpowered glider. Pause needs a design decision before it is worth binding.
 
-### Then, in order
-1. `AircraftService` — server-side spawning, which replaces the test spawn above.
-2. Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
+## 6e. `AircraftService` — built and green (2026-08-04)
+
+`src/ServerScriptService/FlightSim/Services/AircraftService.luau`, 28/28. Started automatically by `Init.server.luau`, which already scanned a `Services/` folder that did not exist until now.
+
+```lua
+AircraftService.spawn(owner: Player?, id: string?) -> (Model?, reason: string?)
+AircraftService.despawn(model) / despawnFor(player) / despawnAll()
+AircraftService.getAircraft(player) -> Model?
+AircraftService.evaluate(position, speed) -> reason?   -- pure
+AircraftService.checkSanity(model) -> reason?
+```
+
+**The split**: the server owns *which aircraft exist and who owns each one*; the client still owns *every force, every frame*. Nothing about client-owned physics changed. What changed is that the aircraft is now a real replicated instance instead of one that existed only inside one client.
+
+**Ordering that matters**: `SetNetworkOwner` happens **before** `AircraftAssigned` is fired. Forces written to an assembly this client does not own are discarded by the engine with no error and no motion — indistinguishable from broken aerodynamics. The server verifies the handover with `GetNetworkOwner()` and warns; a client-side check is impossible because **`BasePart:IsNetworkOwner()` does not exist on the client** (confirmed: *"IsNetworkOwner is not a valid member of Part"*). If the controls do nothing at all, read the server log before suspecting the physics.
+
+**One adoption path on the client.** `RequestSpawnAircraft` returns only `(accepted, reason)`; the aircraft itself always arrives on `AircraftAssigned`. Requesting again *replaces* the player's aircraft, which is what makes it double as a reset.
+
+**A shared `Aircraft/Registry.luau`** maps `id -> definition`. The id is the only thing that crosses the network; the server stamps it on the model and the client reads it back off the attribute, so both sides resolve the same definition without the client assuming it got what it asked for.
+
+### Three fixes that boarding needed, all found by measuring
+
+Boarding a server-spawned aircraft threw it across the apron. The number to watch is the displacement of a parked aeroplane when the pilot sits down: **12.32 m → 7.84 m → 0.000 m**.
+
+1. **Aircraft park 30 m from the origin.** `Workspace.SpawnLocation` is a 12×12 m pad whose top face is at **y = 1.00**, and slot 0 was dead centre on it — so the aeroplane rested a metre up on a ledge it had to roll off, and the player materialised *inside* it. First observed live spawn: a character appearing on top of a parked 1,111 kg aircraft shoved it 4.5 m.
+2. **Pilots and aircraft do not collide** (`Aircraft` / `Pilot` collision groups). `Sit()` welds the character into the assembly, but for the frame *before* the weld exists it is a separate rigid body teleported inside a 1.5 m cabin, and Roblox resolves that interpenetration explosively. The client's existing neutralisation runs on Occupant-changed — after the weld, one frame too late. **The trade**: a player can walk through a parked aircraft and cannot stand on the wing.
+3. **A seated pilot collides with nothing at all** (`PilotSeated` group). Fixing 2 removed the explosion but left the aircraft floating 5.6 m up. Once welded in, the character's root part sticks out through the cabin floor, and **the Humanoid forces `HumanoidRootPart.CanCollide` back to true every frame** — so neither side can switch it off and make it stay off. The runway pushed on that root part and, since it was now rigidly part of the aeroplane, jacked the whole aeroplane into the air. A seated pilot is cargo; the assembly does the colliding for them.
+
+Server-side `Massless` is set on seated characters too, so the server and the client agree the aircraft weighs 1,111 kg rather than 1,122 kg.
+
+### Things this service decides, open to review
+- **Warn-only limit checks.** `Constants.LIMITS` are generous (400 m/s, 20 km), so anything tripping them in Phase 1 is far more likely to be our own physics bug than a cheating client, and deleting the pilot's aircraft mid-test destroys the evidence. `ENFORCE_LIMITS = false` flips it.
+- **Spawn slots** alternate ±18 m about the apron and are reclaimed on despawn. Occupancy is checked against the *world*, not just our bookkeeping — see §7 for the Studio-specific reason that matters.
+- **Only the owner may board.** A second player sitting in your aircraft would be sitting in an assembly simulated on your machine, with their own client's forces being discarded.
+
+## 6f. The tyres were glued to the runway (fixed 2026-08-04)
+
+**Symptom**: the pilot boards and nothing works. No pitch, no roll, no yaw, no movement. It looks exactly like dead controls or broken aerodynamics, and there is no error anywhere.
+
+**It was neither.** The input chain was perfect and the flight model was perfect. Measured with real key presses on a live aircraft: E started the engine (0 → 377 N idle), W ramped to full thrust (2,780 N), D produced a 2,367 N·m yaw moment. Every number was right. The aeroplane simply did not move — 0.000 m/s with full power applied.
+
+**Cause**: the wheels shipped with `friction = 0.6`, which Roblox combines with a default runway to about **0.45**. Static thrust is 2,780 N against a weight of 10,895 N, so the aircraft can only break traction below **μ = 2780 / 10895 = 0.255**. It was pinned by static friction with roughly twice the grip the propeller could overcome.
+
+**Fix**: wheels are now `friction = 0`, `frictionWeight = 100`. `GroundHandling` already models rolling resistance, brakes, lateral grip and nose-wheel steering as real forces — that is the entire reason it exists (§6b) — so Roblox's isotropic contact friction was both double-counting and swamping it.
+
+**`frictionWeight` matters as much as `friction`**, and this cost a wrong diagnosis. Roblox combines two surfaces as `(f1*w1 + f2*w2) / (w1 + w2)`. The first attempt set wheel friction to 0 with weight 0, which just handed the whole combination to the runway and changed nothing — it looked like friction had been ruled out. Weight 100 makes the tyre dominate, so behaviour is the same on any surface.
+
+Measured, same aircraft, same thrust:
+
+| wheel friction / weight | result |
+|---|---|
+| 0.6 / 1 (as shipped) | **0.00 m — immovable** |
+| 0.0 / 0 (the botched test) | 0.00 m — runway friction still applied |
+| 0.0 / 100 | 13.9 m in 2.5 s, accelerating normally |
+
+**Regression test**: `Cessna172.runTests()` now asserts *"Static thrust can break the tyres loose"*, computing the worst-case combined μ against a deliberately grippy 0.5 runway and requiring the thrust to exceed it. It reports μ 0.005 needing 54 N against 2,780 N available, and would have failed at the old value (μ 0.55, 5,992 N needed).
+
+**Diagnostic order that worked**, worth reusing: confirm the force reaches the constraint → confirm the client owns the assembly → **apply the force in free air**. That last step is what cracked it: in mid-air the same 2,780 N produced −2.33 m/s² against −2.50 predicted, proving the force, the ownership and the flight model were all fine and the fault was in ground contact alone.
+
+## 6g. PTFS-style free-mouse controls (2026-08-04)
+
+The relative yoke is gone. The cursor is **free on screen and visible**, and its POSITION is the control deflection: centre is neutral, the edges are full travel. Inverted, as specified — pointer forward pitches the nose down.
+
+**What replaced what.** The old scheme locked the cursor to centre and accumulated `GetMouseDelta()` into a virtual stick (`state.stickX/stickY`) with Direct and Centering modes. All of that is deleted. There is now no stick state between frames at all, which is the point: the controls can never disagree with the cursor the pilot can see.
+
+```lua
+InputController.poll(state, pointer, viewportSize)  -- caller supplies both
+InputController.neutralSnapshot()                   -- hands off the yoke
+```
+
+`InputSnapshot` carries `pointer` and `viewportSize` in raw pixels rather than a pre-normalised offset, so `update()` still owns the whole mapping — centre, deadzone, expo, inversion, clamping — and stays pure and testable with plain numbers. **The Controls contract is untouched**: the same six fields, same signs, same ranges.
+
+### Decisions the pilot made
+- **Full deflection at the screen edge, per axis.** Roll normalises against half the width, pitch against half the height, so on 16:9 roll is ~1.8× less sensitive per pixel than pitch. Deliberate, and matches PTFS.
+- **X and M removed.** There are no mouse modes left, and Roblox exposes no API to warp the cursor, so "recentre the stick" could only have lied about where the pointer is. Recentring is now what it is in PTFS: move the mouse to the middle. `systems.mouseMode` is gone with them.
+- **Typing releases the yoke.** With a free cursor, reaching for the chat box would otherwise command hard nose-up and full left roll. `FlightController` sends `neutralSnapshot()` while a text box is focused. Trim is untouched, so a trimmed aircraft holds its attitude exactly as it would hands-off.
+
+### The GUI inset, which is the trap in this file
+`GetMouseLocation()` and `Camera.ViewportSize` are **not** in the same coordinate space. The viewport includes the strip behind Roblox's top bar; the mouse does not. Comparing one against the other puts "centre" half the inset too low — about 18 px on a 1080p screen, a few percent of permanent nose-up that reads as a mistrimmed aircraft and that nobody would think to blame on a coordinate space.
+
+`FlightController.readPointer()` therefore reduces both to the usable area, `ViewportSize - GetGuiInset()`.
+
+**Verified rather than assumed**, and worth knowing how, because the obvious tests are inconclusive: a 20 px tall Frame at GUI y 300..320 is found by `GetGuiObjectsAtPosition(700, 310)` and **not** at `(700, 368)`. Since that function shares its coordinate space with `GetMouseLocation()`, the mouse is proven to be in inset-respecting GUI space. Live probe confirms it: cursor at (663, 392) on a 1326×783 usable area gives exactly `roll +0.000, pitch +0.000`.
+
+### Verified live
+Real cursor, real code, all four quadrants:
+
+| cursor vs centre | result |
+|---|---|
+| right and below | roll **+0.201**, pitch **+0.085** (right, nose up) |
+| left and above | roll **−0.234**, pitch **−0.115** (left, nose down) |
+| dead centre | roll **+0.000**, pitch **+0.000** |
+
+And in flight: a cursor offset of +0.144 (mild nose-up) held pitch torque steadily positive through the takeoff roll, +1722 → +2670 N·m, rotating at ~70 kt. `MouseBehavior` stays `Default` and `MouseIconEnabled` true for the whole flight.
+
+### Tests
+`InputController` went 65 → 67. Removed as meaningless: the two mouse-mode tests and the three X-recentre tests. Added: centre is neutral, returning to centre releases the controls, deflection is proportional to distance, off-screen clamps at full travel, **axes normalise independently** (270 px gives roll 0.180 but pitch 0.359 — the test that would catch the two axes being collapsed onto one radius), deadzone is exactly neutral, a neutral snapshot releases the yoke without clearing trim, and a half-screen offset commands the shaped value end to end.
+
+### Then
+Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
 
 **Phase 1 test gate**: taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. Do not proceed to Phase 2 until the user has flown it and signed off.
 
@@ -284,6 +390,13 @@ It owns only sequencing and lifecycle. `stepFrame(rig, dt, snapshot)` is factore
 - **A `runTests()` that errors mid-suite leaks its rig into the workspace**, and in Studio that debris survives into the next Play session — where a leftover aircraft looks exactly like a double-spawn bug. It cost real time to diagnose once. `FlightController.runTests` now wraps its body in a `pcall` and destroys the rig either way; **`AircraftBuilder`, `FlightModel` and `GroundHandling` still destroy on the last line and have the same flaw.** If a Play session shows more aircraft than expected, clean `workspace` in *Edit* first.
 - **Altitude hold disconnects on stick MOVEMENT, not absolute deflection.** In Direct mouse mode the stick holds wherever it was put, so testing absolute deflection meant a pilot flying with real pitch input would press R and have it engage and disconnect on the same frame — a dead key with no feedback. The reference position is captured at engagement.
 - **Cross-product order for the lateral axis.** `rollDir:Cross(groundNormal)` points to the aircraft's right; `groundNormal:Cross(rollDir)` points left. Getting it backwards inverts nose-wheel steering and the reported skid direction *without* breaking lateral grip, because grip is sign-symmetric — so the tests that would catch it are the steering ones, not the friction ones. This was caught on the first `GroundHandling` run.
+- **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
+- **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
+- **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). During a crash the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once.
+- **Studio's command bar has its OWN module cache, separate from the running server's.** `require(SomeService)` from the command bar returns a *second copy* of the module with its own state — its `Init()` has never run, and its bookkeeping tables are empty. This is why `AircraftService.runTests()` reported "0 active" while a live aircraft sat in the workspace, and why its first test spawn tried to park on top of that live aeroplane. Slot occupancy is therefore checked against the world, and `runTests()` registers its collision groups itself.
+- **Roblox sanitises NaN inside property setters.** A NaN velocity is stored as `(0, 0, 0)` and a NaN CFrame position as `y = -1,000,000`. So a NaN check cannot be tested through the datamodel — the assertion would only prove Roblox scrubs NaN. Test the pure predicate directly. (The −1,000,000 does trip the altitude floor, so a position that has gone numerically bad is still caught.)
+- **`BasePart:IsNetworkOwner()` does not exist on the client** — *"IsNetworkOwner is not a valid member of Part"*. A client-side ownership check is dead code that silently never fires. Verify with `GetNetworkOwner()` on the server. (`ReceiveAge == 0` is the usable client-side hint, and was used to confirm the handover by hand.)
+- **The Humanoid forces `HumanoidRootPart.CanCollide = true` every frame.** You cannot make a seated pilot non-collidable by setting `CanCollide`; it will be reverted. Use a collision group. See §6e.
 - **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
 
 ---

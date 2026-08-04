@@ -99,10 +99,13 @@ InputController.DEFAULT_BINDINGS = {
 	ViewCycle = Enum.KeyCode.V,
 	Pause = Enum.KeyCode.P,
 
-	-- Zero the virtual stick without moving the mouse. Only meaningful in
-	-- Direct mode, where the stick stays where it was last put.
-	RecenterStick = Enum.KeyCode.X,
-	MouseModeToggle = Enum.KeyCode.M,
+	--[[
+		X (RecenterStick) and M (MouseModeToggle) were removed when the yoke
+		became absolute. Neither could still mean anything: there are no mouse
+		modes left, and Roblox exposes no API to warp the cursor, so "recentre
+		the stick" would have to lie about where the pointer is. Recentring is
+		now what it is in PTFS - move the mouse back to the middle of the screen.
+	]]
 }
 
 -- =========================================================================
@@ -111,19 +114,26 @@ InputController.DEFAULT_BINDINGS = {
 
 InputController.DEFAULTS = {
 	--[[
-		Mouse.
+		Mouse - absolute, PTFS style.
 
-		Direct    the pointer IS the yoke: deflection accumulates and stays
-		          where it is put, so the aircraft can be trimmed and left.
-		          This is the realistic mode.
-		Centering the stick springs back to neutral when the mouse stops. More
-		          forgiving, and the arcade mode of the two.
+		The cursor is free on screen and its POSITION is the yoke. Where the
+		pointer sits relative to the middle of the screen is the deflection:
+		centre is neutral, the edges are full travel, and the pilot can see
+		exactly where their controls are because the cursor is drawn there.
+
+		This replaced a relative scheme that accumulated GetMouseDelta() into a
+		virtual stick with the cursor locked to centre. Absolute position has no
+		sensitivity constant at all - the mapping is fixed by the screen - which
+		is why mouseSensitivity and centeringRate are gone rather than retuned.
+
+		Full deflection is reached at the screen EDGE, per axis. On a 16:9
+		display that makes roll about 1.8x less sensitive per pixel than pitch.
+		That is deliberate and matches PTFS: the horizontal axis is the one the
+		hand travels furthest along, and a twitchy roll axis is far more
+		unpleasant than a slightly slow one.
 	]]
-	mouseMode = "Direct",
-	mouseSensitivity = 0.0035, -- stick deflection per pixel
 	mouseExpo = 0.35, -- fine control near centre, full authority at the edge
-	mouseDeadzone = 0.02,
-	centeringRate = 2.5, -- per second, Centering mode only
+	mouseDeadzone = 0.02, -- a small dead patch at centre so neutral is findable
 
 	throttleRate = 0.5, -- full travel in 2 s
 	yawRate = 2.5, -- pedal application
@@ -186,12 +196,26 @@ export type Systems = {
 	gearDown: boolean, -- L
 	paused: boolean, -- P
 	viewIndex: number, -- V, cycles
-	mouseMode: string,
 }
 
+--[[
+	One frame of input, with nothing read from the engine.
+
+	`pointer` is the cursor in screen pixels and `viewportSize` is the screen it
+	is measured against. Both are carried raw rather than pre-normalised so that
+	update() owns the whole mapping - centre, deadzone, expo, inversion and
+	clamping are the parts that can be wrong in an interesting way, and keeping
+	them here is what lets runTests() drive them with plain numbers.
+
+	A viewportSize with a zero component means "no screen", and is treated as
+	neutral rather than divided by. That is not just defensive: it is how the
+	neutral snapshot below works, and it is what FlightController hands over
+	while the pilot is typing.
+]]
 export type InputSnapshot = {
 	held: { [string]: boolean },
-	mouseDelta: Vector2,
+	pointer: Vector2,
+	viewportSize: Vector2,
 }
 
 export type FlightState = {
@@ -232,9 +256,11 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 		detentIndex = 1,
 		flapsTarget = detents[1],
 
-		-- The virtual stick, in deflection units before shaping.
-		stickX = 0,
-		stickY = 0,
+		--[[
+			No stick state. The yoke's position is wherever the cursor is, so
+			there is nothing to carry between frames - which also means the
+			controls can never disagree with what the pilot can see on screen.
+		]]
 		trim = 0,
 
 		-- smoothDamp carries velocity; the caller owns it.
@@ -265,7 +291,6 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 			gearDown = true,
 			paused = false,
 			viewIndex = 1,
-			mouseMode = config.mouseMode,
 		} :: Systems,
 	}
 end
@@ -339,25 +364,6 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 		-- index straight into its view list with no arithmetic of its own.
 		systems.viewIndex = (systems.viewIndex % config.viewCount) + 1
 	end
-	if rising(state, snapshot, "MouseModeToggle") then
-		systems.mouseMode = if systems.mouseMode == "Direct" then "Centering" else "Direct"
-	end
-	if rising(state, snapshot, "RecenterStick") then
-		--[[
-			Clearing the smoothing velocities as well as the stick matters:
-			smoothDamp carries momentum, so zeroing only the input leaves the
-			controls coasting past neutral and settling from the far side.
-
-			Trim is deliberately NOT cleared. Recentring the stick means
-			letting go of it, and a trimmed aircraft with the stick released
-			holds its trimmed attitude - that is what trim is for. Zeroing it
-			here would make the aircraft pitch the moment the pilot tidied up
-			their controls.
-		]]
-		state.stickX, state.stickY = 0, 0
-		state.pitchVelocity, state.rollVelocity = 0, 0
-	end
-
 	-- C is momentary: the camera is held only while the key is down.
 	systems.cameraHold = held.CameraHold == true
 
@@ -426,29 +432,42 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 
 	-- ---- Mouse: pitch and roll -------------------------------------------
 	--[[
-		INVERTED, as specified and as every flight sim does it: pushing the
-		pointer forward pitches the nose DOWN.
+		The pointer's POSITION on screen is the yoke.
 
-		Roblox reports Delta.Y as negative when the mouse moves forward, and
-		pitch is positive nose-up, so accumulating the delta directly gives the
-		inverted sense with no negation anywhere. Sign errors here are the most
-		likely thing to be wrong in this file, so both directions are asserted
-		in runTests().
+		Offset from the middle of the screen, normalised per axis so that the
+		left and right edges are full roll and the top and bottom edges are full
+		pitch. Everything in between is proportional, so the cursor is a direct
+		readout of where the controls are.
+
+		INVERTED, as specified and as every flight sim does it: pointer forward
+		(up the screen) pitches the nose DOWN.
+
+		The signs need no negation anywhere, which is worth stating because it
+		looks like an omission. Screen Y grows DOWNWARD, so a pointer pushed
+		forward sits above centre and yields a negative offset, and pitch is
+		positive nose-up - the inversion is already in the coordinate system.
+		Roll needs no help either: screen X grows right, and positive roll is
+		right. Both directions are asserted separately in runTests(), because
+		this is still the likeliest thing in the file to be wrong.
 	]]
-	local delta = snapshot.mouseDelta
-	state.stickX = clamp(state.stickX + delta.X * config.mouseSensitivity, -1, 1)
-	state.stickY = clamp(state.stickY + delta.Y * config.mouseSensitivity, -1, 1)
+	local pointerX, pointerY = 0, 0
+	local viewport = snapshot.viewportSize
 
-	if systems.mouseMode == "Centering" and delta.Magnitude < 1e-6 then
-		local decay = config.centeringRate * dt
-		state.stickX = MathUtil.approach(state.stickX, 0, decay)
-		state.stickY = MathUtil.approach(state.stickY, 0, decay)
+	if viewport and viewport.X > 0 and viewport.Y > 0 then
+		local pointer = snapshot.pointer or Vector2.zero
+		local halfWidth = viewport.X * 0.5
+		local halfHeight = viewport.Y * 0.5
+
+		-- Clamped, so a cursor dragged off the edge of the window - or onto a
+		-- second monitor - holds full deflection instead of running away.
+		pointerX = clamp((pointer.X - halfWidth) / halfWidth, -1, 1)
+		pointerY = clamp((pointer.Y - halfHeight) / halfHeight, -1, 1)
 	end
 
-	-- Deadzone removes drift near centre; expo gives fine control there while
+	-- Deadzone removes jitter near centre; expo gives fine control there while
 	-- keeping full deflection reachable at the edges.
-	local rawRoll = MathUtil.expo(MathUtil.deadzone(state.stickX, config.mouseDeadzone), config.mouseExpo)
-	local rawPitch = MathUtil.expo(MathUtil.deadzone(state.stickY, config.mouseDeadzone), config.mouseExpo)
+	local rawRoll = MathUtil.expo(MathUtil.deadzone(pointerX, config.mouseDeadzone), config.mouseExpo)
+	local rawPitch = MathUtil.expo(MathUtil.deadzone(pointerY, config.mouseDeadzone), config.mouseExpo)
 
 	-- ---- Altitude hold ---------------------------------------------------
 	local engagedThisFrame = false
@@ -463,12 +482,13 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 				below measures MOVEMENT away from this reference, not absolute
 				deflection.
 
-				Absolute deflection cannot work here: in Direct mouse mode the
-				stick holds wherever it was last put, so a pilot holding any
-				real pitch input - the normal way to fly without trim - would
-				press R and have it engage and drop out on the same frame, with
-				nothing to show for it but a dead key. Real autopilots
-				disconnect on a change in control pressure for the same reason.
+				Testing absolute deflection cannot work here, and the absolute
+				pointer makes that more true rather than less: the yoke sits
+				wherever the cursor is, so a pilot holding any real pitch input
+				- the normal way to fly without trim - would press R and have it
+				engage and drop out on the same frame, with nothing to show for
+				it but a dead key. Real autopilots disconnect on a change in
+				control pressure for the same reason.
 			]]
 			state.altHoldPitchReference = rawPitch
 			engagedThisFrame = true
@@ -533,11 +553,15 @@ end
 	Build a snapshot from the real keyboard and mouse.
 
 	The only impure function in the module, and deliberately trivial: it maps
-	keys to action names and reads the accumulated mouse delta. Everything that
-	could be wrong in an interesting way lives in update(), where it can be
+	keys to action names and passes the cursor through untouched. Everything
+	that could be wrong in an interesting way lives in update(), where it can be
 	tested.
+
+	The caller supplies the pointer and the viewport rather than this reading
+	them, because the two must come from the same coordinate space and only the
+	caller knows which - see the note on the GUI inset in FlightController.
 ]]
-function InputController.poll(state: any, mouseDelta: Vector2?): InputSnapshot
+function InputController.poll(state: any, pointer: Vector2?, viewportSize: Vector2?): InputSnapshot
 	local held = {}
 	for action, keyCode in state.bindings do
 		if UserInputService:IsKeyDown(keyCode) then
@@ -547,7 +571,24 @@ function InputController.poll(state: any, mouseDelta: Vector2?): InputSnapshot
 
 	return {
 		held = held,
-		mouseDelta = mouseDelta or Vector2.zero,
+		pointer = pointer or Vector2.zero,
+		viewportSize = viewportSize or Vector2.zero,
+	}
+end
+
+--[[
+	A snapshot with no keys held and the yoke at neutral.
+
+	Exists so that callers wanting "hands off the controls" - FlightController
+	while the pilot is typing - do not have to know that a zero viewport is the
+	convention for it. Trim is untouched, exactly as letting go of a real yoke
+	leaves a trimmed aircraft holding its attitude.
+]]
+function InputController.neutralSnapshot(): InputSnapshot
+	return {
+		held = {},
+		pointer = Vector2.zero,
+		viewportSize = Vector2.zero,
 	}
 end
 
@@ -590,20 +631,43 @@ function InputController.runTests(): (boolean, { any })
 
 	local dt = 1 / 60
 
-	local function snap(actions: { string }?, mouse: Vector2?): InputSnapshot
+	-- A synthetic 16:9 screen. Deliberately not square, so that the tests can
+	-- tell per-axis normalisation from a single shared radius.
+	local VIEWPORT = Vector2.new(1920, 1080)
+
+	--[[
+		A cursor position expressed as a fraction of the way from the middle of
+		the screen to the edge, per axis.
+
+		pointer(0, 0) is dead centre, pointer(1, 1) the bottom-right corner,
+		pointer(0, -1) the top edge. Writing the tests in these units rather
+		than pixels keeps them readable and independent of VIEWPORT.
+	]]
+	local function pointer(fx: number, fy: number): Vector2
+		return Vector2.new(VIEWPORT.X * 0.5 * (1 + fx), VIEWPORT.Y * 0.5 * (1 + fy))
+	end
+
+	--[[
+		Note the default: a snapshot with no pointer given is the cursor at
+		CENTRE, not at Vector2.zero. Zero is the top-left corner, which under
+		absolute control is full nose-down and full left roll - so defaulting to
+		it would silently deflect every test that does not mention the mouse.
+	]]
+	local function snap(actions: { string }?, pointerPos: Vector2?): InputSnapshot
 		local held = {}
 		if actions then
 			for _, a in actions do
 				held[a] = true
 			end
 		end
-		return { held = held, mouseDelta = mouse or Vector2.zero }
+		return { held = held, pointer = pointerPos or pointer(0, 0), viewportSize = VIEWPORT }
 	end
 
-	-- Run n frames with a fixed snapshot.
-	local function run(state: any, n: number, actions: { string }?, mouse: Vector2?, flight: FlightState?)
+	-- Run n frames with a fixed snapshot. The pointer is re-sent every frame,
+	-- because holding the yoke still now means holding the cursor still.
+	local function run(state: any, n: number, actions: { string }?, pointerPos: Vector2?, flight: FlightState?)
 		for _ = 1, n do
-			InputController.update(state, dt, snap(actions, mouse), flight)
+			InputController.update(state, dt, snap(actions, pointerPos), flight)
 		end
 		return state.controls, state.systems
 	end
@@ -722,100 +786,140 @@ function InputController.runTests(): (boolean, { any })
 		string.format("%.4f after one frame, target %.3f", state.controls.flaps, state.flapsTarget)
 	)
 
-	-- 5. Mouse: the inversion ----------------------------------------------
+	-- 5. Mouse: the absolute yoke -------------------------------------------
 	--[[
-		THE sign check. Roblox gives Delta.Y < 0 when the mouse moves forward,
-		and forward must pitch the nose DOWN, which is negative pitch.
+		THE sign check, and the likeliest thing in this file to be wrong.
+
+		Screen Y grows DOWNWARD, so a pointer pushed forward sits ABOVE centre
+		and must pitch the nose DOWN. Both directions are asserted separately
+		rather than inferred from one, because a sign error that inverts the
+		whole axis passes any single-direction test.
 	]]
 	state = fresh()
-	run(state, 30, nil, Vector2.new(0, -40))
+	run(state, 30, nil, pointer(0, -1))
 	record(
 		"Pointer forward pitches the nose DOWN",
 		state.controls.pitch < -0.1,
-		string.format("pitch %+.3f", state.controls.pitch)
+		string.format("pitch %+.3f at the top edge", state.controls.pitch)
 	)
 
 	state = fresh()
-	run(state, 30, nil, Vector2.new(0, 40))
+	run(state, 30, nil, pointer(0, 1))
 	record(
 		"Pointer back pitches the nose UP",
 		state.controls.pitch > 0.1,
-		string.format("pitch %+.3f", state.controls.pitch)
+		string.format("pitch %+.3f at the bottom edge", state.controls.pitch)
 	)
 
 	state = fresh()
-	run(state, 30, nil, Vector2.new(40, 0))
+	run(state, 30, nil, pointer(1, 0))
 	record("Pointer right rolls right", state.controls.roll > 0.1, string.format("roll %+.3f", state.controls.roll))
 
 	state = fresh()
-	run(state, 30, nil, Vector2.new(-40, 0))
+	run(state, 30, nil, pointer(-1, 0))
 	record("Pointer left rolls left", state.controls.roll < -0.1, string.format("roll %+.3f", state.controls.roll))
 
-	-- Deflection must saturate rather than growing without bound.
-	state = fresh()
-	run(state, 200, nil, Vector2.new(500, 500))
-	record(
-		"Stick deflection clamps to full travel",
-		state.controls.pitch <= 1 and state.controls.roll <= 1 and state.stickX == 1 and state.stickY == 1,
-		string.format("pitch %.3f, roll %.3f", state.controls.pitch, state.controls.roll)
-	)
-
-	-- Direct mode holds its deflection; that is the whole point of it.
-	local heldPitch = state.controls.pitch
-	run(state, 60, nil)
-	record(
-		"Direct mode holds deflection when the mouse stops",
-		math.abs(state.controls.pitch - heldPitch) < 1e-3,
-		string.format("%.4f -> %.4f", heldPitch, state.controls.pitch)
-	)
-
-	-- Centering mode springs back.
-	state = fresh({ mouseMode = "Centering" })
-	run(state, 30, nil, Vector2.new(0, 200))
-	local deflected = state.controls.pitch
-	run(state, 120, nil)
-	record(
-		"Centering mode returns to neutral",
-		math.abs(state.controls.pitch) < math.abs(deflected) * 0.2,
-		string.format("%+.3f -> %+.3f", deflected, state.controls.pitch)
-	)
-
-	-- X recentres without mouse movement, and kills the smoothing momentum so
-	-- the controls settle at neutral instead of coasting through it.
-	state = fresh()
-	run(state, 30, nil, Vector2.new(200, 200))
-	run(state, 1, { "RecenterStick" })
-	record("X recentres the stick", state.stickX == 0 and state.stickY == 0, "stick zeroed")
 	--[[
-		Clearing the smoothing velocity cannot be asserted by reading it back:
-		smoothDamp runs later in the same frame and legitimately computes a
-		fresh velocity toward neutral. The observable effect is that the
-		controls decay to neutral without OVERSHOOTING through it, which is
-		what carried-over momentum would cause.
+		Centre is neutral, and returning to centre neutralises. This pair is the
+		whole reason for the free cursor: the pilot can see where the controls
+		are and put them back by moving the mouse, with no key press and no
+		hidden state that could disagree with the cursor on screen.
 	]]
-	local startSign = math.sign(state.controls.pitch)
-	local overshot = false
-	for _ = 1, 90 do
-		InputController.update(state, dt, snap(), nil)
-		if startSign ~= 0 and math.sign(state.controls.pitch) == -startSign then
-			overshot = true
-		end
-	end
-	record("Recentred controls do not overshoot neutral", not overshot, "never crossed centre")
+	state = fresh()
+	run(state, 60, nil, pointer(0, 0))
 	record(
-		"Controls settle at neutral after recentring",
+		"Cursor at screen centre is neutral",
+		math.abs(state.controls.pitch) < 1e-6 and math.abs(state.controls.roll) < 1e-6,
+		string.format("pitch %+.6f, roll %+.6f", state.controls.pitch, state.controls.roll)
+	)
+
+	state = fresh()
+	run(state, 30, nil, pointer(0.9, 0.9))
+	local deflected = state.controls.pitch
+	run(state, 90, nil, pointer(0, 0))
+	record(
+		"Returning the cursor to centre releases the controls",
+		math.abs(state.controls.pitch) < 1e-3 and math.abs(state.controls.roll) < 1e-3,
+		string.format("pitch %+.3f -> %+.5f", deflected, state.controls.pitch)
+	)
+
+	-- Proportional in between: half way to the edge is a real fraction of full
+	-- authority, not all of it and not none.
+	state = fresh()
+	run(state, 60, nil, pointer(0, 0.5))
+	local halfway = state.controls.pitch
+	state = fresh()
+	run(state, 60, nil, pointer(0, 1))
+	local fullTravel = state.controls.pitch
+	record(
+		"Deflection is proportional to distance from centre",
+		halfway > 0.05 and halfway < fullTravel * 0.95,
+		string.format("half %.3f vs full %.3f", halfway, fullTravel)
+	)
+
+	-- Beyond the edge - dragged off-window or onto a second monitor - must
+	-- clamp at full travel rather than running away.
+	state = fresh()
+	run(state, 90, nil, Vector2.new(VIEWPORT.X * 6, VIEWPORT.Y * 6))
+	record(
+		"Cursor beyond the screen edge clamps at full travel",
+		state.controls.pitch <= 1 and state.controls.roll <= 1
+			and state.controls.pitch > 0.98 and state.controls.roll > 0.98,
+		string.format("pitch %.4f, roll %.4f", state.controls.pitch, state.controls.roll)
+	)
+
+	--[[
+		Per-axis normalisation, asserted with the SAME pixel offset on both axes.
+
+		On this 16:9 screen 270 px is half the way to the top edge but only 28%
+		of the way to the side, so the identical hand movement must produce less
+		roll than pitch. If the axes were ever collapsed onto one shared radius
+		this is the test that would notice.
+	]]
+	state = fresh()
+	local equalOffset = 270
+	run(state, 60, nil, Vector2.new(VIEWPORT.X * 0.5 + equalOffset, VIEWPORT.Y * 0.5 + equalOffset))
+	record(
+		"Axes normalise independently, so roll is the wider axis",
+		state.controls.roll < state.controls.pitch,
+		string.format("%d px gives roll %.3f but pitch %.3f", equalOffset, state.controls.roll, state.controls.pitch)
+	)
+
+	-- Inside the deadzone, the yoke is exactly neutral rather than nearly so.
+	state = fresh()
+	run(state, 60, nil, pointer(0.01, 0.01))
+	record(
+		"Offsets inside the deadzone are exactly neutral",
+		state.controls.pitch == 0 and state.controls.roll == 0,
+		string.format("pitch %+.6f, roll %+.6f", state.controls.pitch, state.controls.roll)
+	)
+
+	--[[
+		Hands off the yoke. FlightController sends this while a text box is
+		focused, because with a free cursor the pilot moving the mouse to the
+		chat box would otherwise command hard nose-up and full left roll.
+	]]
+	state = fresh()
+	run(state, 30, nil, pointer(0.9, 0.9))
+	for _ = 1, 90 do
+		InputController.update(state, dt, InputController.neutralSnapshot(), nil)
+	end
+	record(
+		"A neutral snapshot releases the yoke",
 		math.abs(state.controls.pitch) < 1e-3 and math.abs(state.controls.roll) < 1e-3,
 		string.format("pitch %+.5f, roll %+.5f", state.controls.pitch, state.controls.roll)
 	)
 
-	-- Trim must survive a recentre: releasing the stick on a trimmed aircraft
-	-- holds the trimmed attitude, which is the entire point of trim.
+	-- ...but must not undo the trim. Letting go of a trimmed aircraft's yoke
+	-- holds the trimmed attitude; that is the entire point of trim.
 	state = fresh()
 	run(state, 120, { "TrimNoseUp" })
 	local trimmed = state.trim
-	run(state, 1, { "RecenterStick" })
+	for _ = 1, 30 do
+		InputController.update(state, dt, InputController.neutralSnapshot(), nil)
+	end
 	record(
-		"X does not clear trim",
+		"Releasing the yoke does not clear trim",
 		math.abs(state.trim - trimmed) < 1e-9,
 		string.format("trim %+.4f preserved", state.trim)
 	)
@@ -823,17 +927,20 @@ function InputController.runTests(): (boolean, { any })
 	-- 6. Expo ---------------------------------------------------------------
 	-- A small deflection must produce less than a linear response; full
 	-- deflection must still reach full authority.
-	state = fresh()
-	run(state, 1, nil, Vector2.new(0, 0))
-	state.stickY = 0.5
-	local shaped = MathUtil.expo(MathUtil.deadzone(0.5, state.config.mouseDeadzone), state.config.mouseExpo)
+	local shaped = MathUtil.expo(MathUtil.deadzone(0.5, InputController.DEFAULTS.mouseDeadzone), InputController.DEFAULTS.mouseExpo)
 	record(
 		"Expo softens the centre",
 		shaped < 0.5,
-		string.format("0.500 stick -> %.4f command", shaped)
+		string.format("0.500 offset -> %.4f command", shaped)
 	)
-	local shapedFull = MathUtil.expo(MathUtil.deadzone(1.0, state.config.mouseDeadzone), state.config.mouseExpo)
+	local shapedFull = MathUtil.expo(MathUtil.deadzone(1.0, InputController.DEFAULTS.mouseDeadzone), InputController.DEFAULTS.mouseExpo)
 	checkRange("Full deflection still reaches full authority", shapedFull, 0.99, 1.0, "")
+
+	-- And the shaping is what actually reaches the controls, which ties the
+	-- cursor position to the commanded deflection end to end.
+	state = fresh()
+	run(state, 90, nil, pointer(0, 0.5))
+	checkRange("Half-screen offset commands the shaped value", state.controls.pitch, shaped - 0.02, shaped + 0.02, "")
 
 	-- 7. Toggles ------------------------------------------------------------
 	state = fresh()
@@ -925,19 +1032,26 @@ function InputController.runTests(): (boolean, { any })
 	-- Manual pitch disconnects it, as on a real autopilot.
 	state = fresh()
 	run(state, 1, { "AltitudeHold" }, nil, level)
-	run(state, 30, nil, Vector2.new(0, 300), level)
+	run(state, 30, nil, pointer(0, 0.6), level)
 	record("Manual pitch disconnects altitude hold", not state.systems.altitudeHold, "disconnected")
 
 	--[[
-		THE regression this guards against.
+		THE regression this guards against, and the absolute yoke makes it more
+		relevant rather than less.
 
-		In Direct mode the stick holds wherever it was put, so a pilot flying
-		with real pitch deflection - the normal way to hold an attitude without
-		trim - would press R and have it engage and disconnect on the same
-		frame. The key would simply appear dead.
+		The yoke sits wherever the cursor is, so a pilot flying with real pitch
+		deflection - the normal way to hold an attitude without trim - has a
+		deflected stick at the moment they reach for R. Testing absolute
+		deflection would engage and disconnect on the same frame, and the key
+		would simply appear dead. The reference is captured at engagement and
+		the test is for MOVEMENT away from it.
+
+		Note the pointer is re-sent unchanged below: holding the yoke still is
+		now literally holding the cursor still.
 	]]
 	state = fresh()
-	run(state, 40, nil, Vector2.new(0, 200), level) -- fly with the stick well back
+	local flyingPointer = pointer(0, 0.5)
+	run(state, 40, nil, flyingPointer, level) -- fly with the stick well back
 	local deflectedPitch = state.controls.pitch
 	record(
 		"Setup: stick is deflected past the disconnect threshold",
@@ -945,15 +1059,15 @@ function InputController.runTests(): (boolean, { any })
 		string.format("pitch %+.3f", deflectedPitch)
 	)
 
-	run(state, 1, { "AltitudeHold" }, nil, level)
+	run(state, 1, { "AltitudeHold" }, flyingPointer, level)
 	record(
 		"R engages with the stick already deflected",
 		state.systems.altitudeHold,
 		"stayed engaged"
 	)
 
-	-- ...and stays engaged while the stick is simply held where it was.
-	run(state, 60, nil, nil, level)
+	-- ...and stays engaged while the cursor is simply held where it was.
+	run(state, 60, nil, flyingPointer, level)
 	record(
 		"Holding the stick still keeps it engaged",
 		state.systems.altitudeHold,
@@ -961,7 +1075,7 @@ function InputController.runTests(): (boolean, { any })
 	)
 
 	-- ...but moving it away from that reference still disconnects.
-	run(state, 40, nil, Vector2.new(0, -250), level)
+	run(state, 40, nil, pointer(0, -0.5), level)
 	record(
 		"Moving the stick from its reference disconnects",
 		not state.systems.altitudeHold,
@@ -1005,7 +1119,12 @@ function InputController.runTests(): (boolean, { any })
 	}
 	local inRange = true
 	for i = 1, 200 do
-		local m = Vector2.new(if i % 2 == 0 then 900 else -900, if i % 3 == 0 then 900 else -900)
+		-- The cursor teleporting corner to corner and far off-screen every
+		-- frame, which is both the worst case and what an alt-tab looks like.
+		local m = Vector2.new(
+			if i % 2 == 0 then VIEWPORT.X * 9 else -VIEWPORT.X * 9,
+			if i % 3 == 0 then VIEWPORT.Y * 9 else -VIEWPORT.Y * 9
+		)
 		local c = InputController.update(state, dt, snap(everything, m), level)
 		if c.pitch < -1 or c.pitch > 1 or c.roll < -1 or c.roll > 1 or c.yaw < -1 or c.yaw > 1
 			or c.throttle < 0 or c.throttle > 1 or c.flaps < 0 or c.flaps > 1

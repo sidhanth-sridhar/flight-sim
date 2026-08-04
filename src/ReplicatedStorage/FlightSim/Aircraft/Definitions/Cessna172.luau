@@ -474,6 +474,30 @@ Cessna172.model = {
 
 			These are the only collidable parts, so the aircraft rests and rolls
 			on its wheels rather than scraping its belly.
+
+			TYRE FRICTION IS ZERO, AND MUST BE. This is the least obvious number
+			in the file, so it is worth the paragraph.
+
+			Roblox friction is isotropic: it resists sideways and forwards
+			equally, which is the one thing a tyre never does. That is precisely
+			why GroundHandling exists - it models lateral grip, rolling
+			resistance, brakes and nose-wheel steering as real forces. Leaving
+			Roblox friction switched on as well does not add realism, it
+			double-counts, and it swamps the model.
+
+			It also stops the aeroplane dead. Static thrust is 2,780 N against a
+			weight of 10,895 N, so the aircraft can only break traction if the
+			effective coefficient is below 2780 / 10895 = 0.255. These wheels
+			shipped at 0.6, which combines with a default 0.3 runway to about
+			0.45 - nearly double what the propeller can overcome. Measured: full
+			power moved it 0.00 m. At friction 0 it accelerates away normally.
+
+			frictionWeight matters as much as friction and is easy to miss.
+			Roblox combines two surfaces as (f1*w1 + f2*w2) / (w1 + w2), so a
+			zero-friction wheel at the default weight of 1 still inherits half
+			the runway's friction. The weight of 100 makes the tyre dominate the
+			combination, so the aircraft behaves the same on any surface and
+			GroundHandling remains the only thing deciding how tyres behave.
 		]]
 		{
 			name = "WheelNose",
@@ -483,7 +507,8 @@ Cessna172.model = {
 			color = Color3.fromRGB(30, 30, 32),
 			shape = "Cylinder",
 			collide = true,
-			friction = 0.6,
+			friction = 0,
+			frictionWeight = 100,
 		},
 		{
 			name = "WheelLeft",
@@ -493,7 +518,8 @@ Cessna172.model = {
 			color = Color3.fromRGB(30, 30, 32),
 			shape = "Cylinder",
 			collide = true,
-			friction = 0.6,
+			friction = 0,
+			frictionWeight = 100,
 		},
 		{
 			name = "WheelRight",
@@ -503,7 +529,8 @@ Cessna172.model = {
 			color = Color3.fromRGB(30, 30, 32),
 			shape = "Cylinder",
 			collide = true,
-			friction = 0.6,
+			friction = 0,
+			frictionWeight = 100,
 		},
 
 		-- Pilot's seat. A VehicleSeat specifically, because Roblox hands
@@ -700,6 +727,51 @@ function Cessna172.runTests(): (boolean, { any })
 		"Wing is above the centre of mass",
 		Cessna172.surfaces[1].offset.Y > com.Y,
 		string.format("wing y=%.2f, CoM y=%.3f", Cessna172.surfaces[1].offset.Y, com.Y)
+	)
+
+	--[[
+		THE AIRCRAFT MUST BE ABLE TO BREAK TRACTION.
+
+		This is a regression test for a bug that made the simulator look
+		completely broken: the aeroplane shipped with tyres at friction 0.6,
+		which combines with a typical runway to about 0.45 - well above the
+		0.255 that 2,780 N of static thrust can overcome against 10,895 N of
+		weight. Full power moved it exactly 0.00 m. From the cockpit that reads
+		as "the controls do nothing", because nothing the pilot does has any
+		effect at all, and there is no error anywhere to suggest otherwise.
+
+		Roblox friction must stay near zero because GroundHandling models tyre
+		behaviour itself - see the note on the wheel parts. This asserts the
+		aeroplane can actually get moving even on an unusually grippy surface.
+	]]
+	local GRIPPIEST_PLAUSIBLE_RUNWAY = 0.5
+	local staticThrust = Engine.getStaticThrust(
+		Cessna172.engine.maxPowerW,
+		Cessna172.engine.propDiameter,
+		rhoSL,
+		Cessna172.engine.figureOfMerit
+	)
+	local weightN = totalMass * 9.80665
+
+	local worstWheel, worstMu = "", 0
+	for _, part in Cessna172.model.parts do
+		if part.collide then
+			-- Roblox combines two surfaces as (f1*w1 + f2*w2) / (w1 + w2).
+			local f, w = part.friction or 0.35, part.frictionWeight or 1
+			local mu = (f * w + GRIPPIEST_PLAUSIBLE_RUNWAY) / (w + 1)
+			if mu > worstMu then
+				worstMu, worstWheel = mu, part.name
+			end
+		end
+	end
+
+	record(
+		"Static thrust can break the tyres loose",
+		worstMu * weightN < staticThrust,
+		string.format(
+			"%s: mu %.3f needs %.0f N to move, thrust is %.0f N",
+			worstWheel, worstMu, worstMu * weightN, staticThrust
+		)
 	)
 
 	-- 3. Stall speeds ------------------------------------------------------

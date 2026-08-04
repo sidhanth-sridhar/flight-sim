@@ -26,15 +26,27 @@
 	That is where forces belong: applying them on RenderStepped or Heartbeat
 	means they are always one frame stale.
 
+	WHERE THE AIRCRAFT COMES FROM
+	-----------------------------
+	Not from here. AircraftService builds it on the server and grants this
+	client network ownership, then fires AircraftAssigned. This controller waits
+	for that event and adopts whatever it is given - it never builds an
+	aircraft outside its own test suite.
+
 	NETWORK OWNERSHIP
 	-----------------
-	Not handled here, because it does not need to be. A VehicleSeat transfers
-	ownership of its whole assembly to whoever sits in it, which is the entire
-	reason the pilot's seat is a VehicleSeat. If the aircraft is not owned by
-	this client the forces written here are simply ignored by the engine, so
-	there is no failure mode to guard against - only a loop doing nothing.
+	Granted by the server at spawn, before this client is ever told the aircraft
+	exists, and verified there - BasePart:IsNetworkOwner() does not exist on the
+	client, so a check here would be dead code that never fires.
+
+	The failure mode is worth knowing because it is silent: forces written to an
+	assembly this client does not own are discarded by the engine with no error
+	and no motion, which from the cockpit looks exactly like broken
+	aerodynamics. If the controls do nothing at all, read the server log before
+	suspecting the physics.
 ]]
 
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -43,11 +55,16 @@ local UserInputService = game:GetService("UserInputService")
 local FlightSim = ReplicatedStorage:WaitForChild("FlightSim")
 
 local Constants = require(FlightSim.Config.Constants)
-local AircraftBuilder = require(FlightSim.Aircraft.AircraftBuilder)
-local Cessna172 = require(FlightSim.Aircraft.Definitions.Cessna172)
+local Remotes = require(FlightSim.Net.Remotes)
+local Registry = require(FlightSim.Aircraft.Registry)
 local Engine = require(FlightSim.Physics.Engine)
 local FlightModel = require(FlightSim.Physics.FlightModel)
 local GroundHandling = require(FlightSim.Physics.GroundHandling)
+
+-- Test-only. runTests() builds its own aircraft rather than asking the server
+-- for one, so that the sequencing can be verified without a live server.
+local AircraftBuilder = require(FlightSim.Aircraft.AircraftBuilder)
+local Cessna172 = require(FlightSim.Aircraft.Definitions.Cessna172)
 
 --[[
 	InputController lives under Controls/, not Controllers/. It is not a
@@ -66,15 +83,16 @@ local min = math.min
 -- =========================================================================
 
 --[[
-	Where the test aircraft appears. AircraftService does not exist yet, so
-	this controller spawns one itself purely so there is something to fly.
+	How long to wait for a replicated aircraft to become complete.
 
-	100 m up, as specified. Note this means the aircraft free-falls onto the
-	baseplate before anyone can reach it. To have it start parked instead, use
-	CFrame.new(0, 1.30, 0) - that is the height at which the tyres rest exactly
-	on a surface whose top is y = 0, derived in GroundHandling.runTests().
+	The server fires AircraftAssigned with a Model reference, but a reference is
+	not a guarantee that every descendant has arrived on this machine yet.
+	Constructing the flight model against a half-replicated aircraft would cache
+	a centre of mass computed from whichever parts happened to exist - every
+	moment arm silently wrong, and nothing to show for it but an aeroplane that
+	flies oddly. So adoption waits for the pieces it needs.
 ]]
-local SPAWN_CFRAME = CFrame.new(0, 1.30, 0)
+local RIG_WAIT_TIMEOUT = 10
 
 -- =========================================================================
 -- STATE
@@ -84,7 +102,13 @@ local player = Players.LocalPlayer
 
 local rig: any = nil
 local seat: VehicleSeat? = nil
+
+-- Two lifetimes, and conflating them was a real bug waiting to happen. The
+-- lifetime connections live as long as the client does; the rig connections
+-- belong to one aircraft and are dropped when it is.
 local connections: { RBXScriptConnection } = {}
+local rigConnections: { RBXScriptConnection } = {}
+
 local stepConnection: RBXScriptConnection? = nil
 local initialised = false
 
@@ -213,7 +237,32 @@ local function setCharacterNeutralised(character: Model?, neutralised: boolean)
 	end
 end
 
-local EMPTY_SNAPSHOT = { held = {}, mouseDelta = Vector2.zero }
+--[[
+	Where the yoke is, in screen pixels, and the screen it is measured against.
+
+	THE GUI INSET IS THE TRAP HERE, and it is worth the explanation because it
+	produces a small permanent bias rather than an obvious failure.
+	GetMouseLocation() measures from the top-left of the area BELOW Roblox's top
+	bar, while Camera.ViewportSize describes the whole render viewport including
+	the strip behind it. Comparing one against the other puts "centre" about
+	half the inset too low - roughly 18 px on a 1080p screen, a few percent of
+	permanent nose-up that a pilot would feel as a trimmed-out aircraft and
+	never think to blame on a coordinate space.
+
+	Both are therefore reduced to the same space: the usable area below the top
+	bar. Verified live rather than assumed - see the handoff.
+]]
+local function readPointer(): (Vector2, Vector2)
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return Vector2.zero, Vector2.zero
+	end
+
+	local inset = GuiService:GetGuiInset()
+	local usable = camera.ViewportSize - Vector2.new(inset.X, inset.Y)
+
+	return UserInputService:GetMouseLocation(), usable
+end
 
 local function stopLoop()
 	if stepConnection then
@@ -225,12 +274,10 @@ local function stopLoop()
 		FlightModel.release(rig.flightModel)
 	end
 
-	--[[
-		Hand the mouse back. Locking it is what makes GetMouseDelta report
-		anything at all - unlocked, it returns zero and the yoke is dead - but
-		leaving it locked after the pilot climbs out would trap the cursor.
-	]]
+	-- Belt and braces. The cursor is already free while flying, but anything
+	-- that locks it later must not strand the pilot with a trapped pointer.
 	UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	UserInputService.MouseIconEnabled = true
 end
 
 local function startLoop()
@@ -238,7 +285,18 @@ local function startLoop()
 		return
 	end
 
-	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+	--[[
+		The cursor stays FREE, and visible, for the whole flight.
+
+		This is the PTFS scheme: the pointer's position on screen is the yoke,
+		so the pilot can see exactly where their controls are and put them back
+		by moving the mouse to the middle. Locking it to centre - which the
+		previous relative scheme required, because GetMouseDelta reports nothing
+		unless the cursor is locked - would make an absolute position
+		meaningless, since a locked cursor never leaves the centre.
+	]]
+	UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	UserInputService.MouseIconEnabled = true
 
 	stepConnection = RunService.Stepped:Connect(function(_, deltaTime)
 		if not rig or not rig.model.Parent then
@@ -246,9 +304,23 @@ local function startLoop()
 			return
 		end
 
-		local snapshot = if isTyping()
-			then EMPTY_SNAPSHOT
-			else InputController.poll(rig.input, UserInputService:GetMouseDelta())
+		--[[
+			Typing releases the yoke rather than freezing it.
+
+			With a free cursor this is not the nicety it was: reaching for the
+			chat box moves the pointer to the bottom-left of the screen, which
+			under absolute control is hard nose-up and full left roll. Sending a
+			neutral snapshot means chatting can never roll the aircraft
+			inverted. Trim is untouched, so a trimmed aircraft keeps its
+			attitude exactly as it would with the pilot's hands off the yoke.
+		]]
+		local snapshot
+		if isTyping() then
+			snapshot = InputController.neutralSnapshot()
+		else
+			local pointer, viewport = readPointer()
+			snapshot = InputController.poll(rig.input, pointer, viewport)
+		end
 
 		FlightController.stepFrame(rig, deltaTime, snapshot)
 	end)
@@ -269,20 +341,145 @@ local function onOccupantChanged()
 		setCharacterNeutralised(character, true)
 		startLoop()
 	else
+		-- Only report a stop if there was something to stop. This runs once on
+		-- adoption, when nobody is aboard yet, and "Flight loop stopped" as the
+		-- first line after spawning an aircraft reads like a fault.
+		local wasRunning = stepConnection ~= nil
 		setCharacterNeutralised(player.Character, false)
 		stopLoop()
-		log("Flight loop stopped")
+		if wasRunning then
+			log("Flight loop stopped")
+		end
 	end
 end
 
-local function teardown()
+-- Drop the current aircraft. Lifetime connections survive, so a replacement
+-- can be adopted afterwards.
+local function releaseRig()
 	stopLoop()
+	for _, connection in rigConnections do
+		connection:Disconnect()
+	end
+	table.clear(rigConnections)
+	rig = nil
+	seat = nil
+end
+
+local function teardown()
+	releaseRig()
 	for _, connection in connections do
 		connection:Disconnect()
 	end
 	table.clear(connections)
-	rig = nil
-	seat = nil
+end
+
+-- =========================================================================
+-- ADOPTION
+-- =========================================================================
+
+--[[
+	Block until the replicated model is complete enough to build a flight model
+	against, or give up. Returns the definition, or nil and a reason.
+
+	Waiting on these four specifically: the root (everything is measured from
+	it), both constraints (there is nothing to write forces to without them),
+	and the seat (there is no way aboard without it). Their arrival does not
+	strictly prove every wing panel has replicated, but the model is parented
+	last by the builder, so in practice the descendants come as one.
+]]
+local function waitForRig(model: Model): (any?, string?)
+	local deadline = os.clock() + RIG_WAIT_TIMEOUT
+
+	while os.clock() < deadline do
+		local root = model.PrimaryPart
+		if
+			root
+			and root:FindFirstChild("AeroForce")
+			and root:FindFirstChild("AeroTorque")
+			and model:FindFirstChild("PilotSeat")
+		then
+			break
+		end
+		if not model.Parent then
+			return nil, "the aircraft was destroyed before it finished replicating"
+		end
+		task.wait()
+	end
+
+	if not model.PrimaryPart then
+		return nil, string.format("aircraft did not finish replicating within %d s", RIG_WAIT_TIMEOUT)
+	end
+
+	--[[
+		Which aeroplane is this? The server stamps the id on the model and both
+		sides resolve it through the same Registry, so the client never assumes
+		it was given the aircraft it asked for - a flight plan or a spawn point
+		may well hand it something else.
+	]]
+	local id = model:GetAttribute("AircraftId")
+	local definition = Registry.get(if type(id) == "string" then id else nil)
+	if not definition then
+		return nil, string.format("unknown AircraftId '%s' on the assigned model", tostring(id))
+	end
+
+	return definition, nil
+end
+
+--[[
+	Take ownership of an aircraft the server has assigned to this client.
+
+	Adopting a second one replaces the first, because the server enforces one
+	aircraft per player: a new assignment means the old aircraft is already
+	gone or about to be.
+]]
+local function adopt(model: Model)
+	if typeof(model) ~= "Instance" or not model:IsA("Model") then
+		warn("[FlightSim:Flight] AircraftAssigned fired without a model - nothing to fly.")
+		return
+	end
+
+	if rig and rig.model == model then
+		return
+	end
+
+	releaseRig()
+
+	local definition, reason = waitForRig(model)
+	if not definition then
+		warn("[FlightSim:Flight] Could not adopt the assigned aircraft: " .. tostring(reason))
+		return
+	end
+
+	local pilotSeat = model:FindFirstChild("PilotSeat")
+	if not (pilotSeat and pilotSeat:IsA("VehicleSeat")) then
+		warn("[FlightSim:Flight] Assigned aircraft has no VehicleSeat named PilotSeat.")
+		return
+	end
+
+	-- Published only once fully assembled; a half-built rig reaching the frame
+	-- loop would be worse than none.
+	rig = {
+		model = model,
+		definition = definition,
+		flightModel = FlightModel.new(model, definition),
+		gear = GroundHandling.new(model, definition),
+		input = InputController.new(definition),
+	}
+	seat = pilotSeat
+
+	table.insert(rigConnections, pilotSeat:GetPropertyChangedSignal("Occupant"):Connect(onOccupantChanged))
+
+	-- The aircraft going away must take the loop with it, or Stepped keeps
+	-- firing against a destroyed assembly every frame for the rest of the
+	-- session.
+	table.insert(rigConnections, model.Destroying:Connect(releaseRig))
+
+	log("Adopted %s (%s)", definition.name, model.Name)
+
+	-- Boarding is server-side now: AircraftService puts the ProximityPrompt on
+	-- the seat, so every player can see and use it. If the pilot was already
+	-- sitting when this arrived - a re-adoption - pick the loop up immediately.
+	onOccupantChanged()
 end
 
 -- =========================================================================
@@ -290,9 +487,16 @@ end
 -- =========================================================================
 
 --[[
-	Called once by Init.client.luau. Anything thrown here is caught by the
-	bootstrap's pcall, which is why nothing below leaves partial state behind:
-	the rig is only published once it is completely assembled.
+	Called once by Init.client.luau.
+
+	Ordering: the AircraftAssigned handler is connected BEFORE the spawn is
+	requested. The server fires that event during the invocation, so connecting
+	afterwards is a race this would sometimes lose - and losing it means sitting
+	on the apron with no aeroplane and no error.
+
+	The request itself runs on its own thread. InvokeServer yields, and the
+	bootstrap starts controllers in order on one thread, so blocking here would
+	hold up every controller after this one for a network round trip.
 ]]
 function FlightController.Init()
 	if initialised then
@@ -300,54 +504,7 @@ function FlightController.Init()
 	end
 	initialised = true
 
-	local model = AircraftBuilder.build(Cessna172, SPAWN_CFRAME, workspace)
-
-	rig = {
-		model = model,
-		definition = Cessna172,
-		flightModel = FlightModel.new(model, Cessna172),
-		gear = GroundHandling.new(model, Cessna172),
-		input = InputController.new(Cessna172),
-	}
-
-	local pilotSeat = model:FindFirstChild("PilotSeat")
-	if not (pilotSeat and pilotSeat:IsA("VehicleSeat")) then
-		error("[FlightController] aircraft has no VehicleSeat named PilotSeat")
-	end
-	seat = pilotSeat
-
-	table.insert(connections, pilotSeat:GetPropertyChangedSignal("Occupant"):Connect(onOccupantChanged))
-
-	--[[
-		Boarding needs a prompt, not a touch. Roblox seats are triggered by the
-		character touching them, and a 5.7 m character cannot touch a 0.55 m
-		seat buried inside the cabin - the root part passes nearly a metre
-		above it. Sit() sidesteps the geometry entirely.
-	]]
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "BoardPrompt"
-	prompt.ActionText = "Board"
-	prompt.ObjectText = Cessna172.name
-	prompt.HoldDuration = 0
-	prompt.MaxActivationDistance = 12
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = pilotSeat
-
-	table.insert(connections, prompt.Triggered:Connect(function(triggeringPlayer)
-		if triggeringPlayer ~= player then
-			return
-		end
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			pilotSeat:Sit(humanoid)
-		end
-	end))
-
-	-- The aircraft going away must take the loop with it, or Stepped keeps
-	-- firing against a destroyed assembly every frame for the rest of the
-	-- session.
-	table.insert(connections, model.Destroying:Connect(teardown))
+	table.insert(connections, Remotes.Get("AircraftAssigned").OnClientEvent:Connect(adopt))
 
 	--[[
 		Dying while seated does not always fire Occupant changed before the
@@ -356,7 +513,61 @@ function FlightController.Init()
 	]]
 	table.insert(connections, player.CharacterRemoving:Connect(stopLoop))
 
-	log("Ready - %s spawned at %s", Cessna172.name, tostring(SPAWN_CFRAME.Position))
+	--[[
+		Dying gets you a fresh aircraft.
+
+		The server treats a spawn request from a player who already has one as
+		"replace it", so this is currently the only route back into the air
+		after putting an aeroplane on its back: die, or respawn the character
+		from the Roblox menu. There is no reset-aircraft key yet - binding one
+		is a decision for the pilot, since the bindings are theirs.
+
+		Death rather than CharacterAdded, deliberately. The initial character
+		may arrive either side of this controller starting, so requesting on
+		CharacterAdded would sometimes fire a second spawn moments after the
+		first and replace an aircraft the pilot had already boarded. Died only
+		ever means what it says.
+	]]
+	local diedConnection: RBXScriptConnection? = nil
+
+	local function watchCharacter(character: Model)
+		if diedConnection then
+			diedConnection:Disconnect()
+		end
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		if humanoid and humanoid:IsA("Humanoid") then
+			diedConnection = humanoid.Died:Connect(function()
+				FlightController.requestAircraft()
+			end)
+		end
+	end
+
+	table.insert(connections, player.CharacterAdded:Connect(watchCharacter))
+	if player.Character then
+		task.spawn(watchCharacter, player.Character)
+	end
+
+	task.spawn(FlightController.requestAircraft)
+end
+
+--[[
+	Ask the server for an aircraft. The reply is only ever a yes or a reason -
+	the aircraft itself arrives on AircraftAssigned, so there is exactly one
+	path by which this client ever adopts one.
+]]
+function FlightController.requestAircraft(aircraftId: string?)
+	local ok, accepted, message = pcall(function()
+		return Remotes.Get("RequestSpawnAircraft"):InvokeServer(aircraftId or Registry.DEFAULT_ID)
+	end)
+
+	if not ok then
+		warn("[FlightSim:Flight] Spawn request failed: " .. tostring(accepted))
+		return
+	end
+
+	if not accepted then
+		warn("[FlightSim:Flight] Server refused to spawn an aircraft: " .. tostring(message))
+	end
 end
 
 function FlightController.Shutdown()
@@ -375,7 +586,15 @@ end
 	Exercises stepFrame() against a real assembly with synthetic input, which
 	covers the sequencing this module exists to get right. It does not test the
 	Roblox event plumbing - sitting down, dying - because that needs a player.
+
+	The rig is built 5 km from the origin, on its own pad, because that is where
+	the aircraft ISN'T. AircraftService parks live aircraft on the origin, and
+	these test parts are created on the client, inside the same workspace, with
+	collision on. A test rig materialising inside the pilot's aeroplane would
+	shove it - and since the pilot's client owns that assembly, the shove would
+	replicate and be entirely real. Distance is the cheap fix.
 ]]
+local TEST_ORIGIN = Vector3.new(5000, 0, 5000)
 function FlightController.runTests(): (boolean, { any })
 	local results = {}
 	local allPassed = true
@@ -393,11 +612,11 @@ function FlightController.runTests(): (boolean, { any })
 	local pad = Instance.new("Part")
 	pad.Name = "__FlightControllerTestPad"
 	pad.Size = Vector3.new(400, 4, 400)
-	pad.Position = Vector3.new(0, -2, 0)
+	pad.Position = TEST_ORIGIN + Vector3.new(0, -2, 0)
 	pad.Anchored = true
 	pad.Parent = workspace
 
-	local model = AircraftBuilder.build(Cessna172, CFrame.new(0, 1.30, 0), workspace)
+	local model = AircraftBuilder.build(Cessna172, CFrame.new(TEST_ORIGIN + Vector3.new(0, 1.30, 0)), workspace)
 
 	--[[
 		Everything from here to the matching cleanup runs inside a pcall.
@@ -419,14 +638,22 @@ function FlightController.runTests(): (boolean, { any })
 	local body = function()
 
 	local dt = 1 / 60
-	local function snap(actions: { string }?, mouse: Vector2?)
+
+	-- A synthetic screen with the cursor parked in the middle, so the yoke sits
+	-- neutral and these sequencing tests are not fighting a phantom roll input.
+	local VIEWPORT = Vector2.new(1920, 1080)
+	local function snap(actions: { string }?, pointerPos: Vector2?)
 		local held = {}
 		if actions then
 			for _, a in actions do
 				held[a] = true
 			end
 		end
-		return { held = held, mouseDelta = mouse or Vector2.zero }
+		return {
+			held = held,
+			pointer = pointerPos or VIEWPORT * 0.5,
+			viewportSize = VIEWPORT,
+		}
 	end
 
 	-- 1. A frame runs and produces something finite.

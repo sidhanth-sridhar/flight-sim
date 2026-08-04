@@ -93,7 +93,9 @@ local redrawAccumulator = 0
 	is exactly the event worth knowing about. So the numbers are sampled every
 	frame even though they are only drawn thirty times a second.
 ]]
-local peaks = { loadFactor = 0, forceMagnitude = 0 }
+-- Kept in step with newPeaks() by a test, because this literal and that
+-- constructor are two places to add a field and one place to forget.
+local peaks = { loadFactor = 0, forceMagnitude = 0, alpha = 0 }
 
 -- =========================================================================
 -- FORMATTING
@@ -155,7 +157,44 @@ function DebugHud.formatCore(telemetry: any, peakState: any?): { { label: string
 		{ label = "ALT", value = DebugHud.num(t.altitude, "%7.1f m") },
 		{ label = "VS", value = DebugHud.num(verticalSpeed, "%+7.2f m/s") .. " " .. DebugHud.num(vsFpm, "%+6.0f fpm") },
 
-		{ label = "AoA", value = DebugHud.num(deg(t.alpha), "%+7.2f deg") },
+		--[[
+			AoA, its peak since the last redraw, and whether it is a stall.
+
+			The peak is here for the same reason it is on G: the stall break is
+			a sub-second event and the redraw runs at 30 Hz.
+
+			The stall marker is the only judgement on this panel. It earns its
+			place because alpha alone cannot tell a pilot whether the number in
+			front of them is fine or a departure, and the wing's stall angle is
+			carried in the telemetry precisely so this line can say so.
+		]]
+		{
+			label = "AoA",
+			value = DebugHud.num(deg(t.alpha), "%+7.2f deg")
+				.. (
+					if DebugHud.stallState(t.alpha, t.stallAlpha) == "stall" then "  << STALL"
+					elseif DebugHud.stallState(t.alpha, t.stallAlpha) == "approaching" then "  < buffet"
+					else ""
+				),
+			peak = if p then DebugHud.num(deg(p.alpha), "pk %+.1f") else nil,
+		},
+
+		--[[
+			ATTITUDE, and it is directly beneath AoA on purpose.
+
+			These two are constantly confused, and the confusion is what made the
+			AoA readout look broken: in a climbing pull the nose can be 20 degrees
+			up while alpha is only 8, because the flight path curves to follow it.
+			Alpha is measured against the AIRFLOW, attitude against the HORIZON.
+			Showing them adjacent makes the difference legible instead of
+			mysterious.
+		]]
+		{
+			label = "ATT",
+			value = DebugHud.num(deg(t.pitchAttitude), "%+7.2f deg")
+				.. "  bank " .. DebugHud.num(deg(t.bankAngle), "%+.1f"),
+		},
+
 		{ label = "BETA", value = DebugHud.num(deg(t.beta), "%+7.2f deg") },
 		{
 			label = "G",
@@ -229,7 +268,7 @@ end
 -- =========================================================================
 
 function DebugHud.newPeaks(): any
-	return { loadFactor = 0, forceMagnitude = 0 }
+	return { loadFactor = 0, forceMagnitude = 0, alpha = 0 }
 end
 
 -- Absolute value, so a hard negative g excursion registers as the peak it is.
@@ -250,11 +289,64 @@ function DebugHud.samplePeaks(peakState: any, telemetry: any)
 			peakState.forceMagnitude = magnitude
 		end
 	end
+
+	--[[
+		ALPHA GETS A PEAK TOO, and it should have had one from the start.
+
+		The note at the top of this file argues that a 30 Hz readout drops most
+		of what happens between samples, and applies that to g and to force. It
+		is just as true of alpha and was not applied - which is what made the
+		stall look like it never happened. Measured on a real stall entry: alpha
+		sat between 8 and 14 degrees through the pull, touched 18.6 at the break,
+		and was back under 3 within a second and a half. At 30 Hz the one number
+		worth seeing is the one most likely to be missed.
+	]]
+	local a = telemetry.alpha
+	if type(a) == "number" and a == a and math.abs(a) > math.abs(peakState.alpha) then
+		peakState.alpha = a
+	end
 end
 
 function DebugHud.resetPeaks(peakState: any)
 	peakState.loadFactor = 0
 	peakState.forceMagnitude = 0
+	peakState.alpha = 0
+end
+
+--[[
+	Is this angle of attack a stall?
+
+	Pure and exported, because it is the one piece of judgement on this panel
+	and the tests should be able to drive it directly. Returns "stall",
+	"approaching", or nil.
+
+	`approaching` starts 3 degrees below the stall angle, which is roughly where
+	a real aircraft's stall warning horn is set - far enough ahead to be a
+	warning rather than a commentary.
+
+	Returns nil when the aircraft does not declare a stall angle rather than
+	guessing one. An instrument that invents its own limit is worse than an
+	instrument that stays quiet.
+]]
+local APPROACHING_MARGIN = math.rad(3)
+
+function DebugHud.stallState(alpha: any, stallAlpha: any): string?
+	if type(alpha) ~= "number" or type(stallAlpha) ~= "number" then
+		return nil
+	end
+	if alpha ~= alpha or stallAlpha <= 0 then
+		return nil
+	end
+
+	-- Magnitude, so an inverted or negative-g stall registers as one.
+	local magnitude = math.abs(alpha)
+	if magnitude >= stallAlpha then
+		return "stall"
+	end
+	if magnitude >= stallAlpha - APPROACHING_MARGIN then
+		return "approaching"
+	end
+	return nil
 end
 
 -- =========================================================================
@@ -724,8 +816,122 @@ function DebugHud.runTests(): (boolean, { any })
 		string.format("peak %.2f g", negative.loadFactor)
 	)
 
+	--[[
+		Alpha needs a peak for the same reason g does, and did not have one.
+
+		Measured on a real stall entry: alpha sat between 8 and 14 degrees
+		through the pull, touched 18.6 at the break, and was back under 3 within
+		a second and a half. At 30 Hz the single number worth seeing was the one
+		most likely to be missed - which is what made the readout look stuck.
+	]]
+	local stallPeak = DebugHud.newPeaks()
+	DebugHud.samplePeaks(stallPeak, { alpha = math.rad(11.2) })
+	DebugHud.samplePeaks(stallPeak, { alpha = math.rad(18.6) }) -- the break
+	DebugHud.samplePeaks(stallPeak, { alpha = math.rad(2.4) })
+	record(
+		"Peak alpha survives the stall break",
+		math.abs(math.deg(stallPeak.alpha) - 18.6) < 0.01,
+		string.format("peak %.1f deg from samples 11.2 / 18.6 / 2.4", math.deg(stallPeak.alpha))
+	)
+
 	DebugHud.resetPeaks(p)
-	record("Peaks reset after a redraw", p.loadFactor == 0 and p.forceMagnitude == 0, "both zero")
+	record(
+		"Peaks reset after a redraw",
+		p.loadFactor == 0 and p.forceMagnitude == 0 and p.alpha == 0,
+		"all three zero"
+	)
+
+	-- 4b. Stall marking --------------------------------------------------------
+	--[[
+		THE thing the pilot asked for. Alpha alone cannot say whether the number
+		in front of you is fine or a departure, and without the wing's stall
+		angle beside it the readout is just a number that moves.
+	]]
+	local STALL_AT = math.rad(16)
+	record(
+		"Well below the stall says nothing at all",
+		DebugHud.stallState(math.rad(4), STALL_AT) == nil,
+		"4 deg against a 16 deg stall -> nil"
+	)
+	record(
+		"Approaching the stall warns before it happens",
+		DebugHud.stallState(math.rad(14), STALL_AT) == "approaching",
+		"14 deg -> approaching (warning starts 3 deg early)"
+	)
+	record(
+		"Past the stall angle says STALL",
+		DebugHud.stallState(math.rad(18.6), STALL_AT) == "stall",
+		"18.6 deg, the measured break -> stall"
+	)
+	--[[
+		Magnitude, not sign: an aeroplane can stall inverted or under negative g,
+		and a check that only looked at positive alpha would stay silent through
+		exactly the departure worth warning about.
+	]]
+	record(
+		"A negative-alpha stall registers too",
+		DebugHud.stallState(math.rad(-18), STALL_AT) == "stall",
+		"-18 deg -> stall"
+	)
+	--[[
+		An aircraft that declares no stall angle gets NO marking rather than a
+		guessed one. An instrument that invents its own limit is worse than one
+		that stays quiet.
+	]]
+	record(
+		"No stall angle means no marking, not a guessed one",
+		DebugHud.stallState(math.rad(30), nil) == nil and DebugHud.stallState(math.rad(30), 0) == nil,
+		"nil and 0 both yield no marking"
+	)
+	record(
+		"A NaN alpha does not claim a stall",
+		DebugHud.stallState(0 / 0, STALL_AT) == nil,
+		"NaN -> nil"
+	)
+
+	-- And it has to reach the rendered line, not just the predicate.
+	local stalled = table.clone(telemetry)
+	stalled.alpha = math.rad(18.6)
+	stalled.stallAlpha = STALL_AT
+	local stalledRows = DebugHud.formatCore(stalled)
+	local aoaRow
+	for _, row in stalledRows do
+		if row.label == "AoA" then aoaRow = row end
+	end
+	record(
+		"The AoA line actually shows the stall",
+		aoaRow ~= nil and string.find(aoaRow.value, "STALL") ~= nil,
+		aoaRow and aoaRow.value or "no AoA row"
+	)
+
+	-- 4c. Attitude is not angle of attack ---------------------------------------
+	--[[
+		The distinction that made the readout look broken. In a climbing pull the
+		nose can be 20 degrees up with alpha at 8, because the flight path curves
+		to follow it. Both are now on the panel, adjacent, so the difference is
+		legible instead of mysterious.
+	]]
+	local climbing = table.clone(telemetry)
+	climbing.alpha = math.rad(8.7)
+	climbing.pitchAttitude = math.rad(20.8)
+	climbing.bankAngle = math.rad(-12.5)
+	local climbRows = DebugHud.formatCore(climbing)
+	local aoaText, attText
+	for _, row in climbRows do
+		if row.label == "AoA" then aoaText = row.value end
+		if row.label == "ATT" then attText = row.value end
+	end
+	record(
+		"Attitude is shown, and separately from AoA",
+		attText ~= nil and aoaText ~= nil and attText ~= aoaText
+			and string.find(attText, "20.80") ~= nil and string.find(aoaText, "8.70") ~= nil,
+		string.format("AoA '%s' vs ATT '%s'", tostring(aoaText), tostring(attText))
+	)
+	record(
+		"Bank angle appears on the attitude line",
+		attText ~= nil and string.find(attText, "-12.5") ~= nil,
+		tostring(attText)
+	)
 
 	-- 5. Garbage in ----------------------------------------------------------
 	--[[

@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 439 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 453 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
 
 🛫 **THE FLIGHT-TEST ENVIRONMENT IS NOW AN AIRPORT, NOT THE BASEPLATE.** Runway 18/36, 1,000 × 23 m, with a parallel taxiway, an apron, full markings and vertical reference objects. See §11 — including why the markings are load-bearing rather than decorative.
 
@@ -15,6 +15,10 @@
 Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and recovery, and landing were all flown. **The behaviour in the air was reported as right**: rotation at the expected speed, Vy pitch holding, clean turns, a predictable stall near the expected AoA with no deep-stall tendency, correct left-turning tendency answered by right rudder, and rudder authority that fades with airspeed as it should.
 
 ➡️ **NEXT TASK: re-fly the landing gate on the real runway.** The Phase 1 gate passed technically, but landings were judged on a featureless baseplate with no depth or speed cue, which is why the flare felt impossible. §11 exists to fix that. Ground effect (§10) is also modelled now, though it is worth only **~45 fpm of cushion out of ~900** — a high wing gets little of it, so the runway markings are expected to help far more than the physics did.
+
+📐 **The AoA readout was not bugged — the panel was missing two things** (§15). Alpha was correct all along; it looked stuck because **attitude was never shown beside it** (20.8° nose-up with only 8.7° of alpha is normal in a climbing pull) and because **alpha had no peak capture**, so a sub-second stall break fell between 30 Hz redraws. The HUD now shows ATT and bank, captures peak alpha, and marks `< buffet` / `<< STALL`.
+
+📋 **Phases 2 to 4 are planned in §14**, written before the instrument work began. Phase 2 (cockpit instruments) is next and is the only one to build.
 
 ⚖️ **The tailplane was rigged the wrong way round, and the aircraft could not be trimmed hands-off anywhere** (§13). Reported as "really hard to nose down on approach". It needed **−0.79 stick** at 65 kt with full flap and **−0.38 in cruise**, against a trim range of only ±0.35. `STAB_INCIDENCE` is now **+1.0°** and `trimLimit` **±0.7**; every configuration now trims hands-off. **No published performance figure moved.**
 
@@ -130,7 +134,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (439 checks total)
+### Verified green (453 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -139,12 +143,12 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 29/29 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
-| `FlightModel` | `Physics/FlightModel.luau` | 40/40 | Client |
+| `FlightModel` | `Physics/FlightModel.luau` | 44/44 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 81/81 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
-| `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
+| `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
@@ -584,6 +588,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **Angle of attack is not pitch attitude, and a panel showing only one of them will be read as broken.** Alpha is measured against the airflow, attitude against the horizon; 20° of attitude with 8° of alpha is normal in a climbing pull. Show both, adjacent. See §15.
+- **Whatever gets peak capture, alpha needs it too.** The 30 Hz redraw argument in §6i was applied to g and force and not to alpha — so the stall break, which lasts under a second, fell between samples and the readout looked stuck at a middling number. Peak capture is what made it visible.
 - **A tail DOWNLOAD pitches the nose UP**, because it acts behind the centre of mass. On this aircraft the wing's AC is also ahead of the CoM, so wing lift is nose-up too — the two add rather than cancel, and the textbook "tail carries a download to balance the wing" picture is simply wrong here. Getting it backwards left the aeroplane untrimmable in every configuration for months, with nothing reporting it. **The CG is aft of the wing AC on a 172, so the tail must LIFT to trim.** See §13.
 - **Trim range must be measured against the aircraft's actual trim requirement, not chosen.** `trimLimit` was ±0.35 against a requirement spanning −0.43 to +0.65 — so the pilot flew every approach holding the stick off-centre. If a control cannot reach the condition the aeroplane needs, it is a missing control.
 - **Studio does not always step CLIENT physics in a Play session.** A plain unanchored part dropped from y = 60 on the Client datamodel did not move at all, with `Workspace.Gravity` correct at 9.8067 — while the identical test on the **Server** datamodel ran normally. Static suites are fine on the client, but **any test that needs the aircraft to actually move must run in the Server datamodel.** This cost a wrong diagnosis: a taxi measurement read 0.0 kt and looked like the steering change had broken thrust, when the force was reaching the constraint the whole time (1,462 N, verified) and nothing was being integrated.
@@ -923,3 +929,44 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 
 ### Deliberately not planned yet
 Phase 5 (weather, wind layers, more aircraft) and Phase 6 (audio, damage, persistence, tutorial) stay as headings only. Planning them now would be guessing about an aircraft that does not exist yet.
+
+---
+
+## 15. The AoA readout — not a bug, two missing things (2026-08-04)
+
+Reported as "the AoA indicator is bugged — it flutters around a number and doesn't go higher when I've clearly pitched well past 20 degrees". **Alpha was correct throughout.** Flown as a real stall entry on the server, full aft stick from cruise:
+
+| time | AoA | pitch attitude | wing CL |
+|---|---|---|---|
+| cruise | +1.1° | −3.7° | 0.48 |
+| +1.5 s | +8.7° | **+20.8°** | 1.13 |
+| +4.5 s | +10.6° | **+45.4°** | 1.29 |
+| +7.5 s | **+18.6°** | +22.9° | **0.84 ← the break** |
+
+Alpha does exceed 18°, and CL collapses from 1.48 to 0.84 exactly where it should. What was missing was the context to read it by.
+
+### Missing thing 1: attitude was never on the panel
+
+**Alpha is measured against the AIRFLOW; attitude against the HORIZON.** In a climbing pull the flight path curves up to follow the nose, so 20.8° of attitude with 8.7° of alpha is not a fault — it is what a pull looks like. With only alpha displayed there was nothing to reveal that, and it reads as a number that refuses to move.
+
+`telemetry.pitchAttitude` and `telemetry.bankAngle` are now computed in the same block as alpha and beta — `asin(LookVector.Y)` and one `atan2`, so effectively free — and the HUD shows `ATT` directly beneath `AoA`.
+
+### Missing thing 2: alpha had no peak capture
+
+§6i already argues that a 30 Hz readout drops most of what happens between samples, and applies per-frame peak capture to load factor and force magnitude. **The same argument applies to alpha and was never applied to it.**
+
+That is precisely what hid the stall. Measured with peak capture live: at +8 s the instantaneous alpha had already fallen back to 13.3°, while the peak over that interval was **19.4°** — so the panel now still reads `<< STALL` for an event that had finished before the redraw. Without the peak, the single most important number of the whole manoeuvre was the one most likely to be missed.
+
+### And the marking the pilot actually asked for
+
+`FlightModel` now publishes **`telemetry.stallAlpha`** — the stall angle of the largest surface by area, which is the main wing on anything that flies. Static, written once at construction, and in the telemetry table because it is meaningless to the physics and essential to an instrument: alpha alone cannot say whether the number in front of you is fine or a departure.
+
+`DebugHud.stallState(alpha, stallAlpha)` is pure and exported, returning `"stall"`, `"approaching"` or nil. The buffet warning starts **3° early**, roughly where a real stall warning horn is set. Three details are asserted:
+- **Magnitude, not sign** — an aeroplane can stall inverted, and a positive-only check stays silent through exactly the departure worth warning about.
+- **No stall angle means no marking**, not a guessed one. An instrument that invents its own limit is worse than one that stays quiet.
+- A NaN alpha never claims a stall.
+
+Measured live: `< buffet` at 13.6°, `<< STALL` at 18.5°, against a 16.0° stall angle.
+
+### Reading this later
+The lesson generalises past this panel and is worth carrying into the Phase 2 gauges: **a raw number is not an instrument.** Alpha was right, available and displayed, and still told the pilot nothing useful, because an instrument has to carry the reference the number is judged against.

@@ -226,6 +226,16 @@ function FlightModel.new(model: Model, definition: any)
 	probeParams.FilterDescendantsInstances = { model }
 	probeParams.IgnoreWater = false
 
+	-- The main wing is the largest surface by area on anything that flies, and
+	-- its stall angle is the one an instrument needs to mark.
+	local stallAlpha, largestArea = 0, 0
+	for _, entry in surfaces do
+		if entry.surface.area > largestArea then
+			largestArea = entry.surface.area
+			stallAlpha = entry.surface.alphaStall
+		end
+	end
+
 	local state = {
 		model = model,
 		definition = definition,
@@ -259,6 +269,25 @@ function FlightModel.new(model: Model, definition: any)
 			verticalSpeed = 0,
 			alpha = 0,
 			beta = 0,
+			pitchAttitude = 0,
+			bankAngle = 0,
+
+			--[[
+				The angle of attack at which the main wing stalls, in radians.
+
+				STATIC - written once here rather than every frame, because it is
+				a property of the aerofoil and not of the flight state. It is in
+				the telemetry table anyway because it is meaningless to the
+				physics and essential to the HUD: without it an instrument can
+				display alpha but cannot say whether that alpha is a problem,
+				which is exactly the gap the pilot reported.
+
+				Taken from the largest surface by area, which is the main wing on
+				any aircraft that flies. Reading it off the definition by name
+				would break the moment an aircraft called its wing something else.
+			]]
+			stallAlpha = stallAlpha,
+
 			loadFactor = 0,
 			density = 0,
 			dynamicPressure = 0,
@@ -548,6 +577,25 @@ function FlightModel.computeForces(
 		telemetry.alpha = 0
 		telemetry.beta = 0
 	end
+
+	--[[
+		ATTITUDE, which is a different thing from angle of attack and is here
+		because confusing the two is the most natural mistake a pilot can make
+		with this HUD.
+
+		Alpha is measured against the AIRFLOW; attitude is measured against the
+		HORIZON. In a climbing pull they diverge enormously - measured on a real
+		stall entry here, 20.8 degrees of attitude with only 8.7 degrees of alpha,
+		because the flight path curves up to follow the nose. Showing only alpha
+		made it look stuck; showing both makes the difference legible.
+
+		Cheap: LookVector.Y is the sine of the pitch attitude directly, and bank
+		falls out of the right and up vectors with no trigonometry beyond one
+		atan2. Negated so that positive bank is right wing down, matching the
+		sign convention `Controls.roll` already uses.
+	]]
+	telemetry.pitchAttitude = math.asin(math.clamp(cf.LookVector.Y, -1, 1))
+	telemetry.bankAngle = -math.atan2(cf.RightVector.Y, cf.UpVector.Y)
 
 	--[[
 		Load factor - what an accelerometer in the cockpit reads, in g.
@@ -1034,6 +1082,70 @@ function FlightModel.runTests(): (boolean, { any })
 			state.telemetry.airspeedIndicated / KT,
 			state.telemetry.airspeedTrue / KT
 		)
+	)
+
+	-- 10b. Attitude is not angle of attack -----------------------------------
+	--[[
+		The pair that made the AoA readout look broken until both were shown.
+
+		Alpha is measured against the AIRFLOW and attitude against the HORIZON,
+		so an aircraft pitched 20 degrees up while climbing along that path has a
+		large attitude and a small alpha. Driven here with a state that separates
+		them by construction: nose 20 degrees up, flying horizontally, which must
+		give attitude 20 and alpha 20 - and then the same nose attitude with the
+		velocity along the nose, which must give attitude 20 and alpha 0.
+	]]
+	local nose20 = CFrame.Angles(math.rad(20), 0, 0)
+
+	FlightModel.computeForces(state, {
+		cframe = nose20,
+		velocity = Vector3.new(0, 0, -60 * KT), -- horizontal flight, nose high
+		angularVelocity = Vector3.zero,
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	record(
+		"Nose high but flying level: attitude and alpha agree",
+		math.abs(math.deg(state.telemetry.pitchAttitude) - 20) < 0.5
+			and math.abs(math.deg(state.telemetry.alpha) - 20) < 0.5,
+		string.format("attitude %.1f, alpha %.1f", math.deg(state.telemetry.pitchAttitude), math.deg(state.telemetry.alpha))
+	)
+
+	FlightModel.computeForces(state, {
+		cframe = nose20,
+		velocity = nose20:VectorToWorldSpace(Vector3.new(0, 0, -60 * KT)), -- along the nose
+		angularVelocity = Vector3.zero,
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	record(
+		"Climbing along the nose: attitude 20, alpha ~0",
+		math.abs(math.deg(state.telemetry.pitchAttitude) - 20) < 0.5
+			and math.abs(math.deg(state.telemetry.alpha)) < 0.5,
+		string.format("attitude %.1f, alpha %.1f - this is why AoA looked stuck",
+			math.deg(state.telemetry.pitchAttitude), math.deg(state.telemetry.alpha))
+	)
+
+	-- Bank, positive to the right, matching the sign Controls.roll already uses.
+	FlightModel.computeForces(state, {
+		cframe = CFrame.Angles(0, 0, math.rad(-30)),
+		velocity = Vector3.new(0, 0, -60 * KT),
+		angularVelocity = Vector3.zero,
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	record(
+		"Bank is positive rolling right",
+		state.telemetry.bankAngle > 0 and math.abs(math.deg(state.telemetry.bankAngle) - 30) < 0.5,
+		string.format("%.1f deg", math.deg(state.telemetry.bankAngle))
+	)
+
+	--[[
+		The wing's stall angle has to reach the telemetry, because an instrument
+		can display alpha but cannot judge it without this number - which is
+		exactly the gap that made the stall invisible on the HUD.
+	]]
+	record(
+		"The wing's stall angle is published for instruments",
+		type(state.telemetry.stallAlpha) == "number" and state.telemetry.stallAlpha > math.rad(8),
+		string.format("%.1f deg", math.deg(state.telemetry.stallAlpha or 0))
 	)
 
 	-- 11b. Ground effect ----------------------------------------------------

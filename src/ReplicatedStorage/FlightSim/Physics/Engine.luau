@@ -236,11 +236,21 @@ function Engine.update(
 	end
 
 	if not state.running then
-		-- Windmilling: the propeller keeps turning in the airstream, so the
-		-- tachometer does not read zero in flight even with the engine dead.
+		--[[
+			Windmilling: the propeller keeps turning in the airstream, so the
+			tachometer does not read zero in flight even with the engine dead.
+
+			CLAMPED AT ZERO, and it has to be. `airspeedMs` here is the FORWARD
+			component, which goes slightly negative on a parked aircraft from
+			ordinary numerical drift - and a bare min() then produced a small
+			NEGATIVE rpm. A tachometer cannot read backwards, and rearward
+			airflow does not drive the propeller in reverse in any sense worth
+			modelling. Found by the debug HUD on its first flight, showing
+			"RPM -0" on a stationary aeroplane.
+		]]
 		state.rpm = if state.starting
 			then config.idleRPM * 0.4
-			else math.min(airspeedMs * 12, config.idleRPM * 0.9)
+			else math.clamp(airspeedMs * 12, 0, config.idleRPM * 0.9)
 		state.powerW = 0
 		state.thrustN = 0
 		state.fuelFlowKgS = 0
@@ -507,6 +517,22 @@ function Engine.runTests(): (boolean, { any })
 	-- if the approach is flown fast. Idle thrust must be small but real.
 	checkRange("Idle thrust", idleState.thrustN, 150, 700, "N")
 	checkRange("Idle RPM", idleState.rpm, 550, 900, "rpm")
+
+	--[[
+		A tachometer cannot read backwards.
+
+		The forward airspeed component goes slightly negative on a parked
+		aircraft through ordinary numerical drift, and the windmilling branch
+		used to pass that straight through - so a stationary aeroplane reported
+		a small negative rpm. Caught by the debug HUD, which showed "RPM -0".
+	]]
+	local backwards = Engine.createState(config)
+	Engine.update(backwards, config, 1 / 60, 0, -3.0, rhoSL, 1)
+	record(
+		"Windmilling rpm never goes negative",
+		backwards.rpm >= 0,
+		string.format("%.4f rpm at -3 m/s of forward airspeed", backwards.rpm)
+	)
 
 	-- 8. Propeller drag ----------------------------------------------------
 	record(

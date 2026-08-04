@@ -6,11 +6,13 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 304 checks green across 11 suites.** Ten run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 331 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
-**Phase 2 has started: the camera system is built** (§6h) — cockpit / chase / free, cycled with V, world-locked while C is held. All three verified live.
+**Every Phase 1 system is now built.** The debug HUD (§6i) was the last one. The camera (§6h) landed first, out of order, because flying the gate through Roblox's default character camera would have been miserable.
 
-⚠️ **Phase 1 is not formally closed.** The debug HUD is still unbuilt and the flight gate has not been flown. The camera was built first on purpose — flying the gate through Roblox's default character camera would have been miserable — but the gate still owes a sign-off before Phase 2 continues.
+➡️ **The only thing left in Phase 1 is the flight gate itself** — taxi, take off, coordinated turn, deliberate stall, recover, land. **The pilot flies it and signs off.** Nothing further in Phase 2 should start until that happens.
+
+**The HUD earned its keep on its first flight**, which is the entire argument for building it: it showed `RPM -0` on a parked aeroplane, which turned out to be a real (if small) bug in `Engine` — windmilling rpm was not clamped at zero. Fixed, with a regression test. See §6i.
 
 **The mouse is now PTFS-style**: free cursor, position = deflection, inverted. See §6g — including the GUI-inset trap, which would otherwise have baked in a permanent nose-up bias.
 
@@ -92,13 +94,13 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (304 checks total)
+### Verified green (331 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
 | `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 | Client |
 | `Aerodynamics` | `Physics/Aerodynamics.luau` | 29/29 | Client |
-| `Engine` | `Physics/Engine.luau` | 23/23 | Client |
+| `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 26/26 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 34/34 | Client |
@@ -106,6 +108,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 67/67 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 13/13 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 22/22 | Client |
+| `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
 
 ```lua
@@ -417,10 +420,36 @@ In practice the eye is inside both `Cabin` and `WingCenter`, and both are hidden
 
 `#CameraController.VIEWS` must equal `InputController.DEFAULTS.viewCount` or V skips a view or overruns. They are kept in step by **assertion, not dependency** — making the input layer require the camera would point the arrow the wrong way — so `runTests()` checks it and `Init()` warns.
 
-### Then
-Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vectors. **No pretty gauges yet.** This is the diagnostic tool for tuning and where bugs actually get found.
+## 6i. `DebugHud` — built and green (2026-08-04, closes Phase 1 build work)
 
-**Phase 1 test gate**: taxi, take off, coordinated turn, deliberate stall, recover, land — on the flat baseplate. Do not proceed to Phase 2 until the user has flown it and signed off.
+`src/StarterPlayer/StarterPlayerScripts/FlightSim/UI/Instruments/DebugHud.luau`, 26/26, started by `Controllers/UIController.luau`.
+
+Raw numbers only. No gauges, no needles. Every value is printed as a number because a number can be checked against a published figure and a needle cannot.
+
+### Why two files
+The bootstrap **only scans `Controllers/`** — the same trap already documented for `Controls/InputController`, which it silently skips. So a module in `UI/Instruments/` can never be reached by `CONTROLLER_ORDER` whatever it is named. The widget therefore lives where widgets belong and a thin `UIController` — a name `CONTROLLER_ORDER` has listed since Phase 0 — owns its lifecycle. Extending the loader to scan more folders was rejected: "controller" would stop meaning anything, and the explicit ordering is what makes startup dependencies visible.
+
+### What it shows
+`IAS`, `TAS` (kt), `ALT` (m), `VS` (m/s and fpm), `AoA`, `BETA` (deg), `G` (g), `THRUST` (N), `RPM`, `FUEL` (kg), `RHO`, `Q`, then `FORCE` and `TORQUE` as raw signed X/Y/Z components, then **one row per aerodynamic surface** with α, CL and CD.
+
+The per-surface rows are the reason this model exists, made visible: an asymmetric stall appears directly as WingLeft and WingRight diverging. Observed live during a departure — `WingLeft CL -0.021` against `WingRight CL +0.779`.
+
+**Units convert here and only here.** The physics stays pure SI; m/s become knots and radians become degrees at this boundary, and nothing converted ever travels back.
+
+### Update rate: 30 Hz drawn, every frame sampled
+Redraw is `Constants.SIM.INSTRUMENT_HZ`. But **load factor and force magnitude are sampled every frame** and the peak since the last redraw is shown beside them. A plain 30 Hz readout aliases exactly the events worth catching — `FlightModel` clamps force at 20 g precisely because spikes happen, and a one-frame spike would otherwise never appear.
+
+### Two things that will confuse someone later
+- **`telemetry.force` is the aerodynamic and propulsive force only.** `FlightController` adds `GroundHandling`'s contribution before writing the constraint, so **on the ground the HUD legitimately disagrees with `AeroForce.Force`, and the difference is the gear load**. In the air they agree. This was noticed as a 2258 vs 1935 N mismatch and chased down before it could look like a bug.
+- **Nothing in the HUD may be `Active` or a `GuiButton`.** The cursor is the yoke and covers the whole screen, so an input-absorbing element here would eat the flight controls. A test counts them and requires zero.
+
+`IgnoreGuiInset` is left **false**, which sidesteps the coordinate trap in §6g by construction: the GUI's origin is already the usable area below the top bar, so a plain pixel offset needs no correction. Nothing here mixes that space with `Camera.ViewportSize`.
+
+### It found a bug on its first flight
+It displayed `RPM -0` on a stationary aeroplane. Not a formatting artefact: `Engine.update`'s windmilling branch used `math.min(airspeedMs * 12, ...)`, and `airspeedMs` is the **forward** component, which drifts slightly negative on a parked aircraft — so the tachometer read backwards. Now clamped at zero, with a regression test asserting rpm stays ≥ 0 at −3 m/s of forward airspeed. This is exactly what the HUD is for.
+
+### Then
+**Phase 1 test gate — the only thing left in Phase 1**: taxi, take off, coordinated turn, deliberate stall, recover, land, on the flat baseplate. **The pilot flies it and signs off.** Do not proceed further into Phase 2 until that happens.
 
 ---
 
@@ -436,6 +465,8 @@ Debug HUD — raw numbers only: IAS, altitude, AoA, G-load, thrust, force vector
 - **A `runTests()` that errors mid-suite leaks its rig into the workspace**, and in Studio that debris survives into the next Play session — where a leftover aircraft looks exactly like a double-spawn bug. It cost real time to diagnose once. `FlightController.runTests` now wraps its body in a `pcall` and destroys the rig either way; **`AircraftBuilder`, `FlightModel` and `GroundHandling` still destroy on the last line and have the same flaw.** If a Play session shows more aircraft than expected, clean `workspace` in *Edit* first.
 - **Altitude hold disconnects on stick MOVEMENT, not absolute deflection.** In Direct mouse mode the stick holds wherever it was put, so testing absolute deflection meant a pilot flying with real pitch input would press R and have it engage and disconnect on the same frame — a dead key with no feedback. The reference position is captured at engagement.
 - **Cross-product order for the lateral axis.** `rollDir:Cross(groundNormal)` points to the aircraft's right; `groundNormal:Cross(rollDir)` points left. Getting it backwards inverts nose-wheel steering and the reported skid direction *without* breaking lateral grip, because grip is sign-symmetric — so the tests that would catch it are the steering ones, not the friction ones. This was caught on the first `GroundHandling` run.
+- **The client bootstrap only scans `Controllers/`.** A module anywhere else — `Controls/`, `UI/Instruments/` — is never started by `CONTROLLER_ORDER`, whatever it is called, and fails **silently**. Give it a thin owner in `Controllers/` instead (see §6i).
+- **`string.format("%.0f", x)` rounds halves to EVEN**, so `1204.5` prints as `1204`, not `1205`. A test fixture sitting on an exact `.5` boundary is testing the C library's rounding mode, not your code. Cost one wrong assertion.
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). During a crash the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once.

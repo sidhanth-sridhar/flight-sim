@@ -604,6 +604,18 @@ function FlightController.isFlying(): boolean
 	return stepConnection ~= nil
 end
 
+--[[
+	The live telemetry block, rewritten by FlightModel every physics frame.
+
+	Read-only, and returned by reference on purpose: the debug HUD samples it
+	every frame to catch one-frame spikes, and copying twenty fields per frame
+	to hand out a snapshot would be pure waste. Nothing outside FlightModel may
+	write to it.
+]]
+function FlightController.getTelemetry(): any?
+	return if rig then rig.flightModel.telemetry else nil
+end
+
 function FlightController.Shutdown()
 	teardown()
 	initialised = false

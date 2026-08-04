@@ -97,6 +97,23 @@ InputController.DEFAULT_BINDINGS = {
 	GearToggle = Enum.KeyCode.L,
 
 	ViewCycle = Enum.KeyCode.V,
+
+	--[[
+		Straight toggle between the inside and outside views, on T.
+
+		V cycles all three and stays exactly as it was; this is the one a pilot
+		actually reaches for in flight, because switching between first and third
+		person is a single press rather than a cycle that can land on Free.
+
+		A KEY, not an on-screen button, and that is forced by the control scheme
+		rather than chosen for tidiness: the cursor IS the yoke, so a button in a
+		corner of the screen could only be clicked by dragging the controls to
+		near-full deflection on the way to it. Pressing T costs no cursor movement
+		at all, which is what makes it safe to use mid-turn. See also the rule in
+		the handoff that nothing in the HUD may be a GuiButton.
+	]]
+	ViewToggle = Enum.KeyCode.T,
+
 	Pause = Enum.KeyCode.P,
 
 	--[[
@@ -182,6 +199,21 @@ InputController.DEFAULTS = {
 	-- Cockpit / chase / free, per the camera modes the design calls for.
 	-- ViewCycle wraps within this count; the camera system owns the meaning.
 	viewCount = 3,
+
+	--[[
+		The two views T alternates between: first person and third person.
+
+		Indices, not names, and deliberately so. The camera owns what a viewIndex
+		MEANS - this module knows only that there are viewCount of them - so
+		hardcoding "1 is the cockpit" in the logic below would point the arrow the
+		wrong way, from input to camera. Carrying the pair as CONFIGURATION keeps
+		the toggle general: it alternates between two numbers it was handed.
+
+		That the two numbers happen to be Cockpit and Chase is asserted at the
+		other end, by CameraController.runTests(), which is where the names live.
+		Same assertion-not-dependency arrangement as viewCount above.
+	]]
+	toggleViews = { 1, 2 },
 }
 
 -- =========================================================================
@@ -244,7 +276,11 @@ export type FlightState = {
 
 function InputController.new(definition: any, overrides: { [string]: any }?)
 	local config = table.clone(InputController.DEFAULTS)
+	-- Both nested tables are cloned, or every InputController in the game would
+	-- share one - and a per-player rebind of either would silently rebind
+	-- everybody's. table.clone is shallow; this is the whole of what it misses.
 	config.altHold = table.clone(InputController.DEFAULTS.altHold)
+	config.toggleViews = table.clone(InputController.DEFAULTS.toggleViews)
 	if overrides then
 		for k, v in overrides do
 			config[k] = v
@@ -378,6 +414,21 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 		-- Wraps rather than growing without bound, so the camera system can
 		-- index straight into its view list with no arithmetic of its own.
 		systems.viewIndex = (systems.viewIndex % config.viewCount) + 1
+	end
+	if rising(state, snapshot, "ViewToggle") then
+		--[[
+			T alternates between the two views in config.toggleViews - first
+			person and third person - leaving V to cycle all of them.
+
+			Note the asymmetry, which is deliberate. Only the FIRST view maps to
+			the second; everything else maps back to the first. So from a view the
+			toggle does not own - Free, or anything a later aircraft adds - T
+			lands on the inside view rather than doing nothing, and a second press
+			takes you outside. A strict two-way swap would leave the key dead in
+			exactly the situation a pilot presses it hardest.
+		]]
+		local inside, outside = config.toggleViews[1], config.toggleViews[2]
+		systems.viewIndex = if systems.viewIndex == inside then outside else inside
 	end
 	-- C is momentary: the camera is held only while the key is down.
 	systems.cameraHold = held.CameraHold == true
@@ -1119,6 +1170,107 @@ function InputController.runTests(): (boolean, { any })
 		"View index stays a valid 1-based index",
 		state.systems.viewIndex >= 1 and state.systems.viewIndex <= InputController.DEFAULTS.viewCount,
 		string.format("viewIndex = %d", state.systems.viewIndex)
+	)
+
+	-- 10c. View toggle (T) ---------------------------------------------------
+	local INSIDE = InputController.DEFAULTS.toggleViews[1]
+	local OUTSIDE = InputController.DEFAULTS.toggleViews[2]
+
+	record(
+		"The toggle pair are two distinct valid views",
+		INSIDE ~= OUTSIDE
+			and INSIDE >= 1 and INSIDE <= InputController.DEFAULTS.viewCount
+			and OUTSIDE >= 1 and OUTSIDE <= InputController.DEFAULTS.viewCount,
+		string.format("toggles %d <-> %d of %d", INSIDE, OUTSIDE, InputController.DEFAULTS.viewCount)
+	)
+
+	state = fresh()
+	record("Starts in the inside view", state.systems.viewIndex == INSIDE, string.format("viewIndex %d", state.systems.viewIndex))
+
+	-- One LONG press, which is the edge-trigger check: without it T would strobe
+	-- between the two views at frame rate and the camera would be unusable.
+	run(state, 120, { "ViewToggle" })
+	record(
+		"A held T press switches to third person exactly once",
+		state.systems.viewIndex == OUTSIDE,
+		string.format("viewIndex %d after 120 frames held", state.systems.viewIndex)
+	)
+
+	run(state, 1, nil)
+	run(state, 120, { "ViewToggle" })
+	record(
+		"T switches back to first person",
+		state.systems.viewIndex == INSIDE,
+		string.format("viewIndex %d", state.systems.viewIndex)
+	)
+
+	--[[
+		From a view the toggle does not own, T must still do something useful.
+
+		Cycle with V onto Free, then press T: it has to land on the inside view
+		rather than sitting inert. This is the asymmetry in update() and it is the
+		case a pilot hits hardest - lost in the orbit camera, wanting the cockpit
+		back now.
+	]]
+	state = fresh()
+	while state.systems.viewIndex == INSIDE or state.systems.viewIndex == OUTSIDE do
+		run(state, 1, { "ViewCycle" })
+		run(state, 1, nil)
+	end
+	local strayView = state.systems.viewIndex
+	run(state, 1, { "ViewToggle" })
+	run(state, 1, nil)
+	record(
+		"T from a view it does not own returns to first person",
+		state.systems.viewIndex == INSIDE,
+		string.format("view %d -> %d", strayView, state.systems.viewIndex)
+	)
+	run(state, 1, { "ViewToggle" })
+	run(state, 1, nil)
+	record(
+		"...and a second press then goes to third person",
+		state.systems.viewIndex == OUTSIDE,
+		string.format("viewIndex %d", state.systems.viewIndex)
+	)
+
+	-- T and V share one number, so V must still behave after T has set it.
+	state = fresh()
+	run(state, 1, { "ViewToggle" })
+	run(state, 1, nil)
+	local afterToggle = state.systems.viewIndex
+	run(state, 1, { "ViewCycle" })
+	run(state, 1, nil)
+	record(
+		"V still cycles normally after T has set the view",
+		state.systems.viewIndex == (afterToggle % InputController.DEFAULTS.viewCount) + 1,
+		string.format("%d -> %d", afterToggle, state.systems.viewIndex)
+	)
+
+	-- Whatever the two are driven with, the result must stay indexable - the
+	-- camera indexes straight into its view list with no bounds check of its own.
+	state = fresh()
+	local viewInRange = true
+	for i = 1, 200 do
+		run(state, 1, if i % 3 == 0 then { "ViewToggle" } elseif i % 5 == 0 then { "ViewCycle" } else nil)
+		run(state, 1, nil)
+		local v = state.systems.viewIndex
+		if v < 1 or v > InputController.DEFAULTS.viewCount or v ~= math.floor(v) then
+			viewInRange = false
+		end
+	end
+	record(
+		"T and V interleaved always leave an indexable view",
+		viewInRange,
+		string.format("200 mixed presses, ended on %d", state.systems.viewIndex)
+	)
+
+	-- Per-instance config, or a rebind on one player would move everybody's.
+	local a, b = fresh(), fresh()
+	a.config.toggleViews[1] = 99
+	record(
+		"toggleViews is cloned per instance, not shared",
+		b.config.toggleViews[1] == INSIDE and InputController.DEFAULTS.toggleViews[1] == INSIDE,
+		string.format("other instance still %d, defaults still %d", b.config.toggleViews[1], InputController.DEFAULTS.toggleViews[1])
 	)
 
 	-- 11. Ranges -------------------------------------------------------------

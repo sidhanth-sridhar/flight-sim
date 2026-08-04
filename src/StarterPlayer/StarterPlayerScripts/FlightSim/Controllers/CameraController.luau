@@ -536,6 +536,22 @@ function CameraController.Init()
 	end
 
 	--[[
+		T alternates between two view INDICES that the input layer carries as
+		configuration; this module is where those numbers acquire names. Checked
+		here for the same reason as the count above - reordering VIEWS is an
+		entirely reasonable thing to do, and it would silently turn the first
+		person / third person toggle into something else.
+	]]
+	local toggle = InputController.DEFAULTS.toggleViews
+	if CameraController.VIEWS[toggle[1]] ~= "Cockpit" or CameraController.VIEWS[toggle[2]] ~= "Chase" then
+		warn(string.format(
+			"[FlightSim:Camera] T toggles views %s/%s, which are '%s'/'%s' rather than Cockpit/Chase.",
+			tostring(toggle[1]), tostring(toggle[2]),
+			tostring(CameraController.VIEWS[toggle[1]]), tostring(CameraController.VIEWS[toggle[2]])
+		))
+	end
+
+	--[[
 		Bound just AFTER Roblox's own camera step.
 
 		Render priority matters here: the default camera writes CFrame at
@@ -598,6 +614,37 @@ function CameraController.runTests(): (boolean, { any })
 		string.format("%d views (%s) vs viewCount %d",
 			#CameraController.VIEWS, table.concat(CameraController.VIEWS, "/"), InputController.DEFAULTS.viewCount)
 	)
+
+	--[[
+		The other half of that arrangement: T carries two view INDICES, and this
+		is the only place they mean anything. Reordering VIEWS above is a
+		reasonable thing to do and would otherwise turn "first person / third
+		person" into "third person / orbit" with nothing to say so.
+	]]
+	local toggle = InputController.DEFAULTS.toggleViews
+	record(
+		"T toggles between Cockpit and Chase specifically",
+		CameraController.VIEWS[toggle[1]] == "Cockpit" and CameraController.VIEWS[toggle[2]] == "Chase",
+		string.format("views %d/%d are '%s'/'%s'",
+			toggle[1], toggle[2],
+			tostring(CameraController.VIEWS[toggle[1]]), tostring(CameraController.VIEWS[toggle[2]]))
+	)
+
+	--[[
+		Neither toggle target may be Free.
+
+		Free hands the camera to Roblox, and solve() returns nil for it. A toggle
+		that landed there would leave the pilot's view being orbited by Roblox's
+		own camera while they believed they had pressed a first/third person key -
+		so this asserts both targets actually produce a CFrame.
+	]]
+	record(
+		"Both toggle targets are scripted views, not Free",
+		CameraController.solve(toggle[1], false, CFrame.new(0, 100, 0), CFrame.new(0, 100, 0), 1 / 60) ~= nil
+			and CameraController.solve(toggle[2], false, CFrame.new(0, 100, 0), CFrame.new(0, 100, 0), 1 / 60) ~= nil,
+		"both return a CFrame"
+	)
+	chasePosition = nil -- solve() above primed the chase smoothing; clear it
 
 	-- 2. Cockpit ------------------------------------------------------------
 	local level = CFrame.new(0, 100, 0)

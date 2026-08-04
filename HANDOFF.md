@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 351 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
+**All 362 checks green across 12 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` runs in the **Server** datamodel (see §4).
 
 **Phase 1 build work is complete.** The reset key (§6j) was the last item. The debug HUD (§6i) closed the systems before it; the camera (§6h) landed first, out of order, because flying the gate through Roblox's default character camera would have been miserable.
 
@@ -14,6 +14,7 @@
 
 **What landed this session**
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
+- **`ViewToggle` on T** (§6k) — first person ↔ third person in one press, asked for as a "button". It is a **key** rather than an on-screen button, and §6k records why: the cursor is the yoke, so a button in a screen corner can only be clicked by dragging the controls to near-full deflection on the way to it.
 
 **Landed the session before**
 - `CameraController` (§6h) — cockpit / chase / free on V, world-locked while C is held.
@@ -100,7 +101,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (351 checks total)
+### Verified green (362 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -111,9 +112,9 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 34/34 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 25/25 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 71/71 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 80/80 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
-| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 22/22 | Client |
+| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 26/26 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 28/28 | **Server** |
 
@@ -237,7 +238,7 @@ InputController.rebind(ic, action, keyCode)
 ### Bindings
 Pilot-specified (do not change): **W/S** throttle ramp, **A/D** rudder, **F/G** flap detents down/up, **C** camera hold, **R** altitude hold, **E** engine toggle, **Backspace** reset aircraft, mouse = pitch/roll.
 
-Chosen here, open to review: **B** brake, **V** cycle view, **, / .** trim down/up, **L** gear (G was taken; inert on the fixed-gear 172), **P** pause.
+Chosen here, open to review: **B** brake, **V** cycle view, **T** toggle first/third person (§6k), **, / .** trim down/up, **L** gear (G was taken; inert on the fixed-gear 172), **P** pause.
 
 **X and M were removed** when the yoke became absolute — see §6g.
 
@@ -490,6 +491,43 @@ Which makes the guard against consuming it while a text box has focus more than 
 ### Verified live, not only in tests
 Real Backspace press, `1` aircraft before and `1` after, but a different model instance — and the server log carries the whole chain: `Reset requested` → `Despawned c172_… (slot 0)` → `Spawned Cessna 172S Skyhawk (c172) at slot 0` → `Adopted`. **Pressed while standing on the apron, never having boarded**, which is precisely the case a seated-only reset would have failed.
 
+## 6k. First person ↔ third person on T (2026-08-04)
+
+`ViewToggle = Enum.KeyCode.T` in `InputController.DEFAULT_BINDINGS`. One press swaps Cockpit and Chase. **V is unchanged** and still cycles all three.
+
+No camera work was needed — both views already existed (§6h). This is one edge-triggered latch and a config pair.
+
+### Asked for as a "button", built as a key, and the reason is structural
+**The cursor is the yoke.** Its screen position *is* the control deflection and the edges are full travel (§6g), so a clickable button in a corner of the screen can only be reached by dragging the controls to near-full deflection on the way to it — a top-right button is full nose-down and full right roll. That is not a styling preference, it is a spiral dive. §6i already forbids `Active` elements and `GuiButton`s in the HUD for the adjacent reason, with a test asserting zero.
+
+A key costs no cursor movement at all, which is what makes it safe to press mid-turn. The alternative offered and declined was a non-interactive HUD label showing the current view; it remains available and breaks nothing, because a `TextLabel` absorbs no input.
+
+### The view indices stayed where they belong
+§6h is explicit that **the camera owns what a `viewIndex` means** and the input layer knows only that there are `viewCount` of them. Hardcoding "1 is the cockpit" into `InputController.update()` would have reversed that arrow, so the pair travels as configuration instead:
+
+```lua
+InputController.DEFAULTS.toggleViews = { 1, 2 }   -- indices, not names
+```
+
+`CameraController` is where those numbers acquire names, so that is where the check lives — `runTests()` asserts `VIEWS[toggleViews[1]] == "Cockpit"` and `[2] == "Chase"`, and `Init()` warns. Same **assertion, not dependency** arrangement already used for `viewCount`. Reordering `VIEWS` is a reasonable thing to do and would otherwise silently turn the toggle into "third person / orbit".
+
+### The asymmetry is deliberate
+Only the *first* view maps to the second; **everything else maps back to the first**. So pressing T while in Free lands in the cockpit rather than doing nothing — which is the case a pilot hits hardest, lost in the orbit camera and wanting the cockpit back now. A strict two-way swap would leave the key dead exactly then.
+
+### `table.clone` is shallow, and that was a latent bug
+`new()` cloned `config.altHold` but the new `toggleViews` would have been shared by reference across every `InputController` in the game — so a per-player rebind would have rebound everybody's. Both nested tables are now cloned, and a test asserts mutating one instance leaves the other and the defaults alone.
+
+### Verified live, not only in tests
+Real T presses on a seated pilot, camera distance from the aircraft measured each time:
+
+| action | result |
+|---|---|
+| seated, start | **0.45 m** — cockpit, `Scriptable` |
+| T | **18.82 m** back, **5.50 m** up — chase, and √(18² + 5.5²) = 18.82 exactly |
+| T | **0.75 m** — back in the cockpit |
+| V, V → Free | `CameraType` **Custom**, min zoom clamped to 8 |
+| T from Free | **0.75 m**, `Scriptable` — cockpit, and free view's zoom clamp restored to 0.5 |
+
 ### Then
 **Phase 1 test gate — the only thing left in Phase 1**: taxi, take off, coordinated turn, deliberate stall, recover, land, on the flat baseplate. **The pilot flies it and signs off.** Do not proceed further into Phase 2 until that happens.
 
@@ -514,6 +552,8 @@ Real Backspace press, `1` aircraft before and `1` after, but a different model i
 - **Roblox friction can pin an aircraft to the runway, and it looks like dead controls.** Effective μ must stay below thrust/weight (0.255 for the 172) or full power moves it 0.00 m. Tyre friction belongs to `GroundHandling`, not to Roblox — see §6f. **`frictionWeight` is half the story**: surfaces combine as `(f1*w1 + f2*w2)/(w1+w2)`, so friction 0 at weight 1 still inherits half the runway's grip.
 - **"The controls do nothing" is not evidence that input or aerodynamics is broken.** Both were provably fine in §6f. Before touching either, apply the force with the aircraft in **free air** — if it accelerates correctly there, the fault is in ground contact, and that one test skips the entire search.
 - **Dying respawns your aircraft**, by design (`FlightController` requests a new one on `Humanoid.Died`). **Backspace does the same thing deliberately** (§6j). During either, the old model is despawned and a new one spawned, so anything holding a reference to `workspace.Aircraft:GetChildren()[1]` can momentarily find nothing. That is the designed reset, not a despawn bug — it cost time to re-derive once. Consumers should follow `CameraController` and re-ask `FlightController.getAircraft()` every frame rather than caching a model.
+- **An on-screen button cannot be a flight control in this game.** The cursor is the yoke, so moving it to a corner to click something commands near-full deflection on both axes on the way there — a top-right button is full nose-down and full right roll. Anything the pilot needs *in flight* has to be a key. This is the same constraint §6i states as "nothing in the HUD may be `Active` or a `GuiButton`", arrived at from the other direction. Non-interactive `TextLabel`s are fine and absorb nothing.
+- **`table.clone` is shallow, and `InputController.DEFAULTS` has nested tables.** `altHold` and `toggleViews` must each be cloned in `new()` or every `InputController` in the game shares one, and a per-player rebind silently rebinds everybody's. It cost nothing this time only because the omission was caught while adding the second one.
 - **A binding in `DEFAULT_BINDINGS` is not proof `update()` consumes it.** `ResetAircraft` is listed there to be rebindable and to be covered by the collision test, but is read by `FlightController` off `InputBegan`, because it has to work when there is no aircraft and therefore no frame loop. `poll()` still reports it as held; nothing acts on that. See §6j.
 - **Studio's command bar has its OWN module cache, separate from the running server's.** `require(SomeService)` from the command bar returns a *second copy* of the module with its own state — its `Init()` has never run, and its bookkeeping tables are empty. This is why `AircraftService.runTests()` reported "0 active" while a live aircraft sat in the workspace, and why its first test spawn tried to park on top of that live aeroplane. Slot occupancy is therefore checked against the world, and `runTests()` registers its collision groups itself.
 - **Roblox sanitises NaN inside property setters.** A NaN velocity is stored as `(0, 0, 0)` and a NaN CFrame position as `y = -1,000,000`. So a NaN check cannot be tested through the datamodel — the assertion would only prove Roblox scrubs NaN. Test the pure predicate directly. (The −1,000,000 does trip the altitude floor, so a position that has gone numerically bad is still caught.)

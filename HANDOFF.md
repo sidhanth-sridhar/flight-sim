@@ -8,7 +8,7 @@
 
 **All 585 checks green across 16 suites.** Fourteen run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
 
-# 🛠️ **PHASE 2 IS BUILT. Only the gate is left** — fly a circuit on instruments (§14): hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall. **The pilot flies it and signs off.**
+# ✅ **PHASE 2 IS SIGNED OFF.** The instrument circuit was flown and passed on 2026-08-04 — an altitude held on the altimeter, a speed on the ASI, a heading on the DI, and the AoA indication marking the stall (§14, §18).
 
 ⚙️ **Tachometer and fuel are in, and the debug HUD toggles on H (§19).** The tach's green arc and redline come from `engine.maxRPM` by identity; the fuel gauge **reads a level, not a mass**, marked E/½/F against `fuelCapacityKg` with a red reserve band derived from 45 minutes at cruise burn. H replaces `Constants.DEBUG.SHOW_PHYSICS_OVERLAY` as the pilot-facing control — the constant is now only the starting state.
 
@@ -32,7 +32,7 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 
 📐 **The AoA readout was not bugged — the panel was missing two things** (§15). Alpha was correct all along; it looked stuck because **attitude was never shown beside it** (20.8° nose-up with only 8.7° of alpha is normal in a climbing pull) and because **alpha had no peak capture**, so a sub-second stall break fell between 30 Hz redraws. The HUD now shows ATT and bank, captures peak alpha, and marks `< buffet` / `<< STALL`.
 
-📋 **Phases 2 to 4 are planned in §14**, written before the instrument work began. Phase 2 (cockpit instruments) is next and is the only one to build.
+📋 **Phases 2 to 6 are planned in §14**, written before the instrument work began, with Phases 5 (weather) and 6 (audio, damage, persistence, tutorial) planned the same day once Phase 2 had a full instrument set. **Phase 4 is now the aircraft itself** — the Cessna modelled inside and out with a proper 3D panel, controls and switches (visual-only for now, interactive later) — and the flight tablet moved to Phase 4b, because there is no point choosing a destination in an aeroplane until it has an interior. Weather (Phase 5) is what makes Phase 4's instrument realism visible.
 
 ⚖️ **The tailplane was rigged the wrong way round, and the aircraft could not be trimmed hands-off anywhere** (§13). Reported as "really hard to nose down on approach". It needed **−0.79 stick** at 65 kt with full flap and **−0.38 in cruise**, against a trim range of only ±0.35. `STAB_INCIDENCE` is now **+1.0°** and `trimLimit` **±0.7**; every configuration now trims hands-off. **No published performance figure moved.**
 
@@ -43,7 +43,6 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 **Open items for the pilot**, in order:
 1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
 2. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
-3. ⬅️ **FLY THE PHASE 2 GATE (§14).** A circuit on instruments: hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall. The panel has been driven with synthetic telemetry, cross-checked against the debug HUD on a takeoff roll, and photographed — but **never flown**. Nothing in Phase 2 is left to build.
 
 **What landed this session**
 - **Tachometer, fuel and the H toggle (§19)** — Phase 2's build is complete. `SixPack` 34 → 48, `UIController` +10.
@@ -918,9 +917,9 @@ This changes **trim, not stability** — static margin depends on lift slopes an
 
 ---
 
-## 14. Plan — Phases 2 to 4
+## 14. Plan — Phases 2 to 6 (with 4b)
 
-Written 2026-08-04, at the pilot's request, **before** starting Phase 2. The rule from §8 still holds: each phase ends with a gate the pilot flies and signs off, and nothing downstream begins until they do.
+Written 2026-08-04, at the pilot's request, **before** starting Phase 2. The rule from §8 still holds: each phase ends with a gate the pilot flies and signs off, and nothing downstream begins until they do. Phases 5 and 6 were planned the same day, at the pilot's request, once Phase 2 had a full instrument set to carry them — a weather system no instrument can read is pointless, so the order is deliberate.
 
 Two phases already ran out of order and it is worth knowing why, because the roadmap in memory still reads as though they have not:
 - **`CameraController` (§6h)** landed during Phase 1 — flying the gate through Roblox's default character camera would have been miserable.
@@ -957,7 +956,26 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 - **Navigation points** already exist per runway (threshold, aiming point, the circuit). Phase 3 extends them between airports.
 - **Streaming.** Roblox's max part size is 2,048 studs and the current field is exactly that; anything larger needs several parts and a streaming config.
 
-### Phase 4 — Flight tablet
+### Phase 4 — The aircraft
+
+**Goal:** make the Cessna look like a Cessna. The physics has been flown against a crude box model since Phase 0 — deliberately, because the numbers were the priority — and the box is now the most visible thing left. This phase replaces it with a properly modelled inside and out.
+
+**Scope**
+1. **Exterior.** The fuselage, wing, tail, struts, gear and prop modelled to the 172S's real shape, replacing the `Cessna172.model` boxes. **The aerodynamic offsets and part layout must NOT change** — `FlightModel` caches geometry at spawn from the definition, the CoM and static margin depend on the mass layout, and §4's published figures are all measured against the current budget. If the model is redrawn, the definition is re-verified, not assumed.
+2. **Cockpit interior.** Panel, seats, yokes, rudder pedals, trim wheel, throttle — and the 3D instruments from §19's roadmap, now that they have somewhere to live. The gauges already drop in almost unchanged: `SixPack.buildPanel()` builds into any parent, `Instrument.luau` is rendering-agnostic.
+3. **Controls and switches as 3D parts** — buttons, knobs, circuit breakers, the whole panel face — **visual only for now**, inert and non-interactive.
+4. **Interactive later, not now.** The cursor-is-the-yoke rule (§6g, §7) means a clickable switch mid-flight *is* the flight controls by construction. When switches become interactive it must be via a modal state that releases the yoke, or usable only on the ground — the same decision §4's tablet faces. **Decide that when you get there, not during the modelling.**
+
+**Refined for realism (2026-08-04), at the pilot's request.** This phase is *modelling*, not *physics* — §4's figures are measured against the current mass and aero layout and must not move. Realism here means the aeroplane **looks and reads like a 172S** without changing what the physics does:
+
+1. **Control surfaces move with the controls.** Ailerons, elevators, rudder, flaps and the trim tab visibly deflect with the pilot's actual inputs, and the prop spins up with RPM. Purely visual, driven by the same signals the physics already reads — the flight model is untouched by definition.
+2. **The instruments read like a real 172, not like the physics.** The gauges have until now shown the perfect number. A real ASI carries static-source position error and the pitot is not where the airflow says it is; a real compass reads magnetic, not true, and lags in turns; the altimeter reads what its baro setting says, and `Atmosphere.getPressureAltitude` already feeds QNH in. These are **display errors, injected in the instrument layer and never in the physics**, and they are the entire training value of the phase — a pilot who learns on a perfect altimeter cannot read a real one.
+3. **Cockpit detail from the real aircraft.** Panel, seats, yokes, pedals, trim wheel, throttle and circuit breakers laid out per the published 172S interior, so §19's `SurfaceGui` panel drops onto its real position. Reference material is already gathered (published 172S panel guides: flightnerdairforce, pilotmall, cessna172sim).
+4. **Anything that moves the mass or the aero is a decision point, not an assumption.** Passengers and baggage shift the CG, and the CoM and static margin depend on the mass layout. If a phase ever wants loadable weight it starts by re-verifying §4's figures with the new layout — it does not silently change them. The modelled aircraft uses exactly the mass budget §4 measures.
+
+**Why this is Phase 4 and not before:** it depends on nothing in Phase 3, but it is the prerequisite for the tablet — there is no point choosing a destination "in the aeroplane" until the aeroplane has an interior. And the 3D-panel roadmap (§19) has been waiting on exactly this since Phase 2.
+
+### Phase 4b — Flight tablet
 
 **Goal:** choose an aircraft and a destination without leaving the aeroplane.
 
@@ -966,8 +984,38 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 - Aircraft picker driven by `Aircraft/Registry.luau`, which already maps id → definition and is the only thing that crosses the network at spawn.
 - **The tablet is the first thing in this project that genuinely wants to absorb input.** The cursor-is-the-yoke rule (§6g, §7) means it cannot simply be a clickable UI while flying — it needs either a modal state that releases the yoke, or to be usable only on the ground. **Decide that before building it, not during.**
 
-### Deliberately not planned yet
-Phase 5 (weather, wind layers, more aircraft) and Phase 6 (audio, damage, persistence, tutorial) stay as headings only. Planning them now would be guessing about an aircraft that does not exist yet.
+### Phase 5 — Weather and the air through which you fly
+
+**Goal:** make the atmosphere the pilot's environment rather than a constant. Phase 4's instrument realism and this phase are two halves of the same thing — the aeroplane reads like a real one because the air it flies through behaves like real air. `Atmosphere.luau` is already the ISA foundation, verified against published tables, so weather is **inputs to existing, proven code, not new physics**.
+
+**Scope**
+1. **Wind.** At minimum a wind *layer* that changes with altitude — one wind at the surface and another aloft is what makes a real circuit different from a still-air one, and it makes crosswind landings exist by construction, which is the single highest-value skill this game can teach. `FlightModel`'s relative-wind model already acts on the air, so wind is a field added to it.
+2. **Turbulence.** A gust model on the standard — Dryden or Von Kármán spectra, per MIL-F-8785C / MIL-HDBK-1797 — driving gust velocities the aircraft's own stability damps, as a real pilot damps them. The tuning rule: *persistent enough to feel like rough air, mild enough that a trimmed aeroplane still holds its trim.* §6i's peak-capture lesson applies here too — gusts act between physics frames, so any instrument fed by them needs the same peak treatment §15 proved was necessary for alpha.
+3. **Wind shear and the microburst.** Low-level shear is the deadliest weather near the ground; the canonical case is the burst ~150 ft AGL on a 90 kt approach, where the loss of headwind is answered by a downdraft. This is the phase's gate, and the reason weather is not decorative — a scenario that makes a landing genuinely hard to save.
+4. **Temperature and QNH as weather inputs.** `Atmosphere` already takes `tempOffsetC` and `qnhPa` — ISA deviation for hot-day performance and the pressure setting an altimeter reads. Phase 5 wires these to selectable presets rather than constants, and Phase 4's instrument-error mechanism becomes visible for the first time.
+5. **A second aircraft — the jet.** `Aircraft/Registry.luau` is already id → definition and the only thing crossing the network at spawn. The jet proves the registry generalises and is where the compressibility correction `Atmosphere` notes for "the Phase 5 jet" actually gets exercised. **It is deliberately the last item in the phase**, not because it is small but because it is the risk: a second aircraft touches every assumption the first one made.
+
+**How to test it.** Wind and gusts are deterministic fields given a seed, so the same seed must reproduce the same flight — assertable in the existing style. The shear gate is a scenario scripted to the canonical numbers (headwind loss, downdraft, height above threshold), flown on instruments.
+
+**Gate:** fly a crosswind landing and fly the wind-shear scenario. The microburst must be **survivable but hard** — if it is not both, the numbers are wrong.
+
+### Phase 6 — Audio, damage, persistence, tutorial
+
+**Goal:** make the aeroplane *feel* like an aeroplane and *remember* what happens to it. Deliberately after Phase 5: audio and damage both need the aircraft and the weather they describe to exist first.
+
+**Scope**
+1. **Audio.** Engine note from RPM (the tach's own source signal), wind over the panel from airspeed, and the stall-warning horn wired to §15's `< buffet` threshold — the instrument layer already computes the exact events the sounds attach to. The panel is the centre of the mix, not the world: this is a cockpit sim, and the sounds that matter are the ones a pilot hears in the seat.
+2. **Damage, in the damage-tolerance spirit of FAA AC 25.571.** A hard landing or an over-G pull should **mark** the aeroplane, not snap it. The design constraint is that a failure state must never invalidate §4's published figures silently — a bent wing changes the numbers, so the change is *surfaced* (visible damage, an instrument marking, a limitation) rather than hidden. Fatigue and overstress tracking at most: this is a training sim teaching "what the aeroplane is telling you", not a maintenance sim.
+3. **Persistence.** The aeroplane remembers where it was parked, its fuel, its damage state and its hours — a DataStore behind `AircraftService`, which already owns the spawn path. Single-player by architecture; the store is the only new piece.
+4. **Tutorial, which already has a skeleton: the gates.** Every phase gate is a task a pilot can actually do — taxi, circuit on instruments, crosswind landing. Phase 6 turns them into an in-game syllabus: choose a lesson, get the aeroplane and weather set up for it (the Phase 5 presets do this for free), fly the gate, and the logbook records the pass.
+
+**How to test it.** Damage thresholds are numbers against §4's verified limits — assert the published envelope holds up to its edge and marks beyond it. Persistence is save → reload → assert the same state. Audio is the one thing arithmetic cannot check: same rule as §17's trap — **if a module makes a sound, listen to it.**
+
+**Gate:** fly a full session with weather, land hard enough to bend something, reload, and find the aeroplane where you left it — damaged, with the hours to prove it.
+
+### Beyond Phase 6 — deliberately not planned yet
+
+Phase 7 (multiplayer sky) and Phase 8 (career — the tablet's destinations as goals) stay as headings only. They are where the architecture already points — server-authority since Phase 1, the tablet's destination picker since Phase 4b — but planning them now would be guessing about a game that has not yet been flown end to end.
 
 ---
 

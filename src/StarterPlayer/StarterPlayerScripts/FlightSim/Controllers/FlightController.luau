@@ -532,9 +532,17 @@ local setCharacterNeutralised = FlightController.setCharacterNeutralised
 
 	The world is 1 stud = 1 m and the aircraft are real scale, but a default
 	Roblox avatar is ~5.7 studs tall - roughly 3x a real human - so it towers
-	over a parked Cessna. ScaleTo() brings it down toward ~1.75 m. The engine's
+	over a parked Cessna. This scales it down toward ~1.75 m. The engine's
 	floor is 0.4, so at 0.4 a default R15 measures ~2.3 m: closer, but not
 	exact, and that is the closest reachable.
+
+	SCALING IS DONE VIA THE R15 SCALE NumberValues, not Humanoid:ScaleTo() -
+	that method does not exist on Humanoid in this engine ("ScaleTo is not a
+	valid member of Humanoid"), and SetScale() does not exist either. The
+	engine watches NumberValue children of the Humanoid named BodyHeightScale,
+	BodyWidthScale, BodyDepthScale and HeadScale, and rescales the rig live
+	while AutomaticScalingEnabled is true. 0.4 is the engine's floor for these
+	values, which is why the target is 0.4 and not smaller.
 
 	COSMETIC AND LOCAL, and deliberately so. The seated pilot is already
 	invisible, massless and non-collidable (setCharacterNeutralised above), so
@@ -545,18 +553,46 @@ local setCharacterNeutralised = FlightController.setCharacterNeutralised
 	physics, the world scale, or the unit conversions.
 ]]
 local HUMAN_SCALE = 0.4
+local SCALE_VALUE_NAMES = { "BodyHeightScale", "BodyWidthScale", "BodyDepthScale", "HeadScale" }
 
 function FlightController.scaleForHumanProportions(character: Model?)
 	if not character then
 		return
 	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then
-		return
-	end
-	-- ScaleTo can throw if the rig is not loaded yet; harmless to skip.
-	pcall(function()
-		humanoid:ScaleTo(HUMAN_SCALE)
+
+	task.spawn(function()
+		-- The scale NumberValues may not exist until the rig has finished
+		-- assembling, so retry until they are there. A fresh character is
+		-- usually ready after a few frames.
+		for attempt = 1, 40 do
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if not humanoid then
+				return
+			end
+			local ok = pcall(function()
+				humanoid.AutomaticScalingEnabled = true
+				for _, name in SCALE_VALUE_NAMES do
+					local value = humanoid:FindFirstChild(name)
+					if not value then
+						value = Instance.new("NumberValue")
+						value.Name = name
+						value.Parent = humanoid
+					end
+					value.Value = HUMAN_SCALE
+				end
+			end)
+			if ok then
+				local hrp = character:FindFirstChild("HumanoidRootPart")
+				print(string.format(
+					"[Avatar] scaled to %.2fx (root part %.2f studs)",
+					HUMAN_SCALE,
+					hrp and hrp.Size.Y or 0
+				))
+				return
+			end
+			task.wait(0.1)
+		end
+		print("[Avatar] FAILED to scale after 40 attempts")
 	end)
 end
 

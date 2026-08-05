@@ -1021,7 +1021,7 @@ function AircraftService.runTests(): (boolean, { any })
 		centreline in front of somebody on short final is the worst thing this
 		service could do, and it is a one-constant mistake away.
 	]]
-	local runway36 = AirportService.getRunway("36") :: any
+	local runway36 = AirportService.getRunway("meadow", "36") :: any
 	record(
 		"A spawned aircraft is nowhere near the runway",
 		math.abs(root.Position.X) > runway36.width / 2 + 11,

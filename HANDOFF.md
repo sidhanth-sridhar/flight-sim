@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 608 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 628 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -185,7 +185,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
-| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
+| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 68/68 | **Server** |
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -1506,3 +1506,54 @@ Both pads are *exactly* flat at their **own** airport's elevation, which is the 
 require(game.ServerScriptService.FlightSim.Services.TerrainService).runTests()  -- Server
 ```
 Verified live: both pads flat to 0.0000 m at their own elevations, and standing on the Ridge pad shows level green ground with no geometry on it yet.
+
+---
+
+## 23. Ridge Strip — the second aerodrome (2026-08-05)
+
+**628/628 across 17 suites**; `AirportService` 48 → 68. Two airports now exist in the world: **Meadow Field** (paved, 250 m, 18/36) and **Ridge Strip** (grass, 400 m, 09/27, 550 × 18 m). **Meadow's geometry is untouched**, and a test asserts it.
+
+### The registry is scoped by airport, because two fields collide on a designator
+
+`RUNWAYS` was one flat table keyed by designator, which worked exactly as long as there was one aerodrome. Meadow and Ridge could each own a "09", and a flat table silently returns whichever was written last — no error, just the wrong runway.
+
+Every entry now carries the airport it belongs to, and the lookups take both:
+
+```lua
+AirportService.getRunway(airportId, runwayId)   -- airport first: "Ridge's zero-niner"
+AirportService.navPoints(airportId, runwayId)
+AirportService.runwayIds(airportId)
+AirportService.allRunways()                     -- every runway everywhere
+```
+
+Only **one** call site outside this module needed changing, which is why the refactor was cheap: `AircraftService` asked for `getRunway("36")`.
+
+**The entries are GENERATED from specs**, not written out. A runway's threshold, departure end and direction all follow from its airport's origin, elevation and heading, so writing them by hand means maintaining the same fact in four places — and Ridge's east-west pair would have been four more chances to get a sign wrong. Meadow's generated values reproduce the old hand-written ones exactly.
+
+⚠️ **`math.sin(math.rad(360))` is about −2.4e-16, not 0.** Generating Meadow's direction naively put its threshold 1.2e-13 off the centreline, which breaks assertions that have always compared against exactly zero. `directionFor()` snaps near-zero components, so the cardinal headings stay exact.
+
+### The builder no longer assumes one orientation
+
+Meadow's builder writes world coordinates and works because its runway happens to run along Z. Rather than rewrite geometry that is signed off, Ridge is built from **vectors**: `along` runs from the centre toward the departure end, `across` is the pilot's right, `up` is height. **No world axis appears in it at all**, so the same code lays out a strip at any heading — 09, 27, 18 or 143.
+
+Part orientation comes from `CFrame.lookAt(position, position + direction)`. `LookVector` is the part's −Z and `Size.Z` is its Z, so a size of `(width, thickness, length)` lands length-along-runway at any heading. A test asserts the strip actually **lies along** its runway rather than across it — a builder that assumed one orientation would put a 550 m strip across the field, and a size check alone would still pass.
+
+### What Ridge Strip is
+
+A mown surface, threshold bars at both ends, edge markers every 60 m, and a windsock. Sparser than Meadow, as a grass strip should be — but **it keeps the edge markers**, because §11 is explicit that vertical objects of known size at known spacing are the depth cue, and a strip has no painted centreline to judge against instead.
+
+**The strip's colour was wrong on first look.** At (104, 138, 72) against terrain at (86, 122, 62) it was very nearly invisible from the ground — the §11 failure again, a surface you cannot see being one you cannot land on. It is now (132, 156, 92): a mown strip really is paler than rough grass, so this is both more legible and more honest.
+
+### One wrong assertion, and it is the float32 trap again
+`|d45.Magnitude − 1| < 1e-9` failed on a correct unit vector. **Vector3 components are float32**, so a unit vector's magnitude is only good to about 1e-7. The *cardinal* checks can still use exact equality — the snap makes those components literally 0 and 1 — but 045 has no exact float32 representation and never will. Same lesson as the y = 250 tolerances already in §7.
+
+### How to test it
+```lua
+require(game.ServerScriptService.FlightSim.Services.AirportService).runTests()  -- Server
+```
+Verified live: strip 18 × 550 m with its top face at exactly y = 400, `LookVector` (1, 0, 0) = east, threshold bars 5.4 m either side of **both** thresholds, 18 edge markers, and 09's departure end exactly 27's threshold.
+
+### Still to come in Phase 3
+1. **`AircraftService` asking which airport** — nearest to the player, already decided (§0).
+2. **Navigation between airports** — distance and bearing.
+3. Streaming: deferred, recorded in §22.

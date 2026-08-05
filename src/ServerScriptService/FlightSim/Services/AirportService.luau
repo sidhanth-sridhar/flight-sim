@@ -119,6 +119,9 @@ local AIRPORTS: { [string]: any } = {
 		-- The runway designators this field owns. Geometry for meadow is the
 		-- one below and is signed off; do not move it.
 		runways = { "18", "36" },
+		-- Explicit, not runways[1]: the list is sorted for display, and 36 is
+		-- the one aircraft park facing and the circuit is described from.
+		defaultRunway = "36",
 	},
 
 	--[[
@@ -144,6 +147,7 @@ local AIRPORTS: { [string]: any } = {
 		origin = Vector3.new(1600, 0, 200),
 		surface = "grass",
 		runways = { "09", "27" },
+		defaultRunway = "09",
 	},
 }
 
@@ -304,6 +308,7 @@ local HANGAR_COLOR = Color3.fromRGB(140, 142, 148)
 
 export type Runway = {
 	id: string, -- "36"
+	airport: string, -- "meadow" - which field this runway belongs to
 	heading: number, -- degrees, 1..360
 	length: number, -- m
 	width: number, -- m
@@ -323,49 +328,128 @@ export type Runway = {
 	circuit - and every consumer downstream wants "runway 36", not "the runway,
 	reversed".
 ]]
-local RUNWAYS: { [string]: Runway } = {
-	["36"] = {
-		id = "36",
-		heading = 360,
-		length = RUNWAY_LENGTH,
-		width = RUNWAY_WIDTH,
-		threshold = Vector3.new(0, SURFACE_Y, THRESHOLD_36_Z),
-		departureEnd = Vector3.new(0, SURFACE_Y, THRESHOLD_18_Z),
-		direction = Vector3.new(0, 0, -1),
+--[[
+	THE RUNWAY REGISTRY IS SCOPED BY AIRPORT, and it had to be.
+
+	It used to be one flat table keyed by designator, which worked exactly as
+	long as there was one aerodrome. Two fields collide immediately: Meadow and
+	Ridge could each own a "09", and a flat table silently returns whichever was
+	written last. Every entry now names the airport it belongs to.
+
+	The entries are GENERATED from these specs rather than written out. A
+	runway's threshold, departure end and direction all follow from its
+	airport's origin, its elevation and its heading, so writing them by hand
+	means writing the same fact four times and maintaining it in four places -
+	and Ridge's east-west runways would have been four more chances to get a
+	sign wrong.
+]]
+local RIDGE_LENGTH = 550
+local RIDGE_WIDTH = 18
+
+local RUNWAY_SPECS: { [string]: { any } } = {
+	meadow = {
 		--[[
 			Left-hand, which is the default for light aircraft everywhere and
 			also the right choice here: the 172's left-turning tendency is
 			modelled and was confirmed in the gate, so a left circuit is the one
 			the aeroplane wants to fly.
 		]]
-		circuit = "left",
+		{ designator = "36", heading = 360, length = RUNWAY_LENGTH, width = RUNWAY_WIDTH, circuit = "left" },
+		{ designator = "18", heading = 180, length = RUNWAY_LENGTH, width = RUNWAY_WIDTH, circuit = "left" },
 	},
-
-	["18"] = {
-		id = "18",
-		heading = 180,
-		length = RUNWAY_LENGTH,
-		width = RUNWAY_WIDTH,
-		threshold = Vector3.new(0, SURFACE_Y, THRESHOLD_18_Z),
-		departureEnd = Vector3.new(0, SURFACE_Y, THRESHOLD_36_Z),
-		direction = Vector3.new(0, 0, 1),
-		circuit = "left",
+	ridge = {
+		-- East-west, where Meadow runs north-south. This is the pair that
+		-- proves nothing downstream assumes one orientation.
+		{ designator = "09", heading = 90, length = RIDGE_LENGTH, width = RIDGE_WIDTH, circuit = "left" },
+		{ designator = "27", heading = 270, length = RIDGE_LENGTH, width = RIDGE_WIDTH, circuit = "left" },
 	},
 }
 
-AirportService.DEFAULT_RUNWAY = "36"
+--[[
+	Heading to a unit direction, in the same convention FlightModel publishes:
+	-Z is north, so heading 360 is (0, 0, -1) and heading 090 is (1, 0, 0).
 
-function AirportService.getRunway(id: string?): Runway?
-	return RUNWAYS[id or AirportService.DEFAULT_RUNWAY]
+	The near-zero snap is not cosmetic. `math.sin(math.rad(360))` is about
+	-2.4e-16 rather than 0, which would put Meadow's threshold 1.2e-13 off the
+	centreline and break assertions that have always compared against exactly
+	zero. Snapping keeps the cardinal headings exact.
+]]
+local function directionFor(heading: number): Vector3
+	local function snap(v: number): number
+		return if math.abs(v) < 1e-9 then 0 else v
+	end
+	local r = math.rad(heading)
+	return Vector3.new(snap(math.sin(r)), 0, snap(-math.cos(r)))
 end
 
-function AirportService.runwayIds(): { string }
+AirportService.directionFor = directionFor
+
+local RUNWAYS: { [string]: { [string]: Runway } } = {}
+
+for airportId, specs in RUNWAY_SPECS do
+	local airport = AIRPORTS[airportId]
+	local centre = Vector3.new(airport.origin.X, airport.elevation, airport.origin.Z)
+	RUNWAYS[airportId] = {}
+
+	for _, spec in specs do
+		local dir = directionFor(spec.heading)
+		local half = spec.length / 2
+		RUNWAYS[airportId][spec.designator] = {
+			id = spec.designator,
+			airport = airportId,
+			heading = spec.heading,
+			length = spec.length,
+			width = spec.width,
+			-- The threshold is BEHIND the centre along the direction of travel.
+			threshold = centre - dir * half,
+			departureEnd = centre + dir * half,
+			direction = dir,
+			circuit = spec.circuit,
+		}
+	end
+end
+
+AirportService.DEFAULT_RUNWAY = "36"
+
+--[[
+	A runway, by airport and designator.
+
+	BOTH arguments are meaningful now, and the airport comes first because that
+	is the order the question is asked in - "Ridge's zero-niner", not "the
+	zero-niner at Ridge". Passing only one argument gets that airport's default
+	runway rather than silently searching every field for a matching number.
+]]
+function AirportService.getRunway(airportId: string?, runwayId: string?): Runway?
+	local airport = AIRPORTS[airportId or PRIMARY_ID]
+	if not airport then
+		return nil
+	end
+	local runways = RUNWAYS[airport.id]
+	if not runways then
+		return nil
+	end
+	return runways[runwayId or airport.defaultRunway]
+end
+
+function AirportService.runwayIds(airportId: string?): { string }
 	local ids = {}
-	for id in RUNWAYS do
+	for id in RUNWAYS[airportId or PRIMARY_ID] or {} do
 		table.insert(ids, id)
 	end
 	table.sort(ids)
 	return ids
+end
+
+-- Every runway everywhere, as { airport, runway } pairs. What navigation
+-- between fields walks.
+function AirportService.allRunways(): { Runway }
+	local all = {}
+	for _, id in AirportService.airportIds() do
+		for _, designator in AirportService.runwayIds(id) do
+			table.insert(all, RUNWAYS[id][designator])
+		end
+	end
+	return all
 end
 
 -- =========================================================================
@@ -383,8 +467,8 @@ end
 	Ground points carry y = SURFACE_Y; airborne points carry the pattern
 	altitude, because a navigation point without a height is only half an answer.
 ]]
-function AirportService.navPoints(runwayId: string?): { [string]: Vector3 }?
-	local runway = AirportService.getRunway(runwayId)
+function AirportService.navPoints(airportId: string?, runwayId: string?): { [string]: Vector3 }?
+	local runway = AirportService.getRunway(airportId, runwayId)
 	if not runway then
 		return nil
 	end
@@ -655,6 +739,131 @@ end
 	point. Written once and called for both directions, so 18 cannot drift out of
 	step with 36.
 ]]
+--[[
+	RIDGE STRIP, and the reason it is built from VECTORS rather than from
+	coordinates.
+
+	Meadow's builder writes world coordinates directly, which is correct and is
+	signed off, and works because Meadow's runway happens to run along Z. Ridge's
+	runs east-west. Rather than rewrite Meadow's geometry - explicitly out of
+	scope - this builds from the runway's own DIRECTION and the pilot's right
+	vector, so the same code lays out a strip at any heading. Point it at 09, 27,
+	18 or 143 and the arithmetic does not change.
+
+	`along` runs from the centre toward the departure end, `across` to the
+	pilot's right looking that way, and `up` is height above the surface. No
+	world axis appears anywhere below.
+
+	It is a GRASS strip, so it is deliberately sparser than Meadow: a mown
+	surface, threshold bars, edge markers and a windsock. What it does NOT drop
+	is the edge markers - §11 is explicit that vertical objects of known size at
+	known spacing are the depth cue, and a strip with no depth cue would be
+	harder to land on than the baseplate was.
+]]
+--[[
+	Deliberately much lighter than the surrounding terrain, which is (86, 122,
+	62). The first attempt used (104, 138, 72) and, looked at from the ground,
+	the strip was very nearly invisible against the field it sits in - the
+	§11 failure all over again, where a surface you cannot see is a surface you
+	cannot land on. A mown strip really is paler than rough grass, so this is
+	both more legible and more honest.
+]]
+local STRIP_GREEN = Color3.fromRGB(132, 156, 92)
+local STRIP_MARKER = Color3.fromRGB(236, 236, 230)
+
+local function buildRidgeStrip(parent: Instance)
+	local airport = AIRPORTS.ridge
+	local runway = RUNWAYS.ridge[airport.defaultRunway]
+	local surfaceY = airport.elevation
+
+	local dir = runway.direction
+	-- The pilot's right, looking down this runway. Same construction as
+	-- buildRunwayEnd above, and asserted there for the same reason.
+	local right = dir:Cross(Vector3.yAxis)
+	local centre = Vector3.new(airport.origin.X, surfaceY, airport.origin.Z)
+
+	local function at(along: number, across: number, up: number?): Vector3
+		return centre + dir * along + right * across + Vector3.new(0, up or 0, 0)
+	end
+
+	-- Oriented so the part's length lies along the runway. CFrame.lookAt's
+	-- LookVector is the part's -Z, and Size.Z is its Z, so a size of
+	-- (width, thickness, length) lands length-along-runway at any heading.
+	local function facing(position: Vector3): CFrame
+		return CFrame.lookAt(position, position + dir)
+	end
+
+	local half = runway.length / 2
+
+	-- ---- The mown surface ------------------------------------------------
+	--[[
+		A part, not terrain, for the same reason Meadow's runway is a part: a
+		sloped terrain fill deviates by over a metre (§20) and a landing surface
+		cannot. It sits proud of the pad exactly as Meadow's pavement does.
+	]]
+	local strip = Instance.new("Part")
+	strip.Name = "RidgeStrip"
+	strip.Size = Vector3.new(runway.width, PAVEMENT_THICKNESS, runway.length)
+	strip.CFrame = facing(at(0, 0, -PAVEMENT_THICKNESS / 2))
+	strip.Anchored = true
+	strip.Locked = true
+	strip.Color = STRIP_GREEN
+	strip.Material = Enum.Material.Grass
+	strip.TopSurface = Enum.SurfaceType.Smooth
+	strip.BottomSurface = Enum.SurfaceType.Smooth
+	strip.Parent = parent
+
+	-- ---- Threshold bars, one set per direction ---------------------------
+	for _, designator in airport.runways do
+		local end_ = RUNWAYS.ridge[designator]
+		-- Distance from the centre to THIS runway's threshold, along its own
+		-- direction: the two ends are the same place approached from opposite
+		-- sides, so this must be derived per runway rather than assumed.
+		local toThreshold = (end_.threshold - centre)
+		for i = -1, 1, 2 do
+			local bar = Instance.new("Part")
+			bar.Name = string.format("RidgeThreshold%s_%d", designator, i)
+			bar.Size = Vector3.new(runway.width * 0.22, 0.04, 6)
+			bar.CFrame = facing(centre + toThreshold + dir * 0 + right * (i * runway.width * 0.3) + Vector3.new(0, 0.02, 0))
+			bar.Anchored = true
+			bar.Locked = true
+			bar.CanCollide = false
+			bar.CanQuery = false
+			bar.Color = STRIP_MARKER
+			bar.Material = Enum.Material.SmoothPlastic
+			bar.Parent = parent
+		end
+	end
+
+	-- ---- Edge markers: the depth cue -------------------------------------
+	--[[
+		Every 60 m down both sides, the same spacing Meadow uses, because the
+		cue only works if the spacing is known and consistent between fields.
+	]]
+	local markerCount = 0
+	for along = -half + 30, half - 30, 60 do
+		for _, side in { -1, 1 } do
+			local marker = Instance.new("Part")
+			marker.Name = string.format("RidgeEdge_%d_%d", markerCount, side)
+			marker.Size = Vector3.new(0.5, 0.8, 0.5)
+			marker.CFrame = facing(at(along, side * (runway.width / 2 + 2), 0.4))
+			marker.Anchored = true
+			marker.Locked = true
+			marker.CanCollide = false
+			marker.CanQuery = false
+			marker.Color = MARKER_BLUE
+			marker.Material = Enum.Material.SmoothPlastic
+			marker.Parent = parent
+		end
+		markerCount += 1
+	end
+
+	-- ---- Windsock ---------------------------------------------------------
+	local sockBase = at(-half + 40, runway.width / 2 + 18, 0)
+	prop("RidgeWindsockPole", Vector3.new(0.3, 8, 0.3), sockBase + Vector3.new(0, 4, 0), Color3.fromRGB(220, 220, 220), parent)
+	prop("RidgeWindsockCone", Vector3.new(1.2, 1.2, 4), sockBase + Vector3.new(0, 7.6, -2.4), Color3.fromRGB(235, 120, 30), parent)
+end
+
 local function buildRunwayEnd(runway: Runway, parent: Instance)
 	local dir = runway.direction
 	local threshold = runway.threshold
@@ -885,8 +1094,8 @@ function AirportService.build(parent: Instance?): Folder
 	)
 
 	-- ---- Per-end markings ------------------------------------------------
-	buildRunwayEnd(RUNWAYS["36"], folder)
-	buildRunwayEnd(RUNWAYS["18"], folder)
+	buildRunwayEnd(RUNWAYS.meadow["36"], folder)
+	buildRunwayEnd(RUNWAYS.meadow["18"], folder)
 
 	-- ---- Edge markers: the depth cue -------------------------------------
 	--[[
@@ -940,6 +1149,8 @@ function AirportService.build(parent: Instance?): Folder
 		)
 	end
 
+	buildRidgeStrip(folder)
+
 	built = folder
 	return folder
 end
@@ -959,7 +1170,7 @@ end
 function AirportService.Init()
 	AirportService.build()
 
-	local runway = AirportService.getRunway() :: Runway
+	local runway = AirportService.getRunway(PRIMARY_ID) :: Runway
 	log(
 		"Ready - runway %s/%s, %d x %d m, apron at (%.0f, %.0f), circuit %s at %d m",
 		"36",
@@ -1004,13 +1215,13 @@ function AirportService.runTests(): (boolean, { any })
 	local body = function()
 
 	-- 1. Registry ------------------------------------------------------------
-	local ids = AirportService.runwayIds()
+	local ids = AirportService.runwayIds("meadow")
 	record("Both runway directions are registered", #ids == 2, table.concat(ids, ", "))
 
-	local r36 = AirportService.getRunway("36") :: Runway
-	local r18 = AirportService.getRunway("18") :: Runway
+	local r36 = AirportService.getRunway("meadow", "36") :: Runway
+	local r18 = AirportService.getRunway("meadow", "18") :: Runway
 	record("Runway 36 and 18 both resolve", r36 ~= nil and r18 ~= nil, "found")
-	record("An unknown designator resolves to nil", AirportService.getRunway("09") == nil, "nil for '09'")
+	record("An unknown designator resolves to nil", AirportService.getRunway("meadow", "09") == nil, "Meadow has no 09; Ridge does")
 
 	--[[
 		The 172 needs about 370 m at sea level. A runway that could not take off
@@ -1065,9 +1276,120 @@ function AirportService.runTests(): (boolean, { any })
 	)
 
 	-- 3. Navigation points ---------------------------------------------------
-	local nav = AirportService.navPoints("36") :: { [string]: Vector3 }
+	-- 2b. The registry is scoped by airport ---------------------------------
+	--[[
+		THE collision the scoping exists to prevent. Both fields could own a
+		"09"; a flat table keyed by designator returns whichever was written
+		last, silently. Meadow has no 09 and Ridge does, and each must answer
+		for itself.
+	]]
+	record(
+		"Two airports are registered",
+		#AirportService.airportIds() == 2,
+		table.concat(AirportService.airportIds(), ", ")
+	)
+	local ridge09 = AirportService.getRunway("ridge", "09")
+	record(
+		"Ridge owns 09 and Meadow does not",
+		ridge09 ~= nil and AirportService.getRunway("meadow", "09") == nil,
+		"the same designator resolves per airport, not globally"
+	)
+	record(
+		"Every runway knows which airport it belongs to",
+		(ridge09 :: any).airport == "ridge" and (r36 :: any).airport == "meadow",
+		"runway.airport is set"
+	)
+	record(
+		"An unknown airport resolves to nil rather than the primary",
+		AirportService.getRunway("nowhere", "09") == nil,
+		"no silent fallback to Meadow"
+	)
+
+	--[[
+		Ridge's runways run EAST-WEST where Meadow's run north-south. This is
+		the pair that proves nothing downstream assumes one orientation - and
+		the reason the geometry is built from direction vectors.
+	]]
+	local ridge27 = AirportService.getRunway("ridge", "27") :: any
+	record(
+		"Ridge 09 points east and 27 points west",
+		math.abs((ridge09 :: any).direction.X - 1) < 1e-9 and math.abs(ridge27.direction.X + 1) < 1e-9,
+		string.format("%s and %s", tostring((ridge09 :: any).direction), tostring(ridge27.direction))
+	)
+	record(
+		"Ridge's runways are perpendicular to Meadow's",
+		math.abs((ridge09 :: any).direction:Dot(r36.direction)) < 1e-9,
+		"09/27 across 18/36"
+	)
+	--[[
+		Generated thresholds, not written ones: each end must be the other's
+		departure end, exactly, at any heading.
+	]]
+	record(
+		"Ridge's two ends are reciprocal",
+		((ridge09 :: any).threshold - ridge27.departureEnd).Magnitude < 1e-6
+			and (ridge27.threshold - (ridge09 :: any).departureEnd).Magnitude < 1e-6,
+		"thresholds and departure ends swap"
+	)
+	record(
+		"Ridge's runway sits at Ridge's elevation, not Meadow's",
+		math.abs((ridge09 :: any).threshold.Y - AirportService.elevationOf("ridge")) < 1e-9
+			and AirportService.elevationOf("ridge") ~= AirportService.elevationOf("meadow"),
+		string.format("%.0f m against Meadow's %.0f m",
+			AirportService.elevationOf("ridge"), AirportService.elevationOf("meadow"))
+	)
+	--[[
+		Short, but long enough. A 172 needs about 370 m to get off at sea level
+		and more at 400 m, so a strip that could not be departed from would be a
+		trap rather than an aerodrome.
+	]]
+	record(
+		"Ridge's strip is short but usable",
+		(ridge09 :: any).length >= 450 and (ridge09 :: any).length < r36.length,
+		string.format("%d m against Meadow's %d m and a ~370 m requirement",
+			(ridge09 :: any).length, r36.length)
+	)
+	record(
+		"allRunways() returns every runway at every field",
+		#AirportService.allRunways() == 4,
+		string.format("%d runways across %d airports",
+			#AirportService.allRunways(), #AirportService.airportIds())
+	)
+
+	--[[
+		Heading to direction, at the cardinals AND at an angle no runway uses.
+		The near-zero snap is what keeps 360 exactly (0, 0, -1) rather than
+		1.2e-13 off the centreline.
+	]]
+	local d360 = AirportService.directionFor(360)
+	local d90 = AirportService.directionFor(90)
+	local d45 = AirportService.directionFor(45)
+	record(
+		"Heading 360 is exactly north, with no floating-point dust",
+		d360.X == 0 and d360.Z == -1,
+		tostring(d360)
+	)
+	record(
+		"Heading 090 is exactly east",
+		d90.X == 1 and d90.Z == 0,
+		tostring(d90)
+	)
+	--[[
+		1e-6, not 1e-9: Vector3 components are float32, so a unit vector's
+		magnitude is only good to about 1e-7. The cardinal checks above CAN use
+		exact equality, because the snap makes those components literally 0 and
+		1 - but 045 has no exact float32 representation and never will. Same
+		lesson as the y = 250 tolerances in §7.
+	]]
+	record(
+		"An off-cardinal heading still gives a unit vector",
+		math.abs(d45.Magnitude - 1) < 1e-6 and d45.X > 0 and d45.Z < 0,
+		string.format("045 -> %s, magnitude %.9f", tostring(d45), d45.Magnitude)
+	)
+
+	local nav = AirportService.navPoints("meadow", "36") :: { [string]: Vector3 }
 	record("Navigation points exist for runway 36", nav ~= nil, "returned a table")
-	record("Navigation points are nil for an unknown runway", AirportService.navPoints("09") == nil, "nil")
+	record("Navigation points are nil for an unknown runway", AirportService.navPoints("meadow", "09") == nil, "nil")
 
 	-- The aiming point must be ON the runway, past the threshold, before the end.
 	local aimDistance = (nav.AimingPoint - r36.threshold).Magnitude
@@ -1096,7 +1418,7 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("downwind X %.0f, base X %.0f", nav.Downwind.X, nav.Base.X)
 	)
 
-	local nav18 = AirportService.navPoints("18") :: { [string]: Vector3 }
+	local nav18 = AirportService.navPoints("meadow", "18") :: { [string]: Vector3 }
 	record(
 		"Runway 18's left circuit is on the east side, being the reciprocal",
 		nav18.Downwind.X > 100 and nav18.Base.X > 100,
@@ -1242,6 +1564,67 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("top face at y = %.6f, SURFACE_Y %.2f", topY, SURFACE_Y)
 	)
 	record("The runway is collidable, so wheels roll on it", runwayPart.CanCollide, "CanCollide = true")
+
+	-- 5b. Ridge Strip, in the world ------------------------------------------
+	local strip = f:FindFirstChild("RidgeStrip") :: Part?
+	record("Ridge Strip exists in the world", strip ~= nil, strip and "Workspace.Airport.RidgeStrip" or "missing")
+	if strip then
+		local ridgeR = AirportService.getRunway("ridge", "09") :: any
+		record(
+			"The strip part matches Ridge's registered dimensions",
+			math.abs((strip :: Part).Size.Z - ridgeR.length) < 1e-3
+				and math.abs((strip :: Part).Size.X - ridgeR.width) < 1e-3,
+			string.format("%.0f x %.0f m", (strip :: Part).Size.Z, (strip :: Part).Size.X)
+		)
+		--[[
+			Built from direction vectors, so the part must actually LIE along
+			its runway. A builder that assumed one orientation would put a
+			550 m strip across the field instead of down it, and the size check
+			above would still pass.
+		]]
+		record(
+			"The strip is laid along its runway, not across it",
+			(strip :: Part).CFrame.LookVector:Dot(ridgeR.direction) > 0.999,
+			string.format("look %s vs runway %s",
+				tostring((strip :: Part).CFrame.LookVector), tostring(ridgeR.direction))
+		)
+		local stripTop = (strip :: Part).Position.Y + (strip :: Part).Size.Y / 2
+		record(
+			"The strip's top face is Ridge's declared elevation",
+			math.abs(stripTop - AirportService.elevationOf("ridge")) < 1e-3,
+			string.format("y = %.3f against %.0f m", stripTop, AirportService.elevationOf("ridge"))
+		)
+		record(
+			"The strip stands proud of the terrain around it",
+			stripTop > AirportService.grassOf("ridge"),
+			string.format("%.3f m against grass at %.2f m", stripTop, AirportService.grassOf("ridge"))
+		)
+		--[[
+			§11 is explicit that vertical objects at known spacing are the depth
+			cue. A grass strip needs them more than a paved runway does, not
+			less, because it has no painted centreline to judge against.
+		]]
+		local edges, bars = 0, 0
+		for _, c in f:GetChildren() do
+			if string.find(c.Name, "RidgeEdge") then edges += 1 end
+			if string.find(c.Name, "RidgeThreshold") then bars += 1 end
+		end
+		record(
+			"The strip has edge markers as a depth cue",
+			edges >= 12 and bars == 4,
+			string.format("%d edge markers, %d threshold bars (2 per end)", edges, bars)
+		)
+		--[[
+			And Meadow is untouched. Its runway is measured and signed off, so
+			the second aerodrome must not have moved it by a millimetre.
+		]]
+		record(
+			"Meadow's runway is exactly where it always was",
+			math.abs(runwayPart.Position.X) < 1e-6 and math.abs(runwayPart.Position.Z) < 1e-6
+				and math.abs(topY - SURFACE_Y) < 1e-3,
+			string.format("(%.3f, %.3f), top y = %.3f", runwayPart.Position.X, runwayPart.Position.Z, topY)
+		)
+	end
 
 	local taxiway = f:FindFirstChild("TaxiwayAlpha") :: Part
 	local apron = f:FindFirstChild("Apron") :: Part
@@ -1405,7 +1788,7 @@ function AirportService.runTests(): (boolean, { any })
 		The circuit's own extents are already asserted further up; this walks the
 		four corners of it and demands ground beneath each.
 	]]
-	local nav = AirportService.navPoints("36")
+	local nav = AirportService.navPoints("meadow", "36")
 	local circuitCorners = {
 		{ (nav :: any).Downwind.X, (nav :: any).Downwind.Z },
 		{ (nav :: any).Base.X, (nav :: any).Base.Z },

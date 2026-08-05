@@ -115,6 +115,35 @@ local AIRPORTS: { [string]: any } = {
 		-- field. Deliberately not zero - see the note below.
 		elevation = 250,
 		origin = Vector3.new(0, 0, 0),
+		surface = "paved",
+		-- The runway designators this field owns. Geometry for meadow is the
+		-- one below and is signed off; do not move it.
+		runways = { "18", "36" },
+	},
+
+	--[[
+		Ridge Strip: a short grass strip 150 m higher and about 1.7 km east.
+
+		It exists to exercise the things a second aerodrome is FOR - a different
+		elevation, a shorter runway, a different surface, and a runway on the
+		other axis. 09/27 runs east-west, where meadow's 18/36 runs along Z, so
+		the geometry builder needs a heading it has never had.
+
+		Its position is fixed by the terrain, not chosen freely: TerrainService
+		fits a flat pad to each airport, and the pads must stay further apart
+		than the blend distance or they pull each other off their declared
+		elevations. This one leaves 210 m of slack.
+
+		GEOMETRY IS NOT BUILT YET - this entry is the elevation the ground is
+		already fitted to. The strip itself is the next system.
+	]]
+	ridge = {
+		id = "ridge",
+		name = "Ridge Strip",
+		elevation = 400,
+		origin = Vector3.new(1600, 0, 200),
+		surface = "grass",
+		runways = { "09", "27" },
 	},
 }
 
@@ -238,9 +267,17 @@ local DOWNWIND_OFFSET = 900
 ]]
 local CIRCUIT_EXTENSION = 450
 
--- The world ground plane, replacing the 512 m baseplate. 2,048 m is Roblox's
--- maximum part size, and it comfortably contains the whole circuit.
-local FIELD_SIZE = 2048
+--[[
+	The extent of the world, which TerrainService fills and which the circuit
+	must fit inside.
+
+	4,096 m, doubled when the second aerodrome arrived. The old 2,048 m was
+	Roblox's maximum PART size and the field used to be one part; terrain is not
+	a part, so retiring the baseplate removed the ceiling. This must match
+	TerrainService.FIELD_SIZE - a test asserts it rather than trusting two files
+	to be edited together.
+]]
+local FIELD_SIZE = 4096
 
 AirportService.SURFACE_Y = SURFACE_Y
 AirportService.GRASS_Y = GRASS_Y

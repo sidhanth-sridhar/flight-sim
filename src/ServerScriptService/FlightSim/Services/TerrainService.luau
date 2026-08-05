@@ -71,9 +71,22 @@ local SURFACE_OFFSET = VOXEL / 2
 -- LAYOUT
 -- =========================================================================
 
--- The same 2,048 m square the baseplate covered, so the circuit in section 11
--- still fits inside the world with the same margins it was checked against.
-local FIELD_SIZE = 2048
+--[[
+	4,096 m square, doubled from the 2,048 m the baseplate covered.
+
+	THE OLD LIMIT WAS A PART LIMIT, NOT A WORLD LIMIT. 2,048 studs is Roblox's
+	maximum part size, and the field used to be one part; terrain is not a part
+	and `Terrain.MaxExtents` measures +/-32,000. Retiring the baseplate (§20)
+	quietly removed the ceiling, and a second aerodrome could not fit under it:
+	the largest pad that satisfied the separation rule inside 2,048 m was 280 m
+	square, against the ~370 m of runway a 172 needs to get off the ground.
+
+	Streaming is STILL not required, and that is the same fact from the other
+	side: nothing in the world is a 2,048 m object any more.
+
+	Costs 65,536 fills instead of 16,384 - measured at 1.96 s against 0.41 s.
+]]
+local FIELD_SIZE = 4096
 local FIELD_HALF = FIELD_SIZE / 2
 
 --[[
@@ -88,11 +101,33 @@ local FIELD_HALF = FIELD_SIZE / 2
 ]]
 local PADS = {
 	{ id = "meadow", x = -110, z = -50, sizeX = 900, sizeZ = 1700 },
+	--[[
+		Ridge Strip, 150 m higher and about 1.7 km east. Its position is not
+		free: the pad-separation rule below requires a gap wider than
+		BLEND_DISTANCE, and this one leaves 910 m against a 700 m blend - 210 m
+		of slack rather than the 10 m that x = 1500 would have left.
+	]]
+	{ id = "ridge", x = 1600, z = 200, sizeX = 700, sizeZ = 900 },
 }
 
--- Where a pad's influence has faded entirely, measured outward from its edge.
--- A hard edge would put a cliff on the approach; this ramps it in.
-local BLEND_DISTANCE = 400
+--[[
+	Where a pad's influence has faded entirely, measured outward from its edge.
+	A hard edge would put a cliff on the approach; this ramps it in.
+
+	Raised 400 -> 700 when the second aerodrome arrived, and the number came
+	from measurement rather than taste. Climbing 150 m between two fields, the
+	worst gradient along the leg measured:
+
+	    400 m blend -> 108%   (a cliff)
+	    600 m blend ->  74%
+	    800 m blend ->  55%
+
+	700 m sits between the last two and still leaves 210 m of slack on the
+	pad-separation rule. A wider blend is always smoother but must never exceed
+	the narrowest gap between two pads, or they start pulling each other off
+	their declared elevations.
+]]
+local BLEND_DISTANCE = 700
 
 --[[
 	Relief amplitude. Deliberately gentle - this is a training field, and the
@@ -425,6 +460,64 @@ function TerrainService.runTests(): (boolean, { any })
 		string.format("every sample at %.2f m", AirportService.GRASS_Y)
 	)
 
+	--[[
+		Every pad must correspond to a REGISTERED airport, or terrain is being
+		flattened for an aerodrome that does not exist - and worse, elevationOf()
+		falls back to the primary field, so the pad would silently come out at
+		the wrong height rather than erroring.
+	]]
+	local orphaned = {}
+	for _, pad in TerrainService.PADS do
+		if not AirportService.getAirport(pad.id) then
+			table.insert(orphaned, pad.id)
+		end
+	end
+	record(
+		"Every pad belongs to a registered airport",
+		#orphaned == 0,
+		if #orphaned == 0
+			then string.format("%d pad(s): %s", #TerrainService.PADS,
+				(function() local n = {} for _, p in TerrainService.PADS do table.insert(n, p.id) end return table.concat(n, ", ") end)())
+			else "no airport for: " .. table.concat(orphaned, ", ")
+	)
+
+	--[[
+		The two files declare the world's extent separately and a mismatch is
+		silent: terrain would simply stop before the circuit did.
+	]]
+	record(
+		"TerrainService and AirportService agree on the field size",
+		FIELD_SIZE == AirportService.FIELD_SIZE,
+		string.format("%d m both", FIELD_SIZE)
+	)
+
+	--[[
+		Each pad reads its OWN airport's height, which is the whole point of the
+		registry. A single-pad world could not tell a correct implementation from
+		one that returned the primary elevation for everything.
+	]]
+	local wrongHeight = {}
+	for _, pad in TerrainService.PADS do
+		local want = AirportService.grassOf(pad.id)
+		local got = TerrainService.surfaceHeightFor(pad.x, pad.z)
+		if math.abs(got - want) > 1e-9 then
+			table.insert(wrongHeight, string.format("%s %.2f vs %.2f", pad.id, got, want))
+		end
+	end
+	record(
+		"Each pad is flat at its OWN airport's elevation",
+		#wrongHeight == 0,
+		if #wrongHeight == 0
+			then (function()
+				local n = {}
+				for _, p in TerrainService.PADS do
+					table.insert(n, string.format("%s %.0f m", p.id, AirportService.elevationOf(p.id)))
+				end
+				return table.concat(n, ", ")
+			end)()
+			else table.concat(wrongHeight, "; ")
+	)
+
 	record(
 		"The pad sits at the airport's own grass height, not at zero",
 		math.abs(TerrainService.surfaceHeightFor(0, 0) - AirportService.GRASS_Y) < 1e-9
@@ -481,10 +574,25 @@ function TerrainService.runTests(): (boolean, { any })
 			prev = h
 		end
 	end
+	--[[
+		The threshold is 8 m over a 10 m step, and it was 2 m until a second
+		aerodrome 150 m higher existed.
+
+		2 m was a fair description of a world with one pad and gentle relief. It
+		is not a description of a world with a 150 m climb in it: the ground
+		between two fields HAS to be steep somewhere, and the measured worst
+		gradient is about 60% with a 700 m blend. Tightening the blend does not
+		remove that, it only concentrates it - 400 m measured 108%.
+
+		What this check is actually for is a DISCONTINUITY: the nearest-pad
+		blending it replaced produced a 45.8 m vertical jump. 8 m over 10 m is
+		comfortably above honest terrain and far below anything that could be
+		called a step.
+	]]
 	record(
 		"The height field is continuous - no cliffs anywhere in it",
-		worstJump < 2.0,
-		string.format("worst %.3f m over a 10 m step, at %s", worstJump, jumpAt)
+		worstJump < 8.0,
+		string.format("worst %.3f m over a 10 m step, at %s (nearest-pad blending gave 45.8 m)", worstJump, jumpAt)
 	)
 
 	--[[
@@ -500,12 +608,32 @@ function TerrainService.runTests(): (boolean, { any })
 			highest = math.max(highest, h)
 		end
 	end
+	--[[
+		Bounded against the SPREAD OF AIRPORT ELEVATIONS, not against one of
+		them, and the first version of this check got that wrong.
+
+		It asserted the whole field stayed within RELIEF_AMPLITUDE of the primary
+		field's grass. That was a true description of a world with one pad, and
+		became false the moment a second aerodrome sat 150 m higher - the ground
+		near Ridge Strip is *supposed* to be 150 m above Meadow Field. Correct
+		code, wrong assertion, which is now a well-worn sentence here.
+
+		What the check is really for is that the sine relief cannot pile a hill
+		into the circuit. So the bound is: no point may sit more than the
+		amplitude outside the range the airports themselves declare.
+	]]
+	local lowestDeclared, highestDeclared = math.huge, -math.huge
+	for _, id in AirportService.airportIds() do
+		local g = AirportService.grassOf(id)
+		lowestDeclared = math.min(lowestDeclared, g)
+		highestDeclared = math.max(highestDeclared, g)
+	end
 	record(
-		"Relief never exceeds the declared amplitude",
-		highest - AirportService.GRASS_Y <= RELIEF_AMPLITUDE + 1e-6
-			and AirportService.GRASS_Y - lowest <= RELIEF_AMPLITUDE + 1e-6,
-		string.format("%.1f m below to %.1f m above, limit %d m",
-			AirportService.GRASS_Y - lowest, highest - AirportService.GRASS_Y, RELIEF_AMPLITUDE)
+		"Relief never exceeds the declared amplitude around the airports",
+		highest <= highestDeclared + RELIEF_AMPLITUDE + 1e-6
+			and lowest >= lowestDeclared - RELIEF_AMPLITUDE - 1e-6,
+		string.format("field %.1f..%.1f m against airports %.1f..%.1f m, amplitude %d m",
+			lowest, highest, lowestDeclared, highestDeclared, RELIEF_AMPLITUDE)
 	)
 	record(
 		"The world is not simply flat - there IS relief out there",

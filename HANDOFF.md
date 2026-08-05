@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 604 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 608 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -184,7 +184,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
-| `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 19/19 | **Server** |
+| `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
 ```lua
@@ -1444,3 +1444,65 @@ That is not cosmetic: §11 exists because the Phase 1 landing gate was flown on 
 require(game.ServerScriptService.FlightSim.Services.TerrainService).runTests()  -- Server
 ```
 **605/605 across 17 suites** — 502 client, 103 server. Verified live: airport, terrain at 249.953 beside a runway at 250.000, aircraft spawned, baseplate retired, spawn lifted to 250.50, and the runway visible from ground level with its markings running to the horizon.
+
+---
+
+## 22. The ground for a second aerodrome (2026-08-05)
+
+**608/608 across 17 suites**; `TerrainService` 20 → 23. The world is now **4,096 m** and carries **two flat pads at different elevations**. Ridge Strip's *runway geometry is not built yet* — this is the ground it will stand on, and the measurements that decided where it can go.
+
+### A second aerodrome did not fit, and the reason was a stale constraint
+
+Searching the real constants for the largest pad that satisfies the pad-separation rule inside the 2,048 m field returned **280 m square**, against the ~370 m of runway a 172 needs to leave the ground. No usable aerodrome fits.
+
+**The 2,048 m limit was Roblox's maximum PART size**, and the field used to be one part. Terrain is not a part — `Terrain.MaxExtents` measures ±32,000 — so retiring the baseplate in §20 had quietly removed the ceiling without anyone noticing. The field is now 4,096 m, at a cost of 65,536 fills instead of 16,384: **1.96 s against 0.41 s**.
+
+**Streaming remains explicitly deferred, and this is the same fact from the other side**: nothing in the world is a 2,048 m object any more, so there is nothing for a streaming config to solve. Revisit only if a *part* ever needs to exceed that.
+
+### Blend distance is a trade-off against pad separation
+
+Climbing 150 m between two fields, the worst gradient along the leg:
+
+| blend | worst gradient |
+|---|---|
+| 400 m (the old value) | **108%** — a cliff |
+| 600 m | 74% |
+| 800 m | 55% |
+
+A wider blend is always smoother, but **it must never exceed the narrowest gap between two pads** or they pull each other off their declared elevations. 700 m is the value chosen: it leaves 210 m of slack against the 910 m gap, and measures **54%** in the built world — a hillside.
+
+That is why Ridge Strip sits at x = 1600 rather than 1500. At 1500 the gap is 810 m, which would have left ten metres of slack.
+
+### Measured in the built world
+
+| | |
+|---|---|
+| Meadow pad | 392 samples, **0.0000 m** peak-to-peak, at 249.953 |
+| Ridge pad | 154 samples, **0.0000 m** peak-to-peak, at 399.953 |
+| Meadow → Ridge, 1,728 m | worst step 4.29 m per 8 m = **54%** |
+
+Both pads are *exactly* flat at their **own** airport's elevation, which is the property the registry exists for and which a single-pad world could not have tested.
+
+### Ridge Strip, declared but not built
+
+`AirportService.AIRPORTS.ridge` — elevation **400 m**, grass, runways **09/27**, origin (1600, 0, 200). It exercises everything a second aerodrome is for: a different elevation, a shorter runway, a different surface, and **a runway on the other axis**. 09/27 runs east–west where Meadow's 18/36 runs along Z, so the geometry builder will need a heading it has never had — and `getRunway()` is currently keyed by designator *globally*, which two airports break.
+
+**Airport A's geometry is untouched**, as instructed.
+
+### Two wrong assertions and one wrong measurement
+
+- **Relief was bounded against ONE airport's height.** The check asserted the whole field stayed within `RELIEF_AMPLITUDE` of the primary field's grass — true of a one-pad world, false the moment a second aerodrome sat 150 m higher. It now bounds the field against the *spread* of declared elevations, which is what it was always trying to say.
+- **The continuity threshold described a world that no longer existed.** 2 m over a 10 m step was fair with one pad and gentle relief; a 150 m climb has to be steep somewhere. It is now 8 m, which still catches the thing it exists for — nearest-pad blending produced a **45.8 m** vertical jump.
+- **And one measurement was wrong before the code was.** A blend comparison reported Meadow's pad breaking by exactly 150 m at BLEND 800 — alarming, and entirely an artefact of writing test terrain at x = 34,000, outside `Terrain.MaxExtents`. Re-run inside the limit, both pads were exactly flat. **Check the harness before believing the result.**
+
+### Still to come in Phase 3
+1. **Ridge Strip's runway geometry** — needs a heading in the builder and `getRunway()` scoped per airport.
+2. **`AircraftService` asking which airport** — the pilot's decision is *nearest to the player*, recorded in §0.
+3. **Navigation between airports** — distance and bearing.
+4. Streaming: deferred, recorded above.
+
+### How to test it
+```lua
+require(game.ServerScriptService.FlightSim.Services.TerrainService).runTests()  -- Server
+```
+Verified live: both pads flat to 0.0000 m at their own elevations, and standing on the Ridge pad shows level green ground with no geometry on it yet.

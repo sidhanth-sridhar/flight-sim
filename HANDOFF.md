@@ -4,9 +4,13 @@
 
 ---
 
-## 0. Resume here — state at 2026-08-04
+## 0. Resume here — state at 2026-08-05
 
-**All 690 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 698 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+
+🧍 **THE PILOT IS 1.75 m, AND THE PREVIOUS ATTEMPT AT IT DID NOTHING AT ALL (§30).** `d19d805` set the R15 scale `NumberValue`s and printed a success line while moving the rig **0.00 studs** — the marker reported the scale it *asked for* beside an unrelated `HumanoidRootPart` number, so it could not tell success from doing nothing. The answer is **`Model:ScaleTo()`** — `Humanoid` has no `ScaleTo`, but a character is a `Model` and that one exists. **There is no 0.4 floor** (it was inferred from a mechanism that was never working) and **no `Motor6D` joints on this rig to rewrite** — it is a constraint rig. The planned manual part-rescaling was never needed. ⚠️ **Leave `AutomaticScalingEnabled` TRUE**: setting it false moves the camera focus onto an unscaled 2-stud constant, putting it 1.30 studs above a shrunken pilot's head. Boarding still moves the aircraft **0.000 m**.
+
+✅ **THE ALTITUDE-HOLD PORPOISE IS FIXED, FLOWN, AND SIGNED OFF (§29).** Recorded at **125.1 kt** — above the 112–118 kt band that used to limit-cycle — **0 vertical-speed crossings and a peak command of 0.219** against the old saturated 0.450. ⚠️ **The slow climb/descent while engaged is WANTED and is not a bug** — the pilot asked for that variability as realism, so **do not add an integrator to flatten it**. Revisit the loop with **weather (Phase 5)**, when density, thermals and hot pockets give it something real to fight; the ~29 m droop is parked there too.
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -179,7 +183,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 38/38 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 46/46 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
@@ -1926,4 +1930,101 @@ require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controls.InputControlle
 
 In the air, and **fast** — this bug only shows above ~110 kt: get to 115–120 kt, press **R**, and it must hold steady instead of hunting. Then engage level, engage mid-climb, and kick the rudder while engaged (it must yaw, and hold the new heading on release). Expect it to settle **low** — see the droop above.
 
-⚠️ **Not yet flown.** Every number here is closed-loop against the real aerodynamics with the engine running, the throttle commanded and the model's measured inertia — but a pilot has not pressed R in the air since the change.
+### ✅ FLOWN AND CONFIRMED — the porpoise is gone (2026-08-05)
+
+The pilot flew it and recorded 900 frames over 15 s. **At IAS 125.1 kt**, which is *above* the 112–118 kt band where the old code limit-cycled:
+
+| | before (§29 recording) | flown, after |
+|---|---|---|
+| VS zero crossings | 60 in 60 s | **0** |
+| peak pitch command | **0.450 — SATURATING** | **0.219** |
+| behaviour | 1.2 s limit cycle, ±5° | no oscillation |
+
+Engage state: ALT 325.5 m, VS +0.23 m/s, attitude −0.95°. **The gain schedule works in the air.** Peak command is half the 0.45 stop, so there is real margin left rather than a fix that only just holds.
+
+### ⚠️ What that recording does NOT establish
+
+**It had not settled.** Vertical speed peaked at +2.68 m/s and was still decaying (~+1.0 m/s) when the recording ended, averaging ~1.6 m/s of climb over the window. **15 s is the capture transient**; §29's ~29 m droop was measured over **180 s**. Where this one ends up — levelling off high, or climbing on — is not answered by this data.
+
+Worth noting for whoever reads the next trace: the autopilot held **~−0.19 of command steadily while the aeroplane climbed**. That is ~42% of the available authority pointed the other way, so the loop was demanding a descent and losing. That is the proportional-droop mechanism of §29 showing up as a **climb** rather than as the documented level-but-low case — the sign depends on the energy state at engagement, and only the low case had been recorded before.
+
+⚠️ **`pitch` in the CSV is a normalised elevator command, not an angle.** It runs to `pitchLimit` = 0.45, which is what the 0.44 SATURATING flag is against. Attitude is the separate `att_deg` column. This was misread once already as "−0.19 rad ≈ −11°", which makes a climbing aeroplane look gently nose-down instead of fighting the autopilot.
+
+**Still unflown from the test list above**: engage while level, engage mid-climb, and kicking the rudder while engaged (it must yaw and hold the new heading on release).
+
+### ✅ SIGNED OFF BY THE PILOT — the drift is WANTED, do not "fix" it
+
+> *"Altitude hold works perfectly, even though there is a climb, there should be some variability when holding to keep it realistic."*
+
+**The slow climb or descent is the intended behaviour, not a defect.** Altitude hold does not hold a true altitude and is not meant to: while engaged there is always a slight steady increase or decrease, and the sign depends on the energy state at engagement. **Do not add an integrator to flatten it**, and do not treat a drifting hold as a bug report — a dead-flat hold is what would be unrealistic.
+
+**Revisit it with the weather system (Phase 5), not before.** The pilot's reasoning: air density, thermals and hot pockets are what a real autopilot is fighting, so the drift only becomes meaningful to tune once there is something real for it to fight. The ~29 m droop of §29 and the unsettled window above are both parked under that heading.
+
+---
+
+## 30. The pilot is 1.75 m — and the previous attempt did nothing at all (2026-08-05)
+
+**698/698 across 17 suites**; `FlightController` 38 → 46.
+
+The pilot is now **1.75 m** standing beside the real-scale Cessna, measured live: `[Avatar] pilot is 1.75 m (model scale 0.339x)`.
+
+### The previous commit `d19d805` was completely inert, and its marker hid that
+
+It set the R15 scale `NumberValue`s (`BodyHeightScale` and friends) to 0.4 with `AutomaticScalingEnabled = true`, printed a success line, and **changed nothing whatsoever**. Measured on the live rig, all four of these:
+
+| attempt | result |
+|---|---|
+| `Humanoid:ScaleTo()` / `Humanoid:SetScale()` | do not exist — *"ScaleTo is not a valid member of Humanoid"* |
+| set the four scale `NumberValue`s to 0.4 | **rig moved 0.00 studs.** Values read back 0.4 while `GetAppliedDescription()` still reported `HeightScale 0.96` and the rig still measured its full 5.16 studs |
+| set `BodyHeightScale` to 1.0, then back to 0.4 | **0.00 studs in both directions** — the mechanism is simply inert here |
+| `Humanoid:ApplyDescription()` | **server-only** — *"can only be called by the backend server"* |
+
+⚠️ **The marker could not tell success from doing nothing, which is why this survived a whole session.** It printed the scale it *asked for* next to `HumanoidRootPart.Size.Y`, and the "root part 1.92 studs" it reported was just this player's own untouched avatar — the HRP is an invisible collision box that does not track the visible rig. **The marker now prints the height measured AFTER the fact**, so it cannot lie the same way. This is the same class of mistake as §6g's inset "verification": it checked that the arithmetic was self-consistent, not that the thing had moved.
+
+### The answer was `Model:ScaleTo()` — no rig surgery, no floor
+
+`Humanoid` has no `ScaleTo`; **`Model` does**, and a character is a Model. `character:ScaleTo(0.339)` took the rig from 5.156 studs to 1.752 in one call, scaled `HipHeight` with it (2.147 → 0.729), and left the Humanoid alive and Running.
+
+**The "0.4 engine floor" does not exist** — it was inferred from a mechanism that was not working at all. There is no clamp to work around, so **the planned manual part-rescaling was never needed** and was not done.
+
+⚠️ **There are also no `Motor6D` joints on this rig to rewrite.** It is a constraint rig — `AnimationConstraint`, `BallSocketConstraint`, 55 `Attachment`s and 15 `WrapTarget`s of layered clothing, and **zero Motor6D**. Any plan that starts "rewrite the Motor6D C0/C1 offsets" is written against a rig this game does not have. `ScaleTo` handles all of it.
+
+### ⚠️ `AutomaticScalingEnabled = false` breaks the camera — leave it TRUE
+
+Setting it false was a precaution against the engine re-applying the description over the top. **The engine does not do that** (`ScaleTo` survives either way, measured), and turning it off moves the camera's focus onto a fixed 2-stud constant instead of one that scales with the root part:
+
+| `AutomaticScalingEnabled` | camera focus above the head |
+|---|---|
+| `false` | **+1.296 studs** — most of a body length of empty air |
+| `true` | **+0.116 studs** — normal framing |
+
+Reported by the pilot as *"the center is a few studs above our head, it drills in that we have been scaled down"*. It was self-inflicted, and the fix was to delete the line.
+
+### The height must be measured with the rig STANDING STILL
+
+`rigHeightStuds()` reads the *posed* rig, so it is the standing height only once the character has stopped moving. **Waiting on the physics is not enough and was tried first**: a character spawning on the pad is already `Running` with no vertical velocity within a frame, while the `Animate` script is still easing the limbs into the idle pose for about a second afterwards.
+
+| measured | scaled the pilot to |
+|---|---|
+| 4.22 studs (mid-pose) | 1.41 m |
+| 5.06 studs (mid-pose) | 1.69 m |
+| **5.156 studs (settled)** | **1.75 m** ✅ |
+
+So the wait is on **the measurement settling**, not on any state flag: two consecutive readings agreeing within 0.005 studs mean the limbs have stopped. At rest the reading repeats to four decimal places, and the settled value is repeatable across sessions (5.155 / 5.156 / 5.158), which is what makes it safe to key on.
+
+`pilotScaleFor()` is **idempotent by construction** — `ScaleTo` takes an absolute scale, not a multiplier, so the current scale is folded back in and re-applying to a correct rig is a no-op. That is what lets the applier converge in a loop instead of having to measure perfectly first time, and a test pins it.
+
+**The height is measured, not hard-coded**, so it lands on 1.75 m for any player's avatar rather than only for a default one. Accessories and the `HumanoidRootPart` are excluded — hair is not height, and the HRP is the box that produced the misleading 1.92.
+
+### Nothing physical changed
+- **Boarding still moves the aircraft 0.000 m** — re-measured after the change (§6e).
+- The scale holds through the `Sit` weld and back out; the pilot walks normally with no vertical drift.
+- `WalkSpeed` is untouched — it is the project's own metre-scale 2.4 m/s from `Constants.CHARACTER`, and a 1.75 m human should walk at that speed whatever the rig measures.
+- The cockpit eye is anchored to the `PilotSeat`, not the head, so the view does not move.
+
+### The spawn pad is hidden, and **sunk flush** rather than just made invisible
+It sat *on* the apron with its top face a metre proud — the same 1 m ledge that obstructed the runway before it was moved here (§20). Hiding a ledge without lowering it only makes it an **invisible** ledge to trip over on the walk to the aeroplane. Its top face is now level with the apron at y = 250.00 and it is indistinguishable from the pavement.
+
+**The `Decal` needs its own pass** — it is a child of the part, not a property, so `Transparency` on the part alone leaves the spawn logo lying on the tarmac. Same trap as the invisible pilot in §6e.
+
+Done at run time in `AirportService`, beside the code that already moves the pad to the airport elevation, because editing `default.project.json` costs a Rojo restart *and* a plugin reconnect (§3) and nothing here needs the Edit view to change.

@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 658 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 665 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -176,7 +176,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 81/81 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 88/88 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 35/35 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
@@ -1656,3 +1656,65 @@ require(game.ServerScriptService.FlightSim.Services.AirportService).runTests()  
 
 ### Phase 3 is built
 Nothing in §14's Phase 3 list is outstanding. **Phase 3 has no gate** in §14 — unlike Phases 2, 5 and 6 — so there is nothing specified for the pilot to fly and sign off. If one is wanted, the obvious shape is *fly Meadow → Ridge on this plan, land on the strip, press reset and confirm you are still at Ridge*, which exercises §23, §24 and §25 at once. Not invented here, because it was not asked for.
+
+---
+
+## 26. Altitude hold: the capture fix (2026-08-05)
+
+**665/665 across 17 suites**; `InputController` 81 → 88. Engaging R in a climb no longer slams the nose down.
+
+### Measured first, and the mechanism is arithmetic
+
+Engaging sets the target to the **current** altitude, so the outer loop's error is zero and it demands **zero climb — instantly**, however fast the aeroplane is going up. The inner loop then sees the whole climb as error:
+
+| vs at engagement | demanded climb | climb error | commanded pitch |
+|---|---|---|---|
+| +1.0 m/s | 0 | −1.0 | −0.180 |
+| +2.5 m/s | 0 | −2.5 | **−0.450 saturated** |
+| +3.98 m/s (Vy) | 0 | −3.98 | **−0.450 saturated** |
+
+**Saturation begins at 2.50 m/s (492 ft/min)** — that is `pitchLimit / verticalSpeedGain` exactly — and the 172's own Vy rate of climb is **783 ft/min**. So engaging during a normal climb *always* commanded full nose-down.
+
+### The fix
+
+The demanded climb now **starts at whatever the aeroplane is already doing** and is walked toward what the outer loop wants, so the inner loop never sees a step. Engagement is a no-op on the first frame by construction.
+
+Closed-loop, real aerodynamics, engaging at a Vy climb:
+
+| | as shipped | with capture |
+|---|---|---|
+| first-frame command | **−0.450** (limit) | **−0.003** |
+| frames saturated | 22 / 901 | **0 / 901** |
+| peak vertical jolt | **0.69 g** | **0.49 g** |
+| max altitude error | 2.9 m | 5.5 m |
+| error after 10 s | 2.8 m | **1.4 m** |
+
+It eases off instead of banging: the excursion is slightly larger because it no longer slams, and it settles **twice as tight**. Engaging in a 4 m/s descent behaves the same way — first frame +0.003.
+
+**No tuned gain was touched.** The one new number, `captureAccel = 1.0 m/s²`, is derived rather than felt: almost exactly 0.1 g, the vertical acceleration a passenger would call a gentle level-off, rolling a full-rate climb off to level in about four seconds.
+
+### A wrong hypothesis, killed by fixing the harness
+
+Mid-way the traces showed the aircraft sinking away with the elevator hard against its limit, and a trim sweep said level flight needed **+0.480 at 70 kt and +0.670 at 65 kt** against a ±0.45 limit. That looked like a second, deeper bug — the autopilot discards the pilot's trim, so it must supply the whole deflection from a budget too small for it — and the obvious fix was to add trim as a baseline.
+
+**The engine was never started.** Thrust was 0.0 N in every one of those runs: the harness was flying a glider, and both the sink and the trim table were artefacts. With power the aeroplane accelerates once levelled, so:
+
+| | max error | after 10 s |
+|---|---|---|
+| capture only | 5.5 m | **1.4 m** |
+| capture **+ trim baseline** | 17.8 m | **17.8 m and rising** |
+
+The trim baseline measured clearly **worse** — the autopilot ends up driving to −0.33 to fight a trim it no longer needs. It was reverted, and the code now carries a note saying why, so nobody re-derives it.
+
+That is the second time this session a result was an artefact of the harness rather than the code. **Check the harness before believing the result** — §7.
+
+### And a bug in the fix, caught by its own test
+The first version clamped the capture to `maxClimbRate`, which put back the exact step capture exists to remove, precisely when it was largest: entering at 12 m/s captured at 5, leaving 7 m/s of error on frame one and commanding the full limit again. `maxClimbRate` bounds what **altitude error** may ask for; it says nothing about what the aeroplane is currently doing. The capture is now unclamped and the walk brings it inside the limit anyway.
+
+### How to test it
+```lua
+require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controls.InputController).runTests()  -- Client
+```
+Seven new checks: the uncaptured cascade saturates at Vy and above 2.5 m/s (the bug, pinned), capture commands nothing on the first frame for entries from −5 to +12 m/s, a fast entry is captured at its true rate, the demand walks at `captureAccel` and converges, and a settled capture still commands full authority when far off.
+
+**Not yet flown.** The measurements are closed-loop against the real aerodynamics, but a pilot has not pressed R in the air since the change.

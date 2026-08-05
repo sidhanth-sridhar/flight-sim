@@ -220,6 +220,15 @@ InputController.DEFAULTS = {
 		maxClimbRate = 5.0, -- m/s, roughly 1000 ft/min
 		verticalSpeedGain = 0.18, -- pitch command per m/s of error
 		pitchLimit = 0.45, -- never commands more than this, however lost it is
+		--[[
+			How fast the demanded climb may be walked, in m/s^2, when capturing.
+
+			Derived, not felt: 1.0 m/s^2 is almost exactly 0.1 g, the vertical
+			acceleration a passenger would call a gentle level-off. It rolls a
+			full-rate climb off to level in about four seconds. See
+			altitudeHoldPitchCaptured for what it fixes.
+		]]
+		captureAccel = 1.0,
 		-- Stick movement AWAY FROM where it sat at engagement that disconnects
 		-- it, as every autopilot does. Measured as a change, not an absolute -
 		-- see the note at the disconnect test.
@@ -351,6 +360,9 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 		-- Stick position captured when altitude hold engaged; the disconnect
 		-- test measures movement away from this, not absolute deflection.
 		altHoldPitchReference = 0,
+		-- Set on engagement, so the demanded climb starts where the aeroplane
+		-- already is. nil while altitude hold is off.
+		altHoldCapture = nil :: any,
 
 		-- Previous frame's held set, for edge detection.
 		wasHeld = {} :: { [string]: boolean },
@@ -389,14 +401,89 @@ end
 
 	Pure, and exported so the tests can exercise the law on its own.
 ]]
+-- The outer loop on its own: how fast we want to be climbing, given how far off
+-- the target altitude we are.
+function InputController.demandedClimbFor(config: any, targetM: number, altitudeM: number): number
+	local a = config.altHold
+	return clamp((targetM - altitudeM) * a.altitudeGain, -a.maxClimbRate, a.maxClimbRate)
+end
+
+--[[
+	The cascade with NO capture. Kept because it is the honest description of
+	the inner loop and the tests drive it directly, but update() no longer calls
+	it - see altitudeHoldPitchCaptured below for why.
+]]
 function InputController.altitudeHoldPitch(config: any, targetM: number, altitudeM: number, verticalSpeedMs: number): number
 	local a = config.altHold
-
-	local altitudeError = targetM - altitudeM
-	local demandedClimb = clamp(altitudeError * a.altitudeGain, -a.maxClimbRate, a.maxClimbRate)
-	local climbError = demandedClimb - verticalSpeedMs
-
+	local climbError = InputController.demandedClimbFor(config, targetM, altitudeM) - verticalSpeedMs
 	return clamp(climbError * a.verticalSpeedGain, -a.pitchLimit, a.pitchLimit)
+end
+
+--[[
+	ALTITUDE CAPTURE, and the reason the autopilot used to bang.
+
+	Engaging sets the target to the CURRENT altitude, so the outer loop's error
+	is zero and it demands zero climb - instantly, however fast the aeroplane
+	happens to be going up. Measured: at the 172's own Vy rate of climb of
+	+3.98 m/s the cascade commands -0.450 on the first frame, which is the full
+	nose-down limit, and it saturates for any climb above 2.50 m/s (492 ft/min).
+	A normal climb is 783 ft/min, so engaging in the climb ALWAYS slammed the
+	nose down.
+
+	The fix is what a real autopilot does on capture: the demanded climb STARTS
+	at whatever the aeroplane is already doing and is walked toward zero, so the
+	inner loop sees no step at all. Engagement is now a no-op on the first frame
+	by construction - demanded climb equals actual climb, so the climb error is
+	zero and the commanded pitch is zero.
+
+	None of the tuned gains are touched. The one new number is the rate at which
+	the demand is walked, and it is derived rather than felt: 1.0 m/s^2 is
+	almost exactly 0.1 g, which is the vertical acceleration a passenger would
+	call a gentle level-off. It takes about four seconds to roll a full-rate
+	climb off to level.
+]]
+export type AltHoldCapture = { demandedClimb: number }
+
+--[[
+	NOT clamped to maxClimbRate, and that was a bug in the first version of this
+	fix - caught by its own test.
+
+	`maxClimbRate` limits what the OUTER loop may ask for from altitude error. It
+	is not a statement about what the aeroplane is currently doing. Clamping the
+	capture to it reintroduced the exact step this exists to remove, precisely
+	when the step was largest: entering at 12 m/s captured at 5, leaving a 7 m/s
+	error on the first frame and commanding the full nose-down limit again.
+
+	The demand is walked down toward the outer loop's (clamped) value anyway, so
+	starting above the limit is transient by construction.
+]]
+function InputController.altHoldCapture(config: any, verticalSpeedMs: number): AltHoldCapture
+	return { demandedClimb = verticalSpeedMs }
+end
+
+function InputController.altitudeHoldPitchCaptured(
+	config: any,
+	capture: AltHoldCapture,
+	targetM: number,
+	altitudeM: number,
+	verticalSpeedMs: number,
+	dt: number
+): (number, AltHoldCapture)
+	local a = config.altHold
+
+	local wanted = InputController.demandedClimbFor(config, targetM, altitudeM)
+
+	--[[
+		Walk the demand toward what the outer loop wants, instead of jumping to
+		it. This is the whole fix: the inner loop only ever sees a demand that
+		moves at a survivable rate, so it cannot be handed a step it can only
+		answer by saturating.
+	]]
+	local step = a.captureAccel * math.max(dt, 0)
+	local demanded = capture.demandedClimb + clamp(wanted - capture.demandedClimb, -step, step)
+
+	local pitch = clamp((demanded - verticalSpeedMs) * a.verticalSpeedGain, -a.pitchLimit, a.pitchLimit)
+	return pitch, { demandedClimb = demanded }
 end
 
 -- =========================================================================
@@ -587,6 +674,15 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 				control pressure for the same reason.
 			]]
 			state.altHoldPitchReference = rawPitch
+
+			--[[
+				And capture the CLIMB, which is what stops the bang. The demand
+				starts at whatever the aeroplane is already doing, so the inner
+				loop sees no step on the first frame. See
+				altitudeHoldPitchCaptured.
+			]]
+			state.altHoldCapture = InputController.altHoldCapture(config, flightState.verticalSpeed)
+
 			engagedThisFrame = true
 		end
 	end
@@ -600,12 +696,33 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 
 	local commandedPitch: number
 	if systems.altitudeHold and flightState then
-		commandedPitch = InputController.altitudeHoldPitch(
+		local autopilot: number
+		autopilot, state.altHoldCapture = InputController.altitudeHoldPitchCaptured(
 			config,
+			state.altHoldCapture,
 			systems.altitudeTargetM,
 			flightState.altitude,
-			flightState.verticalSpeed
+			flightState.verticalSpeed,
+			dt
 		)
+
+		--[[
+			The autopilot commands the elevator directly, and trim is NOT added.
+
+			That is deliberate and was tested rather than assumed. Adding the
+			pilot's trim on top looked obviously right - a real servo flies an
+			already-trimmed aeroplane and only supplies the deviation - and it
+			measured clearly WORSE: the aircraft climbed away to 17.8 m of error
+			and rising, with the autopilot driving to -0.33 to fight a trim it
+			no longer needed. With the throttle where a climb left it the
+			aeroplane accelerates once levelled, so the deflection that trimmed
+			it at 74 kt is far too much at 90, and adding it double-counts.
+
+			The hypothesis came from a measurement taken with the ENGINE NOT
+			STARTED - see the handoff. A glider does need +0.48 at 70 kt; this
+			aeroplane, under power, does not.
+		]]
+		commandedPitch = clamp(autopilot, -1, 1)
 	else
 		commandedPitch = clamp(rawPitch + state.trim, -1, 1)
 	end
@@ -1098,6 +1215,107 @@ function InputController.runTests(): (boolean, { any })
 	state = fresh()
 	run(state, 120, { "TrimNoseDown" })
 	record("Trim works nose-down too", state.trim < 0, string.format("trim %+.4f", state.trim))
+
+	-- 9b. Altitude capture ----------------------------------------------------
+	--[[
+		THE BUG THIS FIXES, pinned as a number.
+
+		Engaging sets the target to the current altitude, so the outer loop's
+		error is zero and it demands zero climb - instantly, however fast the
+		aeroplane is going up. The uncaptured cascade therefore commands full
+		nose-down the moment it is engaged in any climb worth the name.
+	]]
+	local cfgCap = fresh().config
+	local vyClimb = 3.98 -- m/s, the 172's own measured Vy rate of climb
+	record(
+		"Without capture, engaging in a Vy climb slams full nose-down",
+		math.abs(InputController.altitudeHoldPitch(cfgCap, 500, 500, vyClimb) + cfgCap.altHold.pitchLimit) < 1e-9,
+		string.format("%.3f at %+.2f m/s, which is the limit",
+			InputController.altitudeHoldPitch(cfgCap, 500, 500, vyClimb), vyClimb)
+	)
+	record(
+		"...and saturates for any climb above 2.5 m/s",
+		math.abs(InputController.altitudeHoldPitch(cfgCap, 500, 500, 2.6)) >= cfgCap.altHold.pitchLimit - 1e-9
+			and math.abs(InputController.altitudeHoldPitch(cfgCap, 500, 500, 2.4)) < cfgCap.altHold.pitchLimit,
+		string.format("threshold is pitchLimit/verticalSpeedGain = %.2f m/s (%.0f ft/min)",
+			cfgCap.altHold.pitchLimit / cfgCap.altHold.verticalSpeedGain,
+			cfgCap.altHold.pitchLimit / cfgCap.altHold.verticalSpeedGain * 196.85)
+	)
+
+	--[[
+		THE FIX: the demand starts where the aeroplane already is, so the inner
+		loop sees no step and the first frame commands nothing at all. This is
+		true for ANY entry rate, which is the property that matters.
+	]]
+	local worstFirstFrame = 0
+	for _, vs in { -5, -3.98, -1, 0, 1, 3.98, 5, 12 } do
+		local cap = InputController.altHoldCapture(cfgCap, vs)
+		local pitch = InputController.altitudeHoldPitchCaptured(cfgCap, cap, 500, 500, vs, 1 / 60)
+		worstFirstFrame = math.max(worstFirstFrame, math.abs(pitch))
+	end
+	record(
+		"With capture, engagement commands nothing on the first frame",
+		worstFirstFrame < 0.02,
+		string.format("worst first-frame command %.4f across -5..+12 m/s entries", worstFirstFrame)
+	)
+
+	--[[
+		An entry faster than maxClimbRate is captured at its TRUE rate, not at
+		the limit - and the first version of this fix got that wrong. Clamping
+		to maxClimbRate put back the very step capture removes, exactly when it
+		was biggest: 12 m/s captured at 5 leaves a 7 m/s error on frame one and
+		commands the full nose-down limit again. The walk brings it back inside
+		the limit regardless, so starting outside is transient.
+	]]
+	local fastCap = InputController.altHoldCapture(cfgCap, 12)
+	record(
+		"A fast entry is captured at its true rate, not clipped to the limit",
+		math.abs(fastCap.demandedClimb - 12) < 1e-9,
+		string.format("%.2f m/s captured from a 12 m/s entry, above the %.1f m/s demand limit",
+			fastCap.demandedClimb, cfgCap.altHold.maxClimbRate)
+	)
+
+	--[[
+		The demand is WALKED, not stepped, and at the declared rate. This is what
+		turns a step the inner loop can only answer by saturating into a ramp it
+		can follow.
+	]]
+	local walk = InputController.altHoldCapture(cfgCap, 5)
+	local _, walked = InputController.altitudeHoldPitchCaptured(cfgCap, walk, 500, 500, 5, 1)
+	record(
+		"The demanded climb walks at captureAccel, not instantly",
+		math.abs((walk.demandedClimb - walked.demandedClimb) - cfgCap.altHold.captureAccel) < 1e-9,
+		string.format("%.2f m/s in one second, captureAccel is %.2f m/s^2",
+			walk.demandedClimb - walked.demandedClimb, cfgCap.altHold.captureAccel)
+	)
+	--[[
+		And it converges: given long enough on target, the demand must reach what
+		the outer loop actually wants, or the autopilot would hold a permanent
+		climb.
+	]]
+	local conv = InputController.altHoldCapture(cfgCap, 5)
+	for _ = 1, 600 do
+		local _, next = InputController.altitudeHoldPitchCaptured(cfgCap, conv, 500, 500, 0, 1 / 60)
+		conv = next
+	end
+	record(
+		"The demand converges on what the outer loop wants",
+		math.abs(conv.demandedClimb) < 1e-6,
+		string.format("%.6f m/s after 10 s on target", conv.demandedClimb)
+	)
+
+	--[[
+		Capture must not blunt the response once it is established. Far below the
+		target with the demand settled, the autopilot should still be asking for
+		everything the outer loop allows.
+	]]
+	local settled = { demandedClimb = cfgCap.altHold.maxClimbRate }
+	local strong = InputController.altitudeHoldPitchCaptured(cfgCap, settled, 5000, 0, 0, 1 / 60)
+	record(
+		"A settled capture still commands full authority when far off",
+		strong >= cfgCap.altHold.pitchLimit - 1e-9,
+		string.format("%.3f, 5000 m below target", strong)
+	)
 
 	-- 10. Altitude hold ------------------------------------------------------
 	local level: FlightState = { altitude = 500, verticalSpeed = 0 }

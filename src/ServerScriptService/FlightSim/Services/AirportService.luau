@@ -90,8 +90,79 @@ local AirportService = {}
 	apronSlotCFrame() rather than to a constant, and FlightModel's ground effect
 	raycasts (section 11). Both followed the elevation with no change at all.
 ]]
-local SURFACE_Y = 250
-local GRASS_Y = SURFACE_Y - 0.05
+--[[
+	THE AIRPORT REGISTRY.
+
+	Phase 3 needs more than one aerodrome, and the pilot's decision was that
+	EACH AIRPORT DECLARES ITS OWN ELEVATION rather than reading it back off the
+	terrain. That keeps the property the note at the top of this file depends
+	on: every question this module answers is answerable before anything has
+	initialised. Taking elevation from TerrainService would have put it behind
+	an Init() and reintroduced exactly the race §11 removed.
+
+	TerrainService reads this table and fits a flat pad to each entry. The
+	geometry below still describes the primary field only - a second aerodrome's
+	runway, taxiway and apron are the next system, and this is the seam they
+	will hang off rather than a finished registry.
+]]
+local PRIMARY_ID = "meadow"
+
+local AIRPORTS: { [string]: any } = {
+	meadow = {
+		id = "meadow",
+		name = "Meadow Field",
+		-- 250 m is about 820 ft, an ordinary elevation for a light-aircraft
+		-- field. Deliberately not zero - see the note below.
+		elevation = 250,
+		origin = Vector3.new(0, 0, 0),
+	},
+}
+
+--[[
+	How far the surrounding field sits BELOW the pavement, in metres.
+
+	Not cosmetic: coplanar top faces z-fight across the whole runway, and a real
+	runway is crowned slightly above the field anyway. Declared once here so
+	that terrain and pavement cannot disagree about it - TerrainService builds
+	its pads to grassOf(), and building them to elevationOf() by mistake put the
+	ground exactly level with the runway and was caught by the test that asks
+	whether the pavement still stands proud.
+]]
+local GRASS_OFFSET = 0.05
+
+function AirportService.elevationOf(airportId: string?): number
+	local airport = AIRPORTS[airportId or PRIMARY_ID]
+	return if airport then airport.elevation else AIRPORTS[PRIMARY_ID].elevation
+end
+
+-- The height of the FIELD around an airport, which is what terrain is built to.
+function AirportService.grassOf(airportId: string?): number
+	return AirportService.elevationOf(airportId) - GRASS_OFFSET
+end
+
+function AirportService.getAirport(airportId: string?): any?
+	return AIRPORTS[airportId or PRIMARY_ID]
+end
+
+function AirportService.airportIds(): { string }
+	local ids = {}
+	for id in AIRPORTS do
+		table.insert(ids, id)
+	end
+	table.sort(ids)
+	return ids
+end
+
+AirportService.AIRPORTS = AIRPORTS
+AirportService.PRIMARY_ID = PRIMARY_ID
+
+--[[
+	The primary field's surface, kept as a module constant because every piece
+	of geometry below is still written against it. When the second aerodrome's
+	geometry lands, these become per-airport lookups and this pair goes away.
+]]
+local SURFACE_Y = AIRPORTS[PRIMARY_ID].elevation
+local GRASS_Y = AirportService.grassOf(PRIMARY_ID)
 local PAVEMENT_THICKNESS = 0.4
 
 --[[
@@ -1082,7 +1153,7 @@ function AirportService.runTests(): (boolean, { any })
 
 	record(
 		"Slots sit on the surface, so spawn height stays the aircraft's business",
-		math.abs(slots[0].Position.Y - SURFACE_Y) < 1e-9,
+		math.abs(slots[0].Position.Y - SURFACE_Y) < 1e-3,
 		string.format("y = %.3f", slots[0].Position.Y)
 	)
 
@@ -1114,11 +1185,24 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("%.0f x %.0f m part vs %d x %d m registered", runwayPart.Size.Z, runwayPart.Size.X, r36.length, r36.width)
 	)
 
+	--[[
+		A MILLIMETRE, not 1e-9, and the tolerance is the thing that changed.
+
+		Roblox stores part positions as float32. At y = 0 that resolved far
+		finer than 1e-9 and the old assertion passed; at y = 250 the spacing
+		between representable values is about 1.5e-5, so `Position.Y + Size.Y/2`
+		lands on 250.000003 and a nanometre tolerance demands more precision
+		than the engine has. The code was right and the assertion was wrong -
+		which is now a familiar sentence in this project.
+
+		A millimetre is still three orders of magnitude tighter than anything
+		that could matter to a wheel.
+	]]
 	local topY = runwayPart.Position.Y + runwayPart.Size.Y / 2
 	record(
-		"The runway top face is exactly y = 0",
-		math.abs(topY - SURFACE_Y) < 1e-9,
-		string.format("top face at y = %.6f", topY)
+		"The runway top face is exactly the declared surface",
+		math.abs(topY - SURFACE_Y) < 1e-3,
+		string.format("top face at y = %.6f, SURFACE_Y %.2f", topY, SURFACE_Y)
 	)
 	record("The runway is collidable, so wheels roll on it", runwayPart.CanCollide, "CanCollide = true")
 
@@ -1127,9 +1211,9 @@ function AirportService.runTests(): (boolean, { any })
 	record("Taxiway and apron exist", taxiway ~= nil and apron ~= nil, "TaxiwayAlpha + Apron")
 	record(
 		"Taxiway and apron share the runway's surface plane",
-		math.abs((taxiway.Position.Y + taxiway.Size.Y / 2) - SURFACE_Y) < 1e-9
-			and math.abs((apron.Position.Y + apron.Size.Y / 2) - SURFACE_Y) < 1e-9,
-		"all three top faces at y = 0"
+		math.abs((taxiway.Position.Y + taxiway.Size.Y / 2) - SURFACE_Y) < 1e-3
+			and math.abs((apron.Position.Y + apron.Size.Y / 2) - SURFACE_Y) < 1e-3,
+		string.format("all three top faces at y = %.2f", SURFACE_Y)
 	)
 
 	--[[

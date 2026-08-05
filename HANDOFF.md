@@ -6,7 +6,13 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 585 checks green across 16 suites.** Fourteen run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 604 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+
+🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
+
+📋 **Phase 3 decisions, made by the pilot**: each airport declares its own elevation; a player spawns at the airport **nearest** them; and the field **stays 2,048 m**, so **streaming is explicitly deferred, not skipped**. That last one constrains the next system — a second *full-size* airport does not fit beside the first, so airport B must be a shorter strip about 1 km out. See §20.
+
+⚠️ **`ServerScriptService/FlightSim/init.server.luau` is not syncing into Studio.** Rojo's own build contains the change and every other file syncs, so the server is fine and the plugin is holding a connect-time snapshot of that one instance. **Reconnect the Rojo plugin in Studio** — until then the bootstrap runs an old `SERVICE_ORDER` that does not start `TerrainService`, and a Play session has no terrain unless it is built by hand. The file was also renamed `Init.server.luau` → `init.server.luau` to match Rojo's documented lowercase convention.
 
 # ✅ **PHASE 2 IS SIGNED OFF.** The instrument circuit was flown and passed on 2026-08-04 — an altitude held on the altimeter, a speed on the ASI, a heading on the DI, and the AoA indication marking the stall (§14, §18).
 
@@ -174,6 +180,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
+| `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 19/19 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
 ```lua
@@ -642,6 +649,14 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Checking one point inside a mapping does not verify the mapping.** The bug above survived a live probe that confirmed a cursor at y 392 gave pitch 0.000 against a half-height of 391.5 — self-consistent arithmetic, and the cursor was nowhere near the middle of the screen. **Verify the reachable RANGE: both extremes and the centre.**
 - **Roblox reports `GetMouseLocation()` as (−1, −1) when the cursor is not on the game view** — another window, or Studio's own panels in a Play session. Read as a position that is the top-left corner, which for an absolute yoke is hard nose-down and hard left roll in one frame. Treat it as missing data. See §16.
 - **An absolute yoke has to handle window focus explicitly, and a relative one does not.** A relative stick simply stops receiving deltas and stays where it was; an absolute one keeps reading a cursor position that is now being moved for some entirely different purpose. `WindowFocusReleased` releases it to neutral (trim kept), the same path typing already used.
+- **A Roblox terrain surface lands HALF A VOXEL above the top of the block you fill** — +2.000 studs on the 4-stud grid, constant to within 16 mm. Derive it from the voxel size rather than typing "2", and measure it in a test so a change in the engine fails loudly instead of floating the runway. See §20.
+- **A uniform terrain fill is exactly flat; a sloped one is not.** 0.0000 m peak-to-peak over 1,000 × 22 m, against up to **1.23 m** deviation on a slope, because the isosurface smooths it. Terrain is scenery, not survey — anything that has to be flat to a centimetre, like a runway, stays a part resting on a terrain pad.
+- **Terrain writes are not queryable in the same frame.** A raycast straight after a `FillBlock` finds nothing at all. Yield once. This cost a whole sweep that reported empty ground.
+- **Filling terrain as flat columns makes the block size the resolution of every slope.** The step between neighbours is the local gradient times the block size, so gentle relief hides it and a real elevation change exposes it: two pads 50 m apart in height gave a **21.5 m staircase** at 64 m blocks and 1.14 m at 16 m. See §20 for the measured table.
+- **"Nearest thing wins" blending is discontinuous where the regions meet.** A height field that picks the nearest pad's elevation and fades toward a base jumps by the difference between the two pads — measured as a **45.8 m cliff**. Weight the contributions instead; it is continuous by construction.
+- **A tolerance of `1e-9` is finer than float32, and moving the world revealed it.** Roblox part positions are float32, so at y = 250 the spacing between representable values is about 1.5e-5 and `Position.Y + Size.Y/2` lands on 250.000003. Assertions that passed at y = 0 failed on correct code. Use tolerances sized to the engine, not to the maths.
+- **A suite that depends on another service having run is flaky, not passing.** `TerrainService`'s pavement check read the terrain height and failed because it assumed `AirportService.Init()` had already built a runway — so it passed or failed depending on how far through booting the server was. Build what you need, as every other suite here does.
+- **Rojo can hold a connect-time snapshot of ONE instance while syncing everything else.** `init.server.luau` stayed stale through a file edit, a case-rename and a full `rojo serve` restart, while every other file in the project updated normally and `rojo build` contained the change. When exactly one file will not move, it is the plugin, not the server: **reconnect the plugin**. Diagnose with `rojo build` and grep for a string unique to that file — grepping for a symbol that also appears in other files will tell you the build is fine when it is not the question you asked.
 - **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
 
 ---
@@ -1313,3 +1328,76 @@ Seated, engine started with E, full throttle on the takeoff roll, every gauge cr
 
 ### What is left in Phase 2
 **Nothing to build. The gate remains**: fly a circuit on instruments — hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall.
+
+---
+
+## 20. Terrain, and the airport's elevation (2026-08-04 / 05, Phase 3 begins)
+
+`src/ServerScriptService/FlightSim/Services/TerrainService.luau`, **19/19**, Server datamodel. Started first in `SERVICE_ORDER`, because it is the ground everything else stands on.
+
+**This closes the largest known trap in §14**: `AirportService` assumed its pavement sat at y = 0, and terrain breaks that. The airport now declares an elevation of **250 m** and terrain is fitted to it.
+
+### Everything here was measured before anything was built
+
+Roblox terrain does not behave the way a height map does, and five measurements decided the whole design:
+
+| measurement | result |
+|---|---|
+| surface height vs the top of the block you fill | **+2.000 studs**, constant to within 16 mm — half a voxel |
+| flatness of a uniform fill, 1,000 × 22 m | **0.0000 m** peak-to-peak — exactly flat |
+| a *sloped* fill vs what was requested | up to **1.23 m** deviation — the isosurface smooths it |
+| a pavement part resting on terrain | the probe finds **the part**, which is what the wheels need |
+| a terrain write, queried the same frame | **finds nothing** — writes need a frame to settle |
+
+The flatness result is why an airport can sit on terrain at all. The slope result is why **the runway is still parts on a terrain pad** rather than terrain itself: a metre of error is not a runway, and §11's markings are load-bearing and cannot be painted onto voxels.
+
+### Who decides the elevation
+
+**The airport does, and terrain is fitted to it.** The arrow points that way deliberately: §11's load-order fix requires every question `AirportService` answers to be answerable *before* anything initialises, and taking the elevation from a service would put it back behind an `Init()`.
+
+`AirportService.AIRPORTS` is now a registry keyed by airport id, with `elevationOf(id)` and `grassOf(id)`. The pilot's decision was that **each airport declares its own elevation**. The geometry below the registry still describes the primary field only — a second aerodrome's runway, taxiway and apron are the next system, and the registry is the seam they hang off rather than a finished feature.
+
+**`grassOf` is not `elevationOf`.** Terrain is the *field*, 5 cm below the pavement. Building pads to `elevationOf()` put the ground exactly coplanar with the runway, and the test that asks whether the pavement still stands proud caught it immediately.
+
+### The height field: weighted, not nearest-wins
+
+Two pads at different elevations are each **exactly flat** (0.0000 m peak-to-peak, measured). But the obvious blending rule — nearest pad wins, fade to a base — is **discontinuous**, and measured as a **45.8 m cliff**: where two pads' regions meet, the chosen elevation flips while the fade factor does not.
+
+Each pad's contribution is therefore **weighted**, which is continuous by construction. A pad reads exactly its own elevation only while no other pad's influence reaches it, so **pads must be further apart than `BLEND_DISTANCE`** — asserted for every pair, so whoever adds the second aerodrome finds out at test time rather than on short final.
+
+### Block size is the resolution of every slope
+
+Terrain is filled as flat columns, so the step between neighbours is the local gradient times the block size. Gentle relief hid this completely; two pads 50 m apart in elevation exposed it. Measured over the same field:
+
+| block | fills | build | worst step between pads |
+|---|---|---|---|
+| 64 m | 1,024 | — | **21.51 m** — a staircase |
+| 32 m | 4,096 | 0.22 s | 2.09 m |
+| **16 m** | 16,384 | **0.41 s** | **1.14 m** |
+
+16 m is chosen because 1.14 m *is* the isosurface's own error floor, so smaller blocks buy nothing. 0.41 s of server startup is worth a world without cliffs in it.
+
+### What the baseplate became
+
+`Workspace.Baseplate` is **retired at run time**, not deleted from `default.project.json`. It stays in the project file so the Studio *edit* view has a floor — terrain only exists at runtime. The same applies to `SpawnLocation`, which Rojo puts at y = 0 and `AirportService.build()` now lifts to the surface; a player would otherwise have spawned 250 m underground.
+
+**Retiring the baseplate also removed the 2,048 m ceiling.** That was Roblox's maximum *part* size; terrain is not a part, and `Terrain.MaxExtents` measures ±32,000 studs. The world can grow far beyond the old field whenever a later phase wants it to.
+
+### Two assertions that were wrong, not the code
+
+- **A nanometre tolerance is finer than float32.** `"the runway top face is exactly y = 0"` compared `Position.Y + Size.Y/2` against the surface within `1e-9`. At y = 0 that passed; at y = 250 the spacing between representable float32 values is about 1.5e-5, so the sum lands on 250.000003. Tolerances are now a millimetre — still three orders of magnitude tighter than anything a wheel could feel.
+- **A suite that depends on another service having run is flaky, not passing.** `TerrainService`'s "the pavement stands proud" check read the terrain height and failed, because it silently assumed `AirportService.Init()` had already built a runway — so the same code passed or failed depending on how far through booting the server was. It now builds the airport if it is missing, as every other suite in this project builds what it needs.
+
+### Still to come in Phase 3
+1. **A second aerodrome's geometry**, hanging off the registry seam. The pilot chose to **keep the 2,048 m field**, which constrains it: airport A's pad already occupies x −560…340, z −900…800, so a second *full-size* airport does not fit. Airport B has to be a shorter strip roughly 1 km out, not the 1.5 km hop originally sketched.
+2. **Navigation between airports** — distance and bearing, presented the way the existing per-runway nav data is.
+3. **Streaming is explicitly DEFERRED, not skipped.** The field is not growing, so nothing exceeds a part's 2,048 m limit and no streaming config is needed. Revisit only if the world grows.
+
+### How to test it
+```lua
+-- Server datamodel. The suite BUILDS terrain, which replaces whatever is there.
+require(game.ServerScriptService.FlightSim.Services.TerrainService).runTests()
+```
+**604/604 across 17 suites** — 502 client, 102 server.
+
+⚠️ **The visual check was not completed.** Terrain exists only at run time, so the Edit view cannot show it, and `screen_capture` fights the running client's camera. The ground is verified numerically — pads flat to 0.0000 m, the field continuous to under 2 m over a 10 m step, relief inside its declared amplitude, pavement standing proud — but **nobody has looked at it yet**. Worth an eyeball on the next flight.

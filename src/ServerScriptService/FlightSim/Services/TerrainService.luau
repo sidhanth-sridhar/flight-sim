@@ -77,19 +77,21 @@ local FIELD_SIZE = 2048
 local FIELD_HALF = FIELD_SIZE / 2
 
 --[[
-	The flat pad, sized to contain the whole airport with room to overrun.
+	THE PADS ARE A LIST, because there is going to be more than one airport.
 
-	The airport spans roughly x -240..20 and z -520..400 (runway, taxiway
-	Alpha, apron). This is generous on every side, because an aircraft that
-	lands long or drifts off the side must not meet a hill.
+	Each entry is a flat area at one airport's declared elevation, sized to
+	contain the whole aerodrome with room to overrun - an aircraft that lands
+	long or drifts off the side must not meet a hill.
+
+	Airport A spans roughly x -240..20 and z -520..400 (runway, taxiway Alpha,
+	apron), and its pad is generous on every side of that.
 ]]
-local PAD_CENTRE_X = -110
-local PAD_CENTRE_Z = -50
-local PAD_SIZE_X = 900
-local PAD_SIZE_Z = 1700
+local PADS = {
+	{ id = "meadow", x = -110, z = -50, sizeX = 900, sizeZ = 1700 },
+}
 
--- Where the relief reaches full height, measured outward from the pad edge. A
--- hard edge would put a cliff on the approach; this ramps it in.
+-- Where a pad's influence has faded entirely, measured outward from its edge.
+-- A hard edge would put a cliff on the approach; this ramps it in.
 local BLEND_DISTANCE = 400
 
 --[[
@@ -99,9 +101,29 @@ local BLEND_DISTANCE = 400
 ]]
 local RELIEF_AMPLITUDE = 18
 
--- Terrain is filled as columns. 64 m trades a visible step against the number
--- of FillBlock calls: the field is 32 x 32 = 1,024 of them at this size.
-local BLOCK = 64
+--[[
+	Terrain is filled as flat columns, so the block size IS the resolution of
+	every slope in the world - and that is not a detail, it was measured as a
+	wall.
+
+	A column is filled level at its centre's height, so the step between two
+	neighbours is the local gradient times the block size. With one airport and
+	gentle relief that is invisible. Put two airports 50 m apart in elevation
+	and 64 m blocks produce a 21.5 m staircase between them.
+
+	Measured over the same 2,048 m field, worst step along the leg between two
+	pads 50 m apart in height:
+
+	    64 m ->  1,024 fills,        21.51 m step   (a wall)
+	    32 m ->  4,096 fills, 0.22 s, 2.09 m step
+	    16 m -> 16,384 fills, 0.41 s, 1.14 m step
+
+	16 m is chosen because 1.14 m is the isosurface's OWN error floor - a
+	sloped fill was measured deviating up to 1.23 m from what it was asked for
+	regardless of block size - so smaller blocks would buy nothing. 0.41 s of
+	server startup is worth a world without cliffs in it.
+]]
+local BLOCK = 16
 
 -- How deep the ground goes. Only the surface is ever seen or raycast, so this
 -- only has to be thicker than the deepest relief plus a margin.
@@ -113,28 +135,52 @@ local GROUND_MATERIAL = Enum.Material.Grass
 -- THE HEIGHT FIELD
 -- =========================================================================
 
+-- Distance from a point to the nearest edge of a pad; zero anywhere on it.
+local function distanceToPad(pad: any, x: number, z: number): number
+	local outX = math.max(0, math.abs(x - pad.x) - pad.sizeX / 2)
+	local outZ = math.max(0, math.abs(z - pad.z) - pad.sizeZ / 2)
+	return math.sqrt(outX * outX + outZ * outZ)
+end
+
 --[[
 	Pure: the terrain's intended SURFACE height at a world point.
 
-	Flat over the pad, ramping out to gentle relief beyond it. Exported so the
-	tests can assert the shape of the world without building any of it - the
-	same data-before-geometry split AirportService uses.
+	Flat over every pad at that airport's own declared elevation, ramping out
+	to gentle relief between and beyond them. Exported so the tests can assert
+	the shape of the world without building any of it - the same
+	data-before-geometry split AirportService uses.
+
+	THE PADS ARE BLENDED BY WEIGHT, NOT BY NEAREST-WINS, and the difference was
+	measured as a 45.8 m cliff.
+
+	The obvious rule - find the nearest pad, take its elevation, fade toward the
+	base - is DISCONTINUOUS. Where two pads' regions meet, the chosen elevation
+	flips from one to the other while the fade factor stays put, so the height
+	jumps by whatever the two airports differ by. Weighting each pad's
+	contribution instead makes the field continuous everywhere by construction.
+
+	A pad still reads EXACTLY its own elevation, which is the property the
+	runway depends on, and that holds only while no other pad's influence
+	reaches it: pads must therefore be further apart than BLEND_DISTANCE. A test
+	asserts that for every pair rather than trusting whoever adds the next one.
 ]]
 function TerrainService.surfaceHeightFor(x: number, z: number): number
 	local base = AirportService.GRASS_Y
 
-	-- Distance outside the pad, per axis, in metres. Zero anywhere on the pad.
-	local outX = math.max(0, math.abs(x - PAD_CENTRE_X) - PAD_SIZE_X / 2)
-	local outZ = math.max(0, math.abs(z - PAD_CENTRE_Z) - PAD_SIZE_Z / 2)
-	local outside = math.sqrt(outX * outX + outZ * outZ)
-
-	if outside <= 0 then
-		return base
+	local sum, weight = 0, 0
+	for _, pad in PADS do
+		local d = distanceToPad(pad, x, z)
+		if d < BLEND_DISTANCE then
+			local w = 1 - d / BLEND_DISTANCE
+			-- Smoothstep, so a pad edge has no crease in it.
+			w = w * w * (3 - 2 * w)
+			-- grassOf, NOT elevationOf: terrain is the FIELD around the runway,
+			-- 5 cm below the pavement. Building it to elevationOf() put the
+			-- ground exactly coplanar with the runway surface.
+			sum += w * AirportService.grassOf(pad.id)
+			weight += w
+		end
 	end
-
-	local blend = math.min(1, outside / BLEND_DISTANCE)
-	-- Smoothstep, so the pad edge has no crease in it.
-	blend = blend * blend * (3 - 2 * blend)
 
 	--[[
 		Two sine waves at different wavelengths and angles. Not noise: it is
@@ -142,10 +188,15 @@ function TerrainService.surfaceHeightFor(x: number, z: number): number
 		amplitude never exceeds what was declared, which is the property that
 		actually matters near an aerodrome.
 	]]
-	local h = math.sin(x / 260) * math.cos(z / 310) * 0.65
-		+ math.sin((x + z) / 170) * 0.35
+	local relief = base
+		+ (math.sin(x / 260) * math.cos(z / 310) * 0.65 + math.sin((x + z) / 170) * 0.35)
+			* RELIEF_AMPLITUDE
 
-	return base + h * RELIEF_AMPLITUDE * blend
+	if weight >= 1 then
+		-- Fully inside one or more pads' influence: the pads decide.
+		return sum / weight
+	end
+	return sum + (1 - weight) * relief
 end
 
 -- Pure: the fill top to request for a desired surface height. See SURFACE_OFFSET.
@@ -158,11 +209,26 @@ TerrainService.SURFACE_OFFSET = SURFACE_OFFSET
 TerrainService.FIELD_SIZE = FIELD_SIZE
 TerrainService.RELIEF_AMPLITUDE = RELIEF_AMPLITUDE
 
-function TerrainService.padBounds(): (number, number, number, number)
-	return PAD_CENTRE_X - PAD_SIZE_X / 2,
-		PAD_CENTRE_X + PAD_SIZE_X / 2,
-		PAD_CENTRE_Z - PAD_SIZE_Z / 2,
-		PAD_CENTRE_Z + PAD_SIZE_Z / 2
+TerrainService.PADS = PADS
+TerrainService.BLEND_DISTANCE = BLEND_DISTANCE
+TerrainService.BLOCK = BLOCK
+
+function TerrainService.padFor(airportId: string): any?
+	for _, pad in PADS do
+		if pad.id == airportId then
+			return pad
+		end
+	end
+	return nil
+end
+
+-- The bounds of one airport's pad, defaulting to the primary field.
+function TerrainService.padBounds(airportId: string?): (number, number, number, number)
+	local pad = TerrainService.padFor(airportId or AirportService.PRIMARY_ID)
+	if not pad then
+		return 0, 0, 0, 0
+	end
+	return pad.x - pad.sizeX / 2, pad.x + pad.sizeX / 2, pad.z - pad.sizeZ / 2, pad.z + pad.sizeZ / 2
 end
 
 -- =========================================================================
@@ -333,8 +399,64 @@ function TerrainService.runTests(): (boolean, { any })
 
 	record(
 		"The pad sits at the airport's own grass height, not at zero",
-		TerrainService.surfaceHeightFor(0, 0) == AirportService.GRASS_Y and AirportService.GRASS_Y ~= 0,
+		math.abs(TerrainService.surfaceHeightFor(0, 0) - AirportService.GRASS_Y) < 1e-9
+			and AirportService.GRASS_Y ~= 0,
 		string.format("%.2f m, and the airport surface is %.2f m", AirportService.GRASS_Y, AirportService.SURFACE_Y)
+	)
+
+	--[[
+		THE INVARIANT THE WHOLE MULTI-PAD SCHEME RESTS ON.
+
+		A pad reads exactly its airport's elevation only while no OTHER pad's
+		influence reaches it. Two pads closer together than BLEND_DISTANCE would
+		each pull the other off its declared height, and a runway that is 3 m
+		from where the airport says it is would be found by an aeroplane rather
+		than by a person. Asserted for every pair, so whoever adds the second
+		aerodrome finds out here rather than on short final.
+	]]
+	local tooClose = {}
+	for i = 1, #TerrainService.PADS do
+		for j = i + 1, #TerrainService.PADS do
+			local a, b = TerrainService.PADS[i], TerrainService.PADS[j]
+			local gapX = math.max(0, math.abs(a.x - b.x) - (a.sizeX + b.sizeX) / 2)
+			local gapZ = math.max(0, math.abs(a.z - b.z) - (a.sizeZ + b.sizeZ) / 2)
+			local gap = math.sqrt(gapX * gapX + gapZ * gapZ)
+			if gap < TerrainService.BLEND_DISTANCE then
+				table.insert(tooClose, string.format("%s-%s %.0f m", a.id, b.id, gap))
+			end
+		end
+	end
+	record(
+		"No two pads are closer together than the blend distance",
+		#tooClose == 0,
+		if #tooClose == 0
+			then string.format("%d pad(s), blend %d m", #TerrainService.PADS, TerrainService.BLEND_DISTANCE)
+			else table.concat(tooClose, ", ")
+	)
+
+	--[[
+		And the blend is CONTINUOUS. The first version of this height field used
+		nearest-pad-wins and measured a 45.8 m cliff between two pads 50 m apart
+		in elevation, because the chosen elevation flips at the boundary while
+		the fade factor does not. Walked here as a fine line across the whole
+		field, asserting no sample jumps.
+	]]
+	local worstJump, jumpAt = 0, ""
+	for x = -FIELD_HALF + 10, FIELD_HALF - 10, 40 do
+		local prev = nil
+		for z = -FIELD_HALF + 10, FIELD_HALF - 10, 10 do
+			local h = TerrainService.surfaceHeightFor(x, z)
+			if prev and math.abs(h - prev) > worstJump then
+				worstJump = math.abs(h - prev)
+				jumpAt = string.format("(%.0f, %.0f)", x, z)
+			end
+			prev = h
+		end
+	end
+	record(
+		"The height field is continuous - no cliffs anywhere in it",
+		worstJump < 2.0,
+		string.format("worst %.3f m over a 10 m step, at %s", worstJump, jumpAt)
 	)
 
 	--[[
@@ -406,6 +528,17 @@ function TerrainService.runTests(): (boolean, { any })
 		blocks == (FIELD_SIZE / BLOCK) ^ 2,
 		string.format("%d blocks of %d m over a %d m field", blocks, BLOCK, FIELD_SIZE)
 	)
+	--[[
+		Block size is the resolution of every slope, so it is asserted rather
+		than left to whoever tunes it next: 64 m blocks were measured putting a
+		21.5 m staircase between two pads 50 m apart in elevation, and 16 m
+		brings that to 1.14 m, which is the isosurface's own error floor.
+	]]
+	record(
+		"Blocks are fine enough that a slope is not a staircase",
+		BLOCK <= 16,
+		string.format("%d m blocks; 64 m measured a 21.5 m step between pads", BLOCK)
+	)
 
 	record(
 		"The baseplate part is gone - terrain is the ground now",
@@ -452,7 +585,18 @@ function TerrainService.runTests(): (boolean, { any })
 		And the pavement still wins. The runway is a part resting on the pad, so
 		the ground probe must find the part - if terrain came out higher than the
 		pavement, every wheel would be buried in grass.
+
+		THE AIRPORT IS BUILT HERE IF IT IS MISSING, and that is not belt and
+		braces. The first version of this check read the terrain height and
+		failed, because it silently depended on some other service having run
+		AirportService.Init() first - so the same code passed or failed
+		depending on how far through booting the server happened to be. Every
+		other suite in this project builds what it needs; this one now does too.
 	]]
+	if not Workspace:FindFirstChild(AirportService.CONTAINER_NAME) then
+		AirportService.build(Workspace)
+	end
+
 	local overRunway = TerrainService.surfaceAt(0, 0)
 	local terrainUnderRunway = TerrainService.terrainHeightAt(0, 0)
 	record(

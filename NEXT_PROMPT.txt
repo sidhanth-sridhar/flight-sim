@@ -32,12 +32,55 @@ NEXT TASK — PHASE 4: MAKE THE CESSNA LOOK LIKE A CESSNA (§14 Phase 4 + §19).
 ============================================================================
 THIS PHASE IS MODELLING, NOT PHYSICS. The aero offsets, mass layout, CoM and static margin MUST NOT move — §4's published figures are all measured against the current budget, FlightModel caches geometry at spawn, and if the model is redrawn the definition is re-verified, not assumed. The modelled aircraft uses exactly the current mass budget. Anything that would move mass or aero is a decision point, not an assumption — raise it with the pilot first.
 
+MESH STATUS (2026-08-05): the pilot is importing a detailed Cessna 172 model
+from Sketchfab (by KOG_THORNS, CC BY 4.0 — credited in CREDITS.md). It is
+311k triangles, so it is being decimated in Blender to ~50–100k before import
+(Roblox rejects/decimates >20k on upload), and it has NOT landed in Studio yet.
+Do NOT block on it. The plan when it arrives: import as a MeshPart/Model with
+its own asset ID, parent it to the existing physics assembly as a VISUAL SHELL,
+textures applied, collision OFF (the invisible physics parts keep the current
+layout and do all colliding/mass — see "Physics-first, cosmetic-second" below).
+Nothing about the physics definition changes.
+
+Physics-first, cosmetic-second (the pilot's rule from §30's ScaleTo lesson):
+build and verify every behaviour against the existing crude box model FIRST,
+then let the mesh shell replace the visuals afterwards. Do not couple new work
+to the mesh being present.
+
 Scope, refined for realism at the pilot's request (2026-08-04):
-1. Exterior. Fuselage, wing, tail, struts, gear and prop to the real 172S shape, replacing the Cessna172.model boxes. Part layout/aero offsets unchanged.
-2. Control surfaces move with the controls. Ailerons, elevators, rudder, flaps and the trim tab visibly deflect with real inputs; the prop spins with RPM. Purely visual, driven by the same signals the physics already reads — flight model untouched by definition.
-3. The instruments read like a real 172, not like the physics. Real ASI static-source position error; magnetic compass (not true) that lags in turns; altimeter reading what its baro setting says (Atmosphere.getPressureAltitude already feeds QNH). These are DISPLAY errors, injected in the instrument layer, never in the physics — the training value of the phase.
-4. Cockpit interior per the published 172S layout: panel, seats, yokes, rudder pedals, trim wheel, throttle, circuit breakers. The gauges drop in almost unchanged: SixPack.buildPanel() builds into any parent, Instrument.luau is rendering-agnostic (§19 roadmap has been waiting on this since Phase 2). Reference already gathered: published 172S panel guides (flightnerdairforce, pilotmall, cessna172sim).
-5. Controls and switches as 3D parts, visual only, inert and non-interactive. ⚠️ Interactive switches are a DECISION, deferred: the cursor-is-the-yoke rule (§6g, §7) means a clickable switch mid-flight is the flight controls by construction — when that day comes it needs a modal state that releases the yoke or ground-only use. Do not build interactivity now.
+1. Exterior. The mesh shell above is the exterior — the box parts stay as the
+   invisible physics/collision body. Until the mesh lands, the boxes remain the
+   visible model; keep working on the items below that do not need the mesh.
+2. Control surfaces move with the controls. Ailerons, elevators, rudder, flaps
+   and the trim tab visibly deflect with real inputs; the prop spins with RPM.
+   Purely visual, driven by the same signals the physics already reads — flight
+   model untouched by definition. This is the mesh-independent visual work and
+   can start immediately.
+3. The instruments read like a real 172, not like the physics. Real ASI
+   static-source position error; magnetic compass (not true) that lags in turns;
+   altimeter reading what its baro setting says (Atmosphere.getPressureAltitude
+   already feeds QNH). These are DISPLAY errors, injected in the instrument
+   layer, never in the physics — the training value of the phase.
+4. Cockpit interior per the published 172S layout: panel, seats, yokes, rudder
+   pedals, trim wheel, throttle, circuit breakers. The gauges drop in almost
+   unchanged: SixPack.buildPanel() builds into any parent, Instrument.luau is
+   rendering-agnostic (§19 roadmap has been waiting on this since Phase 2).
+   Reference already gathered: published 172S panel guides (flightnerdairforce,
+   pilotmall, cessna172sim). The imported mesh includes a cockpit interior — the
+   visual interior may come from it, but the interactive/panel work is ours.
+5. Controls and switches as 3D parts, visual only, inert and non-interactive.
+   ⚠️ Interactive switches are a DECISION, deferred: the cursor-is-the-yoke rule
+   (§6g, §7) means a clickable switch mid-flight is the flight controls by
+   construction — when that day comes it needs a modal state that releases the
+   yoke or ground-only use. Do not build interactivity now.
+
+Suggested next steps (mesh-independent, in order):
+  a. Wire the control-surface deflection (item 2) against the existing box model
+     — surfaces, trim tab, prop spin from rpm. Verify in Play.
+  b. Add the instrument display errors (item 3) — ASI/compass/altimeter only.
+  c. Build the cockpit interior + 3D panel placement (item 4) on the box model.
+When the mesh lands, drop it over the box shell (visual-only) and re-verify
+nothing physical moved.
 
 Phase 4b (flight tablet) is NEXT after this — do not build it now; it is blocked on the interior for a reason.
 

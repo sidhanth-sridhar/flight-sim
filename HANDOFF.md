@@ -6,7 +6,11 @@
 
 ## 0. Resume here — state at 2026-08-05
 
-**All 698 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 743 checks green across 19 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+
+🎛️ **THE INSTRUMENTS NOW READ LIKE INSTRUMENTS (§32).** The ASI carries the POH's static-source position error (48 kt calibrated indicates **40**), the DI reads **magnetic** rather than true, and the altimeter reads what its baro setting says. **Display errors only** — injected in `SixPack.samplers`, never in the physics. A wet-compass turning-error model is written and tested for the compass scope item 4 will mount; it is **not** on the DI, because a gyro is steady in a turn by design.
+
+✈️ **PHASE 4 HAS STARTED — THE CESSNA LOOKS LIKE A CESSNA (§31).** The exterior is modelled (78 parts, lofted fuselage, dihedral wing, struts, swept fin, gear legs) and **the control surfaces move with the controls** — ailerons, elevators, rudder, flaps, trim tab and a spinning prop, all on `Motor6D` hinges. **The physics did not move**: the structural boxes are unchanged and merely hidden, and `Cessna172` is still 29/29 at 1,111 kg with the CoM where it predicts. Two real bugs were caught doing it — a duplicate part name that **silently detached the tailplane and lost 20 kg**, and **ailerons that deflected backwards** past a test asserting the wrong sign. Scope items 3–5 (instrument realism, cockpit interior, 3D controls) are **not started**.
 
 🧍 **THE PILOT IS 1.75 m, AND THE PREVIOUS ATTEMPT AT IT DID NOTHING AT ALL (§30).** `d19d805` set the R15 scale `NumberValue`s and printed a success line while moving the rig **0.00 studs** — the marker reported the scale it *asked for* beside an unrelated `HumanoidRootPart` number, so it could not tell success from doing nothing. The answer is **`Model:ScaleTo()`** — `Humanoid` has no `ScaleTo`, but a character is a `Model` and that one exists. **There is no 0.4 floor** (it was inferred from a mechanism that was never working) and **no `Motor6D` joints on this rig to rewrite** — it is a constraint rig. The planned manual part-rescaling was never needed. ⚠️ **Leave `AutomaticScalingEnabled` TRUE**: setting it false moves the camera focus onto an unscaled 2-stud constant, putting it 1.30 studs above a shrunken pilot's head. Boarding still moves the aircraft **0.000 m**.
 
@@ -180,6 +184,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 29/29 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
+| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 21/21 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
@@ -188,6 +193,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
+| `InstrumentError` | `StarterPlayer/.../FlightSim/UI/Instruments/InstrumentError.luau` | 24/24 | Client |
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
@@ -2028,3 +2034,141 @@ It sat *on* the apron with its top face a metre proud — the same 1 m ledge tha
 **The `Decal` needs its own pass** — it is a child of the part, not a property, so `Transparency` on the part alone leaves the spawn logo lying on the tarmac. Same trap as the invisible pilot in §6e.
 
 Done at run time in `AirportService`, beside the code that already moves the pad to the airport elevation, because editing `default.project.json` costs a Rojo restart *and* a plugin reconnect (§3) and nothing here needs the Edit view to change.
+
+---
+
+## 31. Phase 4 — the Cessna looks like a Cessna (2026-08-05)
+
+**719/719 across 18 suites**; new `SurfaceAnimation` at 21, `FlightController` 46, `AircraftBuilder` 20, `CameraController` 24.
+
+Scope items **1 (exterior)** and **2 (control surfaces move)** are done. Items 3 (instrument realism), 4 (cockpit interior) and 5 (3D controls) are **not started**.
+
+### The seam that makes this safe: `parts` is physics, `decorations` is appearance
+
+The definition already had the split. `AircraftBuilder` forces `Massless` on every decoration and `measure()` skips massless parts, so **a skin cannot move the mass budget, the centre of mass, the static margin or the inertia tensor** — it is not a promise, it is a property of the build.
+
+So the structural boxes are **unchanged and now invisible** (`hideStructuralParts`), and 78 parts of modelled 172S are drawn over them. `Cessna172.runTests()` is **29/29 unchanged** and `AircraftBuilder` still measures **1,111 kg** with the CoM where it predicts — which is the proof, not the intention.
+
+⚠️ **Do not "tidy" a structural box to match the skin. The skin exists to match the box.**
+
+**Rotation is rejected on structural parts, by the validator.** Roblox reports inertia in world axes, so tipping a mass-bearing box silently rewrites the inertia tensor while every mass number in the file still reads correct. Cosmetic parts carry no mass and cannot.
+
+**Geometry is code, not a mesh** — same reasoning as the airport (§11): a mesh is an opaque binary Rojo cannot diff and cannot be adjusted without leaving the repository. The fuselage is a `loft()` over twelve stations, which is what tapers a 1.16 m cabin down to a 0.34 m tailpost with no hand-placed wedges.
+
+### 🐛 A duplicate part name silently detached the tailplane
+
+The skin named a part `Stabilizer`. So does the structure. `build()` keys one table by name to weld from, so **the decoration replaced the structural part there and the real stabilizer was never welded on** — it stayed in the model, visible, carrying its mass, as a second assembly the aeroplane was not attached to.
+
+| | measured | expected |
+|---|---|---|
+| mass | **1,091 kg** | 1,111 |
+| assemblies | **2** | 1 |
+| centre of mass | 82 mm forward of prediction | on it |
+
+**Every number in the definition was still correct. Only the build was wrong, and nothing said so.** `validate()` now refuses to build on a duplicate name across parts *and* decorations.
+
+### 🐛 The ailerons were backwards, and the first test asserted the wrong sign
+
+Positive rotation about X carries a trailing edge **down**. The aileron shipped at the default `sign = +1`, so a right-roll command **dropped** the right aileron — adding lift to the wing that is supposed to be going down. The surfaces visibly contradicted the roll.
+
+The unit test passed, because it asserted `> 0` with the same wrong reasoning. It was caught by driving a **real built model** and measuring the part's `LookVector`, not by reading the code. The test now derives its signs **from the definition** rather than restating them, so the two cannot drift apart again.
+
+### The surfaces are hinged with `Motor6D`, and the rest position is captured once
+
+A `Motor6D` places `Part1` at `Part0.CFrame * C0 * Transform * C1:Inverse()`. `C0` is built with the **hinge point as its origin and no rotation of its own**, so it is expressed in the datum's axes — that is what lets the animation layer say "rotate about X" and mean the aircraft's lateral axis, whatever angle the surface is mounted at. `C1` folds the mounting rotation back out, so at rest the motor reproduces exactly what `createPart` would have given.
+
+Every deflection is applied on top of a **`baseC0` captured once**, so a surface returns exactly to where the builder put it instead of drifting frame by frame.
+
+Verified on a built model: elevator −22° on stick back (trailing edge up), ailerons ∓20° in opposition, rudder trailing edge right on right pedal, flaps 30° down, trim tab opposing the elevator.
+
+**Flap travel is frame-rate independent** and takes ~7.5 s for full deflection, from an exponential approach rather than a per-frame lerp — the naive version makes travel time depend on how busy the renderer is.
+
+⚠️ **Trim is passed to the animator separately and is NOT in the Controls contract.** Widening those six fields to make an animation convenient is exactly what §6c says not to do.
+
+### An assertion was wrong again — the fourth time
+
+`CameraController`'s "only a few parts are hidden" was `#occluders <= 3`, correct when the aeroplane was fifteen boxes. At 78 parts the eye is legitimately inside a structural box **and** the skin panel over it — `Cabin` with `Fuselage05`, `WingCenter` with `WingCentre` — so the honest count doubled with nothing wrong. Measured 6 of 78. It is now a **proportion**, because what it protects is "the view hides what encloses the eye, not the aeroplane", and that is a fraction. The outer-wing check above it is the one that must never go green by accident.
+
+### ⚠️ Two traps this phase re-confirmed
+
+- **The Edit session's `require` cache is real and it lied twice.** A verification run in Edit reported the ailerons still backwards *after* they were fixed, and reported 20 checks when the file had 21. §29's correction stands — **Play** gets a clean cache, Edit does not. The documented workaround (clone the module tree and require the clone) works and was used to render the final views.
+- **`screen_capture`'s camera override only applies in Edit.** In Play the game's own camera controller writes `CFrame` at a higher render priority and wins, so a requested viewpoint is silently ignored.
+
+### Still open in Phase 4
+
+1. **Instrument realism (scope item 3)** — ASI position error, magnetic compass with turning lag, altimeter on its baro setting. Display errors in the instrument layer, never in the physics.
+2. **Cockpit interior (item 4)** and **3D controls (item 5)** — `SixPack.buildPanel()` already builds into any parent and a test already drives it through a real `SurfaceGui`, so §19's roadmap is waiting rather than blocked.
+3. ⚠️ **§29's pitch-inertia gap is NOT fixed and was not touched.** The model has 2.7× a real 172's `Iyy`. §29 calls remodelling the fix, but closing it means moving mass, which Phase 4 declares a **decision point for the pilot, not an assumption** — the skin deliberately changed nothing. Raise it before acting on it.
+
+### The imported mesh drops in on one flag
+
+An exterior mesh is being imported (Sketchfab, KOG_THORNS, CC BY 4.0 — attributed in `CREDITS.md`). The primitive shell above and a mesh are **both exteriors**, and running both would put the aeroplane in two skins.
+
+`Cessna172.model.exteriorFromMesh = true` drops the static shell and keeps everything the mesh cannot do for itself:
+
+| | shell on | shell off |
+|---|---|---|
+| parts | 78 | **22** |
+| hinged surfaces | 9 | **9** |
+| animated surfaces bound | 8 | **8** |
+| **mass / assemblies** | **1,111 kg / 1** | **1,111 kg / 1** |
+
+**A single imported mesh cannot deflect its own ailerons**, which is exactly why scope item 2 was built mesh-independent — the control surfaces stay ours whatever the exterior is. The mass column is the point: identical either way, because both exteriors are massless decoration over the structural boxes.
+
+The primitive shell stays in the file rather than being deleted. It is what the aeroplane looks like until the mesh arrives, and the fallback if the import is rejected.
+
+---
+
+## 32. The instruments read like instruments, not like the physics (2026-08-05)
+
+**743/743 across 19 suites**; `UIController`'s aggregate 153 → 177.
+
+Phase 4 scope item 3. Every gauge showed the perfect number until now, which is the one thing a real cockpit never does.
+
+⚠️ **THESE ARE DISPLAY ERRORS AND LIVE ONLY IN THE INSTRUMENT LAYER.** Nothing is fed back into the flight model — the aeroplane still flies on true values and only the needles lie. That is what keeps §4's published figures meaningful, and it is the training value of the phase: *a pilot who learns on a perfect altimeter cannot read a real one.*
+
+They are injected in `SixPack.samplers`, which was already the one door every panel value came through.
+
+### ASI position error, from the POH calibration table
+
+A static port sits on a fuselage whose local pressure differs from ambient, and by how much depends on angle of attack — so the error is worst **slow and nose-high**, exactly when the number matters most.
+
+| CAS | indicates | error |
+|---|---|---|
+| 48 kt | **40 kt** | −8 |
+| 80 kt | 80 kt | 0 |
+| 118 kt | **120 kt** | +2 |
+
+Straight off the published table, anchored at (0, 0) so a parked aeroplane indicates zero. **Flaps get their own table** — the POH prints two because at a given speed the flapped aeroplane sits at lower alpha — and the two are blended on flap position. `FlightModel` now publishes `telemetry.flaps` for this; telemetry is the display channel and already carries alpha and beta the same way, so **the six-field Controls contract was not widened** (§6c).
+
+### The DI reads MAGNETIC — and gets nothing else
+
+Headings have been **true** since Phase 1, which means the DI and the runway numbering have quietly disagreed by however much variation would be. `MAGNETIC_VARIATION_DEG = -12.0`, one number in one place.
+
+⚠️ **The turning error is NOT applied to the DI, deliberately.** A directional gyro and a wet compass are different instruments that fail differently — the gyro is *steady in a turn by design* and precesses instead; the wet compass is honest in level flight and useless in a turn. Putting dip error on the DI would be modelling the wrong instrument.
+
+**Gyro precession is also deliberately not modelled**: a real DI drifts and the pilot resets it against the compass, and adding drift with no reset control would be a usability trap, not realism.
+
+### 🐛 The turning error was on cosine, and shipped on sine
+
+The wet-compass model (written now, for the compass scope item 4 puts on the windscreen frame) had the error proportional to `sin(heading)`. That puts the maxima on **east and west** — the exact opposite instrument. It must be `cos(heading)`: largest through north and south, **zero through east and west**, which is why a pilot can roll out onto east by the compass and cannot roll out onto north.
+
+Caught by the assertion "turning error vanishes on east and west", which reported 20° of error at both.
+
+Sign check at north with left bank: `cos(0) = 1`, bank negative, error positive — the card swings right while the aeroplane turns left. **Undershoot North**, as it should be.
+
+### Altimeter: what the Kollsman window says
+
+An altimeter reads true height only when set to the actual QNH. **"High to low, look out below"** falls straight out: a setting left higher than actual makes it over-read, so the aeroplane is *lower* than indicated. Verified at the 273 ft per 10 hPa rule of thumb, and symmetric in both directions.
+
+The conversion goes through `Atmosphere.getPressureAltitude` **twice** rather than restating its feet-per-pascal constant — two readings of the same altitude against two datums differ by exactly the datum difference. QNH and the setting default to standard, so nothing changes until Phase 5's weather supplies them.
+
+### Six existing tests asserted the perfect instrument
+
+Changing what the gauges display made six `SixPack` checks fail, correctly — they demanded the raw number back. They were updated **deliberately, not to green**:
+
+- The unit-boundary check now feeds **80 kt**, the one speed the POH says the ASI reads correctly, so it tests the unit boundary and nothing else.
+- Needle-position checks assert against **what the sampler produced**, not against the raw input — the needle's job is to point at what the instrument shows, and asserting the raw value would make the gauge and the instrument model disagree.
+- "Absent telemetry reads zero" became "is survivable": **a true heading of zero is genuinely not magnetic zero**, and demanding it be would assert the absence of the feature.
+
+Two new checks pin that the error reaches the panel at all, so a future "simplification" back to the raw number fails loudly.

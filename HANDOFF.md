@@ -12,6 +12,10 @@
 
 📋 **Phase 3 decisions, made by the pilot**: each airport declares its own elevation; a player spawns at the airport **nearest** them; and the field **stays 2,048 m**, so **streaming is explicitly deferred, not skipped**. That last one constrains the next system — a second *full-size* airport does not fit beside the first, so airport B must be a shorter strip about 1 km out. See §20.
 
+🐛 **"WHY IS THERE NOTHING WHEN I RUN PLAY" — found and fixed (§20).** Renaming the bootstrap to Rojo's lowercase `init.server.luau` changed the tree shape: `ServerScriptService.FlightSim` became the **Script** instead of a Folder holding an `Init` child, so `script.Parent:FindFirstChild("Services")` looked in `ServerScriptService` and found nothing. **No services started at all, in complete silence** — while gravity, the remotes and the physics self-check were all correct, because those run first. It now checks both layouts and **warns** instead of returning zero quietly.
+
+🌱 **Terrain grass was burying the runway, and only a screenshot found it (§20).** Roblox draws grass blades sized for the default stud scale; at 1 stud = 1 m they are metre-tall and grow through 0.4 m of pavement. `Terrain.Decoration` does not exist in engine 0.732, so the ground is now **`Ground` tinted green** via `SetMaterialColor`. Every number was right — height, flatness, continuity, pavement standing proud — while the runway was invisible.
+
 ⚠️ **`ServerScriptService/FlightSim/init.server.luau` is not syncing into Studio.** Rojo's own build contains the change and every other file syncs, so the server is fine and the plugin is holding a connect-time snapshot of that one instance. **Reconnect the Rojo plugin in Studio** — until then the bootstrap runs an old `SERVICE_ORDER` that does not start `TerrainService`, and a Play session has no terrain unless it is built by hand. The file was also renamed `Init.server.luau` → `init.server.luau` to match Rojo's documented lowercase convention.
 
 # ✅ **PHASE 2 IS SIGNED OFF.** The instrument circuit was flown and passed on 2026-08-04 — an altitude held on the altimeter, a speed on the ASI, a heading on the DI, and the AoA indication marking the stall (§14, §18).
@@ -1401,3 +1405,42 @@ require(game.ServerScriptService.FlightSim.Services.TerrainService).runTests()
 **604/604 across 17 suites** — 502 client, 102 server.
 
 ⚠️ **The visual check was not completed.** Terrain exists only at run time, so the Edit view cannot show it, and `screen_capture` fights the running client's camera. The ground is verified numerically — pads flat to 0.0000 m, the field continuous to under 2 m over a 10 m step, relief inside its declared amplitude, pavement standing proud — but **nobody has looked at it yet**. Worth an eyeball on the next flight.
+
+---
+
+## 21. "Why is there nothing when I run play" (2026-08-05)
+
+Two separate faults, found by measuring and then by looking. **604 → 605 checks; `TerrainService` 19 → 20.**
+
+### Fault 1: no services started, in silence
+
+The world had no airport, no terrain and no aircraft. But `Workspace.Gravity` read **9.80665** and `CharacterWalkSpeed` **7.00**, which proved the bootstrap had run and got past its requires — so this was never a sync or a load-order problem.
+
+`startServices()` looked up `script.Parent:FindFirstChild("Services")`. Renaming the bootstrap from `Init.server.luau` to Rojo's documented lowercase `init.server.luau` **changed the tree shape**:
+
+| file name | resulting tree | `script.Parent` |
+|---|---|---|
+| `Init.server.luau` | `FlightSim` **Folder** holding a Script named `Init` | the FlightSim folder — `Services` is a **sibling** ✅ |
+| `init.server.luau` | `FlightSim` **is** the Script | `ServerScriptService` — `Services` is a **child**, not found ❌ |
+
+So the rename silently moved the folder out from under the lookup. `startServices()` returned 0 and the bootstrap logged nothing about it.
+
+**Both layouts are now checked, and a missing folder WARNS.** The failure was invisible precisely because it returned a number rather than raising anything.
+
+### Fault 2: the runway was buried in grass
+
+Numerically the world was perfect — pads flat to 0.0000 m, the field continuous, the pavement standing proud of the terrain by exactly 5 cm. Standing on the runway, it was **waist-deep in grass blades that grew straight through the pavement**.
+
+Roblox draws grass decoration on `Grass` and `LeafyGrass`, sized for the **default stud scale** where a character is 5 studs tall. At 1 stud = 1 m (§2) those blades are one to two **metres** high — taller than the 0.4 m pavement they poke through.
+
+That is not cosmetic: §11 exists because the Phase 1 landing gate was flown on a featureless plane and judged impossible, and the centreline dashes and edge markers **are** the depth and closure cues. Grass over them takes the runway away again.
+
+`Terrain.Decoration` is the direct control and **does not exist in engine 0.732** — reading or assigning it errors. (Assigning it inside `build()` made the service throw before it filled anything, which is why the world briefly had no ground at all and the character fell through.) The material is therefore the only lever: the ground is **`Enum.Material.Ground`, tinted green** with `SetMaterialColor`, which has no decoration at all and reads as a mown airfield.
+
+**Only looking found this**, which is now the fourth time in this project. A test asserts the ground material is never `Grass` or `LeafyGrass`.
+
+### How to test it
+```lua
+require(game.ServerScriptService.FlightSim.Services.TerrainService).runTests()  -- Server
+```
+**605/605 across 17 suites** — 502 client, 103 server. Verified live: airport, terrain at 249.953 beside a runway at 250.000, aircraft spawned, baseplate retired, spawn lifted to 250.50, and the runway visible from ground level with its markings running to the horizon.

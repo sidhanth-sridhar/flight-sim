@@ -129,7 +129,30 @@ local BLOCK = 16
 -- only has to be thicker than the deepest relief plus a margin.
 local DEPTH = 120
 
-local GROUND_MATERIAL = Enum.Material.Grass
+--[[
+	GROUND, TINTED GREEN - and it is deliberately not Grass.
+
+	Roblox draws grass blades on Grass and LeafyGrass, sized for the DEFAULT
+	stud scale where a character is 5 studs tall. At 1 stud = 1 m (§2) those
+	blades come out one to two METRES high: waist-deep on the pilot, and tall
+	enough to grow straight up through 0.4 m of pavement and bury the runway.
+
+	That is not cosmetic. §11 exists because the Phase 1 landing gate was flown
+	on a featureless plane and judged impossible, and the centreline dashes and
+	edge markers ARE the depth and closure cues. Grass drawn over them takes the
+	runway away again.
+
+	`Terrain.Decoration` would be the direct control and DOES NOT EXIST in this
+	engine version (checked on 0.732: reading or assigning it errors), so the
+	material is the only lever. Ground has no decoration at all, and
+	SetMaterialColor makes it the green of a mown airfield.
+
+	Found by LOOKING at the world. Every number was already correct - ground
+	height, flatness, continuity, pavement standing proud - while the runway was
+	invisible under grass.
+]]
+local GROUND_MATERIAL = Enum.Material.Ground
+local GROUND_COLOR = Color3.fromRGB(86, 122, 62)
 
 -- =========================================================================
 -- THE HEIGHT FIELD
@@ -293,7 +316,12 @@ function TerrainService.build(): number
 	retireBaseplate()
 
 	local terrain = Workspace.Terrain
+
 	terrain:Clear()
+
+	-- Ground is a brown material by default; this is what makes it read as a
+	-- mown airfield rather than a ploughed one. See the note on GROUND_MATERIAL.
+	terrain:SetMaterialColor(GROUND_MATERIAL, GROUND_COLOR)
 
 	local filled = 0
 	local half = BLOCK / 2
@@ -544,6 +572,20 @@ function TerrainService.runTests(): (boolean, { any })
 		"The baseplate part is gone - terrain is the ground now",
 		Workspace:FindFirstChild("Baseplate") == nil,
 		"retired at run time; the Rojo-managed part still exists for the edit view"
+	)
+
+	--[[
+		The ground material must be one that Roblox does NOT draw grass blades
+		on. Those blades are sized for the default stud scale, so at 1 stud = 1 m
+		they are metre-tall and grow straight through 0.4 m of pavement, hiding
+		the runway markings §11 depends on. `Terrain.Decoration` would have
+		turned them off but does not exist in this engine version (0.732), so
+		the material is the control.
+	]]
+	record(
+		"The ground material does not sprout metre-tall grass",
+		GROUND_MATERIAL ~= Enum.Material.Grass and GROUND_MATERIAL ~= Enum.Material.LeafyGrass,
+		string.format("%s; blades are sized for 5-stud characters", GROUND_MATERIAL.Name)
 	)
 
 	--[[

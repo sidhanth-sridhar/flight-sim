@@ -149,9 +149,41 @@ local SERVICE_ORDER = {
 	"AircraftService",
 }
 
+--[[
+	WHERE THE SERVICES FOLDER IS DEPENDS ON HOW ROJO NAMED THIS FILE, and
+	getting it wrong starts NO services at all while everything else about the
+	boot looks perfectly healthy.
+
+	Rojo has two layouts for a directory containing a script:
+
+	  init.server.luau  -> the DIRECTORY becomes the Script. `script` is
+	                       ServerScriptService.FlightSim, and Services is its
+	                       CHILD. script.Parent is ServerScriptService.
+	  Init.server.luau  -> the directory becomes a FOLDER holding a script
+	                       named Init. script.Parent is the FlightSim folder,
+	                       and Services is a SIBLING.
+
+	This file was renamed from the second form to the first - which is Rojo's
+	documented convention - and that silently moved the folder out from under
+	`script.Parent`. The symptom was a world with no airport, no terrain and no
+	aircraft, while gravity, the remotes and the physics self-check were all
+	correct, because those run before this function.
+
+	Both are checked, so the bootstrap survives either layout, and a missing
+	folder now WARNS instead of returning zero in silence.
+]]
+local function findServicesFolder(): Instance?
+	return script:FindFirstChild("Services") or script.Parent:FindFirstChild("Services")
+end
+
 local function startServices()
-	local servicesFolder = script.Parent:FindFirstChild("Services")
+	local servicesFolder = findServicesFolder()
 	if not servicesFolder then
+		warn(
+			"[FlightSim:Server] No Services folder found under "
+				.. script:GetFullName()
+				.. " or its parent - NO services started. The world will be empty."
+		)
 		return 0
 	end
 

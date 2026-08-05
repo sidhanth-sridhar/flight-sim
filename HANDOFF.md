@@ -12,6 +12,8 @@
 
 📋 **Phase 3 decisions, made by the pilot**: each airport declares its own elevation; a player spawns at the airport **nearest** them; and the field **stays 2,048 m**, so **streaming is explicitly deferred, not skipped**. That last one constrains the next system — a second *full-size* airport does not fit beside the first, so airport B must be a shorter strip about 1 km out. See §20.
 
+🛰️ **ALTITUDE HOLD NOW IGNORES THE CURSOR (§28).** While engaged (R), the mouse is not read as the yoke at all — it can neither fight the roll law through the "pilot is flying" hand-off nor drop the mode out through the old stick-movement disconnect, which were the two ways the cursor caused the hunting. Only R disengages. The rudder still works and still re-targets the heading reference. `disconnectThreshold` is gone. InputController's suite is 101 checks now (was 102); **not yet flown and not yet re-run in Studio — a pilot has not pressed R in the air since the change.**
+
 🐛 **"WHY IS THERE NOTHING WHEN I RUN PLAY" — found and fixed (§20).** Renaming the bootstrap to Rojo's lowercase `init.server.luau` changed the tree shape: `ServerScriptService.FlightSim` became the **Script** instead of a Folder holding an `Init` child, so `script.Parent:FindFirstChild("Services")` looked in `ServerScriptService` and found nothing. **No services started at all, in complete silence** — while gravity, the remotes and the physics self-check were all correct, because those run first. It now checks both layouts and **warns** instead of returning zero quietly.
 
 🌱 **Terrain grass was burying the runway, and only a screenshot found it (§20).** Roblox draws grass blades sized for the default stud scale; at 1 stud = 1 m they are metre-tall and grow through 0.4 m of pavement. `Terrain.Decoration` does not exist in engine 0.732, so the ground is now **`Ground` tinted green** via `SetMaterialColor`. Every number was right — height, flatness, continuity, pavement standing proud — while the runway was invisible.
@@ -296,7 +298,7 @@ InputController.rebind(ic, action, keyCode)
 
 **`update()` is pure**, taking a snapshot of held ACTION names rather than reading `UserInputService`. That is what makes ramps, edge-triggered detents and the altitude-hold law testable at all. Edge detection lives inside `update()` (it keeps `wasHeld`), so callers pass held-state only.
 
-**Altitude hold is a cascade**: altitude error → demanded vertical speed → pitch command. Commanding pitch straight from altitude error gives a phugoid that never settles; the inner vertical-speed loop is what damps it. Manual pitch past `disconnectThreshold` disconnects it, as a real autopilot does.
+**Altitude hold is a cascade**: altitude error → demanded vertical speed → pitch command. Commanding pitch straight from altitude error gives a phugoid that never settles; the inner vertical-speed loop is what damps it. **Since §28 the cursor is ignored while engaged** — it can neither override the law nor disconnect the mode; only R disengages.
 
 **Mouse is inverted as specified** — pointer forward → nose down. Roblox reports `Delta.Y < 0` when the mouse moves forward and pitch is positive-nose-up, so the accumulation needs *no negation anywhere*. Both directions are asserted separately because this is the likeliest thing in the file to be wrong.
 
@@ -617,7 +619,7 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - When splitting a wing into panels: halve the **area**, keep the **full wing's aspect ratio**. Induced drag depends on total span. Getting this wrong roughly doubles induced drag and the aircraft mysteriously won't climb.
 - **The thrust line is BELOW the centre of mass**, by about 0.28 m — the high wing and its fuel carry the balance point above the propeller shaft. So power produces a nose-**up** moment ("power up, nose up"), which is correct for a high-wing Cessna. A comment in the definition claimed the opposite for a while; the sign is now asserted by `FlightModel.runTests()` rather than trusted to prose.
 - **A `runTests()` that errors mid-suite leaks its rig into the workspace**, and in Studio that debris survives into the next Play session — where a leftover aircraft looks exactly like a double-spawn bug. It cost real time to diagnose once. `FlightController.runTests` now wraps its body in a `pcall` and destroys the rig either way; **`AircraftBuilder`, `FlightModel` and `GroundHandling` still destroy on the last line and have the same flaw.** If a Play session shows more aircraft than expected, clean `workspace` in *Edit* first.
-- **Altitude hold disconnects on stick MOVEMENT, not absolute deflection.** In Direct mouse mode the stick holds wherever it was put, so testing absolute deflection meant a pilot flying with real pitch input would press R and have it engage and disconnect on the same frame — a dead key with no feedback. The reference position is captured at engagement.
+- **Altitude hold disconnects on stick MOVEMENT, not absolute deflection.** In Direct mouse mode the stick holds wherever it was put, so testing absolute deflection meant a pilot flying with real pitch input would press R and have it engage and disconnect on the same frame — a dead key with no feedback. The reference position is captured at engagement. **SUPERSEDED by §28:** while engaged the cursor is ignored entirely, so there is no stick movement left to measure and no disconnect — only R turns the mode off.
 - **Cross-product order for the lateral axis.** `rollDir:Cross(groundNormal)` points to the aircraft's right; `groundNormal:Cross(rollDir)` points left. Getting it backwards inverts nose-wheel steering and the reported skid direction *without* breaking lateral grip, because grip is sign-symmetric — so the tests that would catch it are the steering ones, not the friction ones. This was caught on the first `GroundHandling` run.
 - **A "restore" that defaults to a hardcoded value will clobber something.** Pilot invisibility recorded each part's transparency on the way in, then restored, with a fallback of 0 when nothing was recorded — and the fallback fired, because the restore path runs BEFORE the hide path ever does: `adopt()` calls `onOccupantChanged()` the moment an aircraft is assigned, long before anyone sits. That set the `HumanoidRootPart` — which ships at 1 and is meant to stay hidden — to fully opaque. **Restore only what you actually changed; touch nothing else.** The unit test missed it entirely because a synthetic fixture never reproduces the real call ordering. The live check did.
 - **Windmilling RPM read NEGATIVE on a parked aircraft.** `Engine.update` used `math.min(airspeedMs * 12, ...)` for a dead engine, and `airspeedMs` is the *forward* component, which drifts slightly negative when stationary — so the tachometer ran backwards. Now clamped at zero. Found by the debug HUD showing `RPM -0` on its first flight, which is precisely what that HUD is for.
@@ -1746,7 +1748,7 @@ A **spiral**. Nothing held the wings, so the aeroplane rolled off; the bank stol
 2. **Wings level** rolls out bank the pilot did not ask for.
 3. **Heading hold** banks — gently, never past `maxBank` = 20° — to steer back to the heading captured at engagement.
 
-**And it gets out of the way.** If the pilot rolls with the cursor *or uses any rudder at all*, the augmentation returns their command untouched and the heading reference **follows the aeroplane**. So a bootful of rudder yaws the aircraft, the mode accepts the new heading, and letting go does not snap back to where R was pressed.
+**And it gets out of the way.** Since §28 the cursor cannot reach the law while engaged, so this hand-off is only ever triggered by the rudder now: any rudder at all returns the pilot's roll command untouched and the heading reference **follows the aeroplane**. So a bootful of rudder yaws the aircraft, the mode accepts the new heading, and letting go does not snap back to where R was pressed.
 
 **`controls.yaw` is never written anywhere in this mode.** The rudder is the pilot's alone; the augmentation only reads it to know when to stand down.
 
@@ -1759,7 +1761,7 @@ A **spiral**. Nothing held the wings, so the aeroplane rolled off; the bank stol
 
 Rudder while engaged: roll command goes to exactly **+0.000**, heading moves 344.5 → 355 under rudder, and on release settles near **351** — followed, not snapped back. Altitude error stayed ≤ 0.3 m throughout.
 
-**No tuned pitch gain was touched.** `altitudeGain`, `verticalSpeedGain`, `maxClimbRate`, `pitchLimit` and `disconnectThreshold` are all unchanged — the measurement showed they were never the problem. The new gains live in a separate `stability` block.
+**No tuned pitch gain was touched.** `altitudeGain`, `verticalSpeedGain`, `maxClimbRate` and `pitchLimit` are all unchanged — the measurement showed they were never the problem. The new gains live in a separate `stability` block. (`disconnectThreshold` was later **removed** with §28 — its whole job was to read the cursor, and the cursor no longer reaches the law while engaged.)
 
 `FlightState` gained `bankAngle`, `rollRate` and `heading`, all optional: without them only the pitch channel augments, which is the previous behaviour and a sane degraded state. `FlightController` fills them from the **same single reading** of the assembly, using the constructions `FlightModel` already publishes — the DI a pilot reads and the heading this mode steers by must not be two different numbers. Roll rate is projected onto the nose vector, because the world X component reads a *pitching* aeroplane as rolling once it turns east–west.
 
@@ -1776,3 +1778,25 @@ The first measurement of this bug was taken with **throttle at 0.000** — `IC.u
 A heading-hold check used an error of **exactly 180°**, where the shortest way round is genuinely ambiguous and `angleDelta` returns −π as legitimately as +π. It asserted a turn direction that has no correct answer, and failed on correct code.
 
 ⚠️ **Not yet flown.** Every number here is closed-loop against the real aerodynamics with the engine running and the throttle commanded, but a pilot has not pressed R in the air since the change.
+
+## 28. The cursor is ignored while altitude hold is engaged (2026-08-05)
+
+The pilot's report: altitude hold still hunts, and the suspicion is the mouse — the cursor is the yoke, and its input keeps fighting the autopilot while the mode is active. Implemented exactly as requested: **while engaged, the mode overrides the mouse entirely.** The cursor is not read as the yoke at all, the autopilot has unopposed authority, and only R disengages it.
+
+Why this is more than an authority question — the cursor had **two** live paths into the engaged mode:
+
+1. **The roll hand-off.** `stabilityRoll` hands the roll axis back to any command past `pilotRollThreshold` (0.06). The cursor does not need to move far for that — it only had to sit slightly off centre while R was pressed, and the autopilot then fought a deflected aileron instead of flying. That is the hunting as it presents in the cockpit.
+2. **The disconnect.** Pitch movement past `disconnectThreshold` (0.15) dropped the mode out entirely. A cursor nudge could silently turn the autopilot off — which presents as the aeroplane "hunting" when it is actually the law being disengaged and re-engaged.
+
+Both are gone: `rawPitch` and `rawRoll` are forced to 0 while `systems.altitudeHold` is true, the stick-reference capture and the disconnect block are deleted, and `disconnectThreshold` is removed from config.
+
+**What is deliberately still live:**
+- The **rudder**. `controls.yaw` is not the mouse, is never zeroed, still reaches the aeroplane, and still releases the heading reference — the pilot's requirement that the mode never fight the rudder is untouched.
+- The **altitude capture** and the **heading capture** at engagement.
+- **Pitch/roll smoothing**, so the handover to the autopilot is eased rather than stepped.
+
+**No tuning was touched.** `altitudeGain`, `verticalSpeedGain`, `maxClimbRate`, `pitchLimit`, the whole `stability` block and the smoothing constants are unchanged. The one deleted number is `disconnectThreshold`, because its entire job was to read the cursor and the cursor no longer reaches the law.
+
+**Tests**: the five disconnect/reference tests are replaced by four that assert the opposite behaviour end to end — a cursor slammed into the corner while engaged changes pitch and roll by nothing and the mode stays engaged; R disengages; and after disengagement the same cursor commands the aircraft again. InputController 102 → 101 checks.
+
+⚠️ **Not yet flown, and not yet re-run in Studio.** These are unit-level assertions; run `InputController.runTests()` and fly it — engage level (should hold without hunting), engage mid-climb (should level off without banging), and jam the cursor around while engaged (must do nothing).

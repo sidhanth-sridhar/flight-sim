@@ -229,11 +229,6 @@ InputController.DEFAULTS = {
 			altitudeHoldPitchCaptured for what it fixes.
 		]]
 		captureAccel = 1.0,
-
-		-- Stick movement AWAY FROM where it sat at engagement that disconnects
-		-- it, as every autopilot does. Measured as a change, not an absolute -
-		-- see the note at the disconnect test.
-		disconnectThreshold = 0.15,
 	},
 
 	--[[
@@ -281,11 +276,13 @@ InputController.DEFAULTS = {
 		rollLimit = 0.6,
 
 		--[[
-			How far the cursor must move off centre before the pilot is judged
-			to be flying the ailerons themselves. Above this the augmentation
-			hands the roll axis back completely and the heading reference
-			follows the aeroplane, so releasing the yoke does not snap it back
-			to where it was engaged.
+			How far the roll command must be off centre before the pilot is
+			judged to be flying the ailerons themselves. Above this the
+			augmentation hands the roll axis back completely and the heading
+			reference follows the aeroplane. In update() the cursor can no
+			longer reach this while the mode is engaged - it is ignored - so
+			only the rudder threshold below is live there; this one still
+			governs the pure law, which its direct-call tests drive.
 		]]
 		pilotRollThreshold = 0.06,
 
@@ -432,14 +429,12 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 		pitchVelocity = 0,
 		rollVelocity = 0,
 
-		-- Stick position captured when altitude hold engaged; the disconnect
-		-- test measures movement away from this, not absolute deflection.
-		altHoldPitchReference = 0,
 		-- Set on engagement, so the demanded climb starts where the aeroplane
 		-- already is. nil while altitude hold is off.
 		altHoldCapture = nil :: any,
 		-- The heading the stability mode steers back to. Set on engagement and
-		-- allowed to follow whenever the pilot rolls or uses rudder.
+		-- allowed to follow whenever the pilot uses the rudder - the cursor
+		-- cannot reach the law while engaged, so only the pedals release it.
 		headingReference = nil :: any,
 
 		-- Previous frame's held set, for edge detection.
@@ -799,7 +794,6 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 	local rawPitch = MathUtil.expo(MathUtil.deadzone(pointerY, config.mouseDeadzone), config.mouseExpo)
 
 	-- ---- Altitude hold ---------------------------------------------------
-	local engagedThisFrame = false
 	if rising(state, snapshot, "AltitudeHold") and flightState then
 		systems.altitudeHold = not systems.altitudeHold
 		if systems.altitudeHold then
@@ -807,22 +801,7 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 			-- the pilot means by "hold this".
 			systems.altitudeTargetM = flightState.altitude
 			--[[
-				Also capture where the stick was sitting. The disconnect test
-				below measures MOVEMENT away from this reference, not absolute
-				deflection.
-
-				Testing absolute deflection cannot work here, and the absolute
-				pointer makes that more true rather than less: the yoke sits
-				wherever the cursor is, so a pilot holding any real pitch input
-				- the normal way to fly without trim - would press R and have it
-				engage and drop out on the same frame, with nothing to show for
-				it but a dead key. Real autopilots disconnect on a change in
-				control pressure for the same reason.
-			]]
-			state.altHoldPitchReference = rawPitch
-
-			--[[
-				And capture the CLIMB, which is what stops the bang. The demand
+				Capture the CLIMB, which is what stops the bang. The demand
 				starts at whatever the aeroplane is already doing, so the inner
 				loop sees no step on the first frame. See
 				altitudeHoldPitchCaptured.
@@ -831,16 +810,24 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 
 			-- And the heading to hold, which is simply the one being flown.
 			state.headingReference = flightState.heading
-
-			engagedThisFrame = true
 		end
 	end
 
-	-- Moving the stick away from where it was at engagement disconnects it.
-	if systems.altitudeHold and not engagedThisFrame then
-		if abs(rawPitch - state.altHoldPitchReference) > config.altHold.disconnectThreshold then
-			systems.altitudeHold = false
-		end
+	--[[
+		THE CURSOR IS IGNORED WHILE THE MODE IS ENGAGED. The cursor is the
+		yoke, and letting its position reach the law was part of the hunting
+		measured in altitude hold: the lateral law handed the roll axis back to
+		any cursor deflection past pilotRollThreshold, so a cursor held even
+		slightly off centre kept the autopilot fighting it - and a pitch move
+		past the old disconnect threshold dropped the mode out entirely.
+		Engaged, the autopilot now has unopposed authority. Only R turns it
+		off, and then the cursor is the yoke again. The rudder is NOT ignored:
+		controls.yaw still reaches the aeroplane and still releases the heading
+		reference to follow.
+	]]
+	if systems.altitudeHold then
+		rawPitch = 0
+		rawRoll = 0
 	end
 
 	local commandedPitch: number
@@ -1680,57 +1667,47 @@ function InputController.runTests(): (boolean, { any })
 		string.format("%+.4f at 5000 m error", wayOff)
 	)
 
-	-- Manual pitch disconnects it, as on a real autopilot.
-	state = fresh()
-	run(state, 1, { "AltitudeHold" }, nil, level)
-	run(state, 30, nil, pointer(0, 0.6), level)
-	record("Manual pitch disconnects altitude hold", not state.systems.altitudeHold, "disconnected")
-
 	--[[
-		THE regression this guards against, and the absolute yoke makes it more
-		relevant rather than less.
+		WHILE ENGAGED THE CURSOR IS IGNORED, and that is the whole point of the
+		mode. The cursor is the yoke, and its position reaching the law was
+		measured to be part of the hunting reported in altitude hold: the
+		lateral law handed the roll axis back to any cursor deflection past
+		pilotRollThreshold, and a pitch move past the old disconnect threshold
+		dropped the mode out. Engaged, the autopilot has unopposed authority.
 
-		The yoke sits wherever the cursor is, so a pilot flying with real pitch
-		deflection - the normal way to hold an attitude without trim - has a
-		deflected stick at the moment they reach for R. Testing absolute
-		deflection would engage and disconnect on the same frame, and the key
-		would simply appear dead. The reference is captured at engagement and
-		the test is for MOVEMENT away from it.
-
-		Note the pointer is re-sent unchanged below: holding the yoke still is
-		now literally holding the cursor still.
+		This is the OPPOSITE of the old behaviour, so the assertion is written
+		against what the cursor would have commanded: full deflection used to
+		drive pitch to ~1 and roll to ~1 through the "pilot is flying" handoff.
+		Now the autopilot commands zero (on target, wings level) and stays at
+		zero however the cursor moves.
 	]]
 	state = fresh()
-	local flyingPointer = pointer(0, 0.5)
-	run(state, 40, nil, flyingPointer, level) -- fly with the stick well back
-	local deflectedPitch = state.controls.pitch
+	run(state, 1, { "AltitudeHold" }, nil, level)
+	run(state, 60, nil, pointer(1, 1), level)
 	record(
-		"Setup: stick is deflected past the disconnect threshold",
-		math.abs(deflectedPitch) > InputController.DEFAULTS.altHold.disconnectThreshold,
-		string.format("pitch %+.3f", deflectedPitch)
+		"The cursor cannot fight the autopilot while engaged",
+		math.abs(state.controls.pitch) < 0.05 and math.abs(state.controls.roll) < 0.05,
+		string.format("pitch %+.4f, roll %+.4f with the cursor in the corner",
+			state.controls.pitch, state.controls.roll)
 	)
-
-	run(state, 1, { "AltitudeHold" }, flyingPointer, level)
 	record(
-		"R engages with the stick already deflected",
-		state.systems.altitudeHold,
-		"stayed engaged"
-	)
-
-	-- ...and stays engaged while the cursor is simply held where it was.
-	run(state, 60, nil, flyingPointer, level)
-	record(
-		"Holding the stick still keeps it engaged",
+		"...and the mode stays engaged however the cursor moves",
 		state.systems.altitudeHold,
 		"still engaged"
 	)
 
-	-- ...but moving it away from that reference still disconnects.
-	run(state, 40, nil, pointer(0, -0.5), level)
+	-- R returns the aircraft to the pilot, and the cursor is the yoke again.
+	run(state, 1, { "AltitudeHold" }, nil, level)
 	record(
-		"Moving the stick from its reference disconnects",
+		"R disengages, returning control to the cursor",
 		not state.systems.altitudeHold,
-		"disconnected"
+		"disengaged"
+	)
+	run(state, 60, nil, pointer(0, 1), level)
+	record(
+		"After disengaging the cursor commands the aircraft again",
+		state.controls.pitch > 0.1,
+		string.format("pitch %+.3f at full deflection", state.controls.pitch)
 	)
 
 	-- 10b. View cycling ------------------------------------------------------

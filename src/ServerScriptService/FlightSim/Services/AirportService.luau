@@ -539,7 +539,43 @@ AirportService.PATTERN_ALTITUDE = PATTERN_ALTITUDE
 	Slot 0 sits at the apron centre and the rest alternate either side of it, so
 	a handful of aircraft stay clustered rather than trailing off one way.
 ]]
-function AirportService.apronSlotCFrame(slot: number, spacing: number): CFrame
+--[[
+	Where aircraft park at each field.
+
+	Meadow parks on its apron. Ridge is a grass strip with no apron, so aircraft
+	park on the grass beside the threshold end - which is what actually happens
+	at a strip. Both are given as an offset ALONG and ACROSS the field's default
+	runway rather than as world coordinates, so the parking rotates with the
+	aerodrome instead of having to be re-derived for every heading.
+]]
+local PARKING: { [string]: { along: number, across: number } } = {
+	-- Reproduces the old APRON_CENTRE exactly: the apron sits 300 m south along
+	-- runway 36's reciprocal and 150 m to its left.
+	meadow = { along = -300, across = -150 },
+	ridge = { along = -210, across = -34 },
+}
+
+--[[
+	The surface CFrame of one parking slot at one airport.
+
+	SLOTS SPREAD ACROSS THE RUNWAY, NOT ALONG THE X AXIS, and that generalisation
+	is what makes this work at Ridge. Meadow's runway runs north-south, so its
+	"right" vector is +X and the old X-spread was correct by coincidence; Ridge's
+	runs east-west, and spreading along X would have parked its aircraft nose to
+	tail down the strip. Meadow's layout is unchanged - a test asserts the slots
+	are still 18 m apart along X and still face runway 36.
+
+	Aircraft face the runway they will depart from, which is the whole reason
+	the CFrame is oriented rather than a bare position.
+]]
+function AirportService.apronSlotCFrame(airportId: string?, slot: number, spacing: number): CFrame
+	local airport = AIRPORTS[airportId or PRIMARY_ID] or AIRPORTS[PRIMARY_ID]
+	local runway = RUNWAYS[airport.id][airport.defaultRunway]
+	local parking = PARKING[airport.id] or { along = 0, across = 0 }
+
+	local dir = runway.direction
+	local right = dir:Cross(Vector3.yAxis)
+
 	local offset = 0
 	if slot > 0 then
 		local step = math.ceil(slot / 2)
@@ -547,7 +583,49 @@ function AirportService.apronSlotCFrame(slot: number, spacing: number): CFrame
 		offset = side * step * spacing
 	end
 
-	return CFrame.new(APRON_CENTRE.X + offset, SURFACE_Y, APRON_CENTRE.Z)
+	local centre = Vector3.new(airport.origin.X, airport.elevation, airport.origin.Z)
+	local position = centre + dir * parking.along + right * (parking.across + offset)
+
+	return CFrame.lookAt(position, position + dir)
+end
+
+--[[
+	Which aerodrome is nearest a point, by airport origin.
+
+	The pilot's decision (recorded in §0) is that a player spawns at the field
+	nearest them, with no chooser - that is deferred to the Phase 4b tablet.
+	Measured to the ORIGIN rather than to the parking or the threshold because
+	the origin is the one point every airport has regardless of how it is laid
+	out, and the fields are kilometres apart so nothing subtler would change the
+	answer.
+
+	Pure, like everything else above it, so AircraftService can ask before any
+	geometry exists.
+]]
+function AirportService.nearestAirport(position: Vector3): string
+	local bestId, bestDistance = PRIMARY_ID, math.huge
+
+	for _, id in AirportService.airportIds() do
+		local airport = AIRPORTS[id]
+		local origin = Vector3.new(airport.origin.X, airport.elevation, airport.origin.Z)
+		-- Horizontal distance: an aircraft 400 m above Ridge is at Ridge, not
+		-- somewhere between the two fields.
+		local flat = Vector3.new(origin.X - position.X, 0, origin.Z - position.Z)
+		local d = flat.Magnitude
+		if d < bestDistance then
+			bestId, bestDistance = id, d
+		end
+	end
+
+	return bestId
+end
+
+function AirportService.distanceBetween(fromId: string, toId: string): number?
+	local a, b = AIRPORTS[fromId], AIRPORTS[toId]
+	if not a or not b then
+		return nil
+	end
+	return (Vector3.new(b.origin.X - a.origin.X, 0, b.origin.Z - a.origin.Z)).Magnitude
 end
 
 AirportService.APRON_CENTRE = APRON_CENTRE
@@ -1387,6 +1465,109 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("045 -> %s, magnitude %.9f", tostring(d45), d45.Magnitude)
 	)
 
+	-- 2c. Nearest airport, and per-field parking ------------------------------
+	--[[
+		The rule a player spawns by. The pilot's decision is nearest-to-them with
+		no chooser (§0), so this is the whole of the selection logic and it is
+		worth pinning at both fields and in between.
+	]]
+	local meadowOrigin = (AirportService.getAirport("meadow") :: any).origin
+	local ridgeOrigin = (AirportService.getAirport("ridge") :: any).origin
+	record(
+		"Standing at Meadow picks Meadow",
+		AirportService.nearestAirport(Vector3.new(meadowOrigin.X, 250, meadowOrigin.Z)) == "meadow",
+		"nearest = meadow"
+	)
+	record(
+		"Standing at Ridge picks Ridge",
+		AirportService.nearestAirport(Vector3.new(ridgeOrigin.X, 400, ridgeOrigin.Z)) == "ridge",
+		"nearest = ridge"
+	)
+	--[[
+		HEIGHT MUST NOT DECIDE IT. An aeroplane 400 m above Ridge is at Ridge,
+		not somewhere between the two fields, so the comparison is horizontal.
+		A 3D distance would have made a high overflight of Ridge resolve to
+		Meadow purely because Ridge is 150 m further up.
+	]]
+	record(
+		"Altitude does not change which field is nearest",
+		AirportService.nearestAirport(Vector3.new(ridgeOrigin.X, 3000, ridgeOrigin.Z)) == "ridge",
+		"3 km over Ridge is still Ridge"
+	)
+	local midX = (meadowOrigin.X + ridgeOrigin.X) / 2
+	record(
+		"Either side of the midpoint picks the field on that side",
+		AirportService.nearestAirport(Vector3.new(midX - 200, 300, 200)) == "meadow"
+			and AirportService.nearestAirport(Vector3.new(midX + 200, 300, 200)) == "ridge",
+		string.format("midpoint x = %.0f", midX)
+	)
+	record(
+		"Distance between the fields is symmetric and non-zero",
+		math.abs((AirportService.distanceBetween("meadow", "ridge") :: number)
+			- (AirportService.distanceBetween("ridge", "meadow") :: number)) < 1e-6
+			and (AirportService.distanceBetween("meadow", "ridge") :: number) > 1000,
+		string.format("%.0f m apart", AirportService.distanceBetween("meadow", "ridge") :: number)
+	)
+	record(
+		"An unknown field has no distance rather than a wrong one",
+		AirportService.distanceBetween("meadow", "nowhere") == nil,
+		"nil"
+	)
+
+	--[[
+		Parking generalised across the runway rather than along X. Meadow's
+		layout must be BYTE-FOR-BYTE what it was - it is signed off - while
+		Ridge's has to lie across a runway that runs the other way.
+	]]
+	local mSlot0 = AirportService.apronSlotCFrame("meadow", 0, 18)
+	local mSlot1 = AirportService.apronSlotCFrame("meadow", 1, 18)
+	record(
+		"Meadow's parking is unchanged: 18 m apart along X, facing 36",
+		math.abs(math.abs(mSlot1.Position.X - mSlot0.Position.X) - 18) < 1e-3
+			and math.abs(mSlot1.Position.Z - mSlot0.Position.Z) < 1e-3
+			and mSlot0.LookVector:Dot(r36.direction) > 0.999,
+		string.format("(%.0f, %.0f) and (%.0f, %.0f)",
+			mSlot0.Position.X, mSlot0.Position.Z, mSlot1.Position.X, mSlot1.Position.Z)
+	)
+	record(
+		"Meadow's slot 0 is still on the apron",
+		math.abs(mSlot0.Position.X - APRON_CENTRE.X) < 1e-3
+			and math.abs(mSlot0.Position.Z - APRON_CENTRE.Z) < 1e-3,
+		string.format("(%.1f, %.1f) against an apron at (%.0f, %.0f)",
+			mSlot0.Position.X, mSlot0.Position.Z, APRON_CENTRE.X, APRON_CENTRE.Z)
+	)
+
+	local rSlot0 = AirportService.apronSlotCFrame("ridge", 0, 18)
+	local rSlot1 = AirportService.apronSlotCFrame("ridge", 1, 18)
+	record(
+		"Ridge's parking spreads ACROSS its runway, not along X",
+		math.abs(math.abs(rSlot1.Position.Z - rSlot0.Position.Z) - 18) < 1e-3
+			and math.abs(rSlot1.Position.X - rSlot0.Position.X) < 1e-3,
+		string.format("slots differ by %.1f m in Z and %.1f m in X",
+			rSlot1.Position.Z - rSlot0.Position.Z, rSlot1.Position.X - rSlot0.Position.X)
+	)
+	record(
+		"Ridge's parked aircraft face runway 09",
+		rSlot0.LookVector:Dot((ridge09 :: any).direction) > 0.999,
+		string.format("look %s", tostring(rSlot0.LookVector))
+	)
+	record(
+		"Ridge's parking sits at Ridge's elevation",
+		math.abs(rSlot0.Position.Y - AirportService.elevationOf("ridge")) < 1e-3,
+		string.format("y = %.1f", rSlot0.Position.Y)
+	)
+	--[[
+		And clear of the strip itself, or an aeroplane would spawn on the runway
+		and the first thing anyone landing there would meet is a parked 172.
+	]]
+	local acrossStrip = math.abs((rSlot0.Position - Vector3.new(ridgeOrigin.X, rSlot0.Position.Y, ridgeOrigin.Z))
+		:Dot((ridge09 :: any).direction:Cross(Vector3.yAxis)))
+	record(
+		"Ridge's parking is clear of the strip",
+		acrossStrip > (ridge09 :: any).width / 2 + 11,
+		string.format("%.0f m off the centreline, strip is %.0f m wide", acrossStrip, (ridge09 :: any).width)
+	)
+
 	local nav = AirportService.navPoints("meadow", "36") :: { [string]: Vector3 }
 	record("Navigation points exist for runway 36", nav ~= nil, "returned a table")
 	record("Navigation points are nil for an unknown runway", AirportService.navPoints("meadow", "09") == nil, "nil")
@@ -1455,7 +1636,7 @@ function AirportService.runTests(): (boolean, { any })
 	local SPACING = 18
 	local slots = {}
 	for i = 0, 6 do
-		slots[i] = AirportService.apronSlotCFrame(i, SPACING)
+		slots[i] = AirportService.apronSlotCFrame("meadow", i, SPACING)
 	end
 
 	--[[

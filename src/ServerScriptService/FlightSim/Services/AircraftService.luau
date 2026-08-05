@@ -167,6 +167,7 @@ export type Record = {
 	model: Model,
 	owner: Player?,
 	id: string,
+	airport: string,
 	slot: number,
 	spawnedAt: number,
 	violations: number,
@@ -180,9 +181,24 @@ export type Record = {
 ]]
 local active: { [Model]: Record } = {}
 
--- Occupied spawn slots. Freed on despawn so a long session does not march the
--- parking apron off to infinity.
-local usedSlots: { [number]: boolean } = {}
+--[[
+	Occupied spawn slots, PER AIRPORT. Freed on despawn so a long session does
+	not march the parking off to infinity.
+
+	Nested by airport id because slot 0 exists at every field: a flat table would
+	have let Meadow's first aircraft block Ridge's, and the aeroplane would have
+	parked one space further out at a field with nothing on it.
+]]
+local usedSlots: { [string]: { [number]: boolean } } = {}
+
+local function slotsFor(airportId: string): { [number]: boolean }
+	local t = usedSlots[airportId]
+	if not t then
+		t = {}
+		usedSlots[airportId] = t
+	end
+	return t
+end
 
 local container: Folder? = nil
 local connections: { RBXScriptConnection } = {}
@@ -329,8 +345,8 @@ end
 	whatever order Services:GetChildren() returns, so this may well run before
 	the airport's geometry exists. The numbers are right either way.
 ]]
-local function slotCFrame(slot: number): CFrame
-	local surface = AirportService.apronSlotCFrame(slot, SPAWN_SPACING)
+local function slotCFrame(airportId: string, slot: number): CFrame
+	local surface = AirportService.apronSlotCFrame(airportId, slot, SPAWN_SPACING)
 	return surface * CFrame.new(0, SPAWN_HEIGHT, 0)
 end
 
@@ -348,8 +364,8 @@ end
 	Half the spacing is the threshold: far enough that a 11 m wingspan clears,
 	close enough that an aircraft parked slightly off-slot still counts.
 ]]
-local function slotIsClear(slot: number): boolean
-	local position = slotCFrame(slot).Position
+local function slotIsClear(airportId: string, slot: number): boolean
+	local position = slotCFrame(airportId, slot).Position
 	local threshold = SPAWN_SPACING * 0.5
 
 	for _, model in getContainer():GetChildren() do
@@ -365,13 +381,38 @@ end
 
 -- Lowest free slot, so a player who despawns and respawns lands back on the
 -- same patch of apron rather than drifting one space further out each time.
-local function claimSlot(): number
+local function claimSlot(airportId: string): number
+	local slots = slotsFor(airportId)
 	local slot = 0
-	while usedSlots[slot] or not slotIsClear(slot) do
+	while slots[slot] or not slotIsClear(airportId, slot) do
 		slot += 1
 	end
-	usedSlots[slot] = true
+	slots[slot] = true
 	return slot
+end
+
+--[[
+	Which field a player spawns at: the NEAREST one.
+
+	Decided by the pilot and recorded in §0 - there is deliberately no chooser,
+	and the destination picker is the Phase 4b tablet's job. The useful property
+	is that flying to Ridge, landing, and pressing reset keeps you at Ridge
+	rather than teleporting you home.
+
+	Measured from the player's CHARACTER, not from their aircraft: an aircraft
+	is about to be replaced when this is called, and after a crash there may not
+	be one at all. With no character - a request that arrives before the player
+	has spawned - the primary field is the honest default rather than a guess.
+]]
+local function airportFor(owner: Player?): string
+	local character = owner and owner.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+
+	if root and root:IsA("BasePart") then
+		return AirportService.nearestAirport(root.Position)
+	end
+
+	return AirportService.PRIMARY_ID
 end
 
 -- =========================================================================
@@ -535,7 +576,8 @@ function AircraftService.spawn(owner: Player?, aircraftId: string?): (Model?, st
 		end
 	end
 
-	local slot = claimSlot()
+	local airportId = airportFor(owner)
+	local slot = claimSlot(airportId)
 
 	--[[
 		build() hard-errors on an impossible definition - a part that cannot
@@ -544,11 +586,11 @@ function AircraftService.spawn(owner: Player?, aircraftId: string?): (Model?, st
 		down with it and leave the slot claimed forever, so it is caught.
 	]]
 	local ok, result = pcall(function()
-		return AircraftBuilder.build(definition, slotCFrame(slot), getContainer())
+		return AircraftBuilder.build(definition, slotCFrame(airportId, slot), getContainer())
 	end)
 
 	if not ok then
-		usedSlots[slot] = nil
+		slotsFor(airportId)[slot] = nil
 		return nil, string.format("build failed: %s", tostring(result))
 	end
 
@@ -569,6 +611,7 @@ function AircraftService.spawn(owner: Player?, aircraftId: string?): (Model?, st
 		model = model,
 		owner = owner,
 		id = definition.id,
+		airport = airportId,
 		slot = slot,
 		spawnedAt = os.clock(),
 		violations = 0,
@@ -639,9 +682,9 @@ function AircraftService.despawn(model: Model): boolean
 	end
 
 	active[model] = nil
-	usedSlots[record.slot] = nil
+	slotsFor(record.airport)[record.slot] = nil
 
-	log("Despawned %s (slot %d)", model.Name, record.slot)
+	log("Despawned %s (%s slot %d)", model.Name, record.airport, record.slot)
 	model:Destroy()
 
 	return true
@@ -728,7 +771,7 @@ local function runSanityPass()
 			-- Destroyed by something other than despawn(). Reap the record so
 			-- the slot is released and the loop stops visiting a dead model.
 			active[model] = nil
-			usedSlots[record.slot] = nil
+			slotsFor(record.airport)[record.slot] = nil
 			continue
 		end
 

@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 628 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 640 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -185,7 +185,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
-| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 68/68 | **Server** |
+| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 80/80 | **Server** |
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -1557,3 +1557,51 @@ Verified live: strip 18 × 550 m with its top face at exactly y = 400, `LookVect
 1. **`AircraftService` asking which airport** — nearest to the player, already decided (§0).
 2. **Navigation between airports** — distance and bearing.
 3. Streaming: deferred, recorded in §22.
+
+---
+
+## 24. Spawning at the nearest aerodrome (2026-08-05)
+
+**640/640 across 17 suites**; `AirportService` 68 → 80. `AircraftService` no longer assumes there is one airport.
+
+### The rule, and the one it replaced
+
+A player spawns at the field **nearest them**, horizontally. That is the pilot's decision and **there is deliberately no chooser** — the destination picker is the Phase 4b tablet's job, and building one now would be building ahead.
+
+The useful property is what happens after a trip: fly to Ridge, land, press Backspace, and you get an aeroplane **at Ridge**, not teleported home.
+
+`AirportService.nearestAirport(position)` is pure, like everything else that answers a question here, so `AircraftService` can ask before any geometry exists.
+
+⚠️ **The comparison is HORIZONTAL, and that is not a detail.** Ridge is 150 m higher than Meadow, so a 3D distance would have made a high overflight of Ridge resolve to *Meadow* purely because Ridge is further up. An aeroplane 3 km above Ridge is at Ridge. A test pins it.
+
+The field is chosen from the player's **character**, not their aircraft: the aircraft is about to be replaced when this is called, and after a crash there may not be one. With no character at all — a request arriving before the player has spawned — the primary field is the honest default rather than a guess.
+
+### Parking generalised across the runway
+
+`apronSlotCFrame` now takes an airport, and slots spread **across the runway** rather than along the X axis.
+
+That generalisation is the whole of the change. Meadow's runway runs north–south, so its "right" vector *is* +X and the old X-spread was correct by coincidence. Ridge's runs east–west, and spreading along X would have parked its aircraft **nose to tail down the strip**. Slots now spread along `direction × up`, which reproduces Meadow exactly and lays Ridge's out correctly — and parked aircraft face the runway they will depart from, at any heading.
+
+Parking is declared as an offset **along and across** the field's default runway rather than as world coordinates, so it rotates with the aerodrome instead of being re-derived per heading. Meadow's reproduces the old `APRON_CENTRE` exactly; Ridge parks on the grass beside the threshold end, 34 m off the centreline, which is what actually happens at a strip. A test asserts that clearance, because an aircraft spawning on the runway is the first thing a landing pilot would meet.
+
+### Slots are per-airport
+
+`usedSlots` was a flat table, and **slot 0 exists at every field**. Left flat, Meadow's first aircraft would have blocked Ridge's, and an aeroplane would have parked one space further out at a field with nothing on it. It is now nested by airport id, and `Record` carries the airport so despawn frees the right one.
+
+### How to test it
+```lua
+require(game.ServerScriptService.FlightSim.Services.AirportService).runTests()  -- Server
+```
+Verified live rather than only in tests — the same player, moved between fields:
+
+| player standing at | aircraft appeared at |
+|---|---|
+| no character | (−132, 251.3, 300) — Meadow apron |
+| Meadow | (−132, 251.3, 300) — Meadow apron |
+| Ridge | **(1390, 401.3, 166)** — Ridge parking, at Ridge's own elevation |
+
+### Still to come in Phase 3
+1. **Navigation between airports** — distance and bearing.
+2. Streaming: deferred, recorded in §22.
+
+Then the altitude-hold oscillation, which is now in scope.

@@ -1234,7 +1234,7 @@ function AirportService.build(parent: Instance?): Folder
 	]]
 
 	--[[
-		THE PLAYER SPAWN HAS TO FOLLOW THE ELEVATION.
+		THE PLAYER SPAWN HAS TO FOLLOW THE ELEVATION, AND IS HIDDEN IN THE APRON.
 
 		Workspace.SpawnLocation is Rojo's, and Rojo puts it at y = 0 - which was
 		the apron until this task and is now 250 m underneath it. A player would
@@ -1244,10 +1244,28 @@ function AirportService.build(parent: Instance?): Folder
 		the baseplate is retired at run time: editing default.project.json takes
 		a Rojo restart AND a plugin reconnect (§3), and nothing here needs the
 		edit view to change.
+
+		⚠️ IT IS SUNK FLUSH, NOT JUST MADE INVISIBLE. It used to sit ON the
+		apron with its top face a metre proud, which is the same 1 m ledge that
+		obstructed the runway before it was moved here (see the obstruction
+		sweep in runTests). Hiding a ledge without lowering it only makes it an
+		INVISIBLE ledge to trip over on the walk to the aeroplane. The top face
+		is therefore level with the apron and the pad is what a player stands
+		on, indistinguishable from the pavement around it.
+
+		The Decal needs its own pass - it is a child of the part, not a
+		property, so Transparency on the part leaves the spawn logo lying on
+		the tarmac. That is the same trap as the invisible pilot in §6e.
 	]]
 	local spawn = Workspace:FindFirstChild("SpawnLocation")
 	if spawn and spawn:IsA("BasePart") then
-		spawn.Position = Vector3.new(spawn.Position.X, SURFACE_Y + spawn.Size.Y / 2, spawn.Position.Z)
+		spawn.Position = Vector3.new(spawn.Position.X, SURFACE_Y - spawn.Size.Y / 2, spawn.Position.Z)
+		spawn.Transparency = 1
+		for _, decal in spawn:GetDescendants() do
+			if decal:IsA("Decal") or decal:IsA("Texture") then
+				decal.Transparency = 1
+			end
+		end
 	end
 
 	-- ---- Runway ----------------------------------------------------------

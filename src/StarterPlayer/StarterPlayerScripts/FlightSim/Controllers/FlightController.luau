@@ -530,30 +530,103 @@ local setCharacterNeutralised = FlightController.setCharacterNeutralised
 --[[
 	Human proportions, for the pilot character only.
 
-	The world is 1 stud = 1 m and the aircraft are real scale, but a default
-	Roblox avatar is ~5.7 studs tall - roughly 3x a real human - so it towers
-	over a parked Cessna. This scales it down toward ~1.75 m. The engine's
-	floor is 0.4, so at 0.4 a default R15 measures ~2.3 m: closer, but not
-	exact, and that is the closest reachable.
+	The world is 1 stud = 1 m and the aircraft are real scale, but a Roblox
+	avatar measures ~5.2 studs sole to crown - about 3x a real human - so it
+	towers over a parked Cessna. This scales it to PILOT_HEIGHT_M.
 
-	SCALING IS DONE VIA THE R15 SCALE NumberValues, not Humanoid:ScaleTo() -
-	that method does not exist on Humanoid in this engine ("ScaleTo is not a
-	valid member of Humanoid"), and SetScale() does not exist either. The
-	engine watches NumberValue children of the Humanoid named BodyHeightScale,
-	BodyWidthScale, BodyDepthScale and HeadScale, and rescales the rig live
-	while AutomaticScalingEnabled is true. 0.4 is the engine's floor for these
-	values, which is why the target is 0.4 and not smaller.
+	USE Model:ScaleTo(). THE R15 SCALE NumberValues DO NOT WORK, AND THE WAY
+	THEY FAIL IS SILENT. All four of these were measured on the live rig:
 
-	COSMETIC AND LOCAL, and deliberately so. The seated pilot is already
+	  - Humanoid:ScaleTo() and Humanoid:SetScale() do not exist at all
+	    ("ScaleTo is not a valid member of Humanoid"). Model:ScaleTo() does -
+	    it is a method of Model, which is what a character is.
+	  - Setting BodyHeightScale / BodyWidthScale / BodyDepthScale / HeadScale
+	    to 0.4 with AutomaticScalingEnabled = true changes NOTHING. The values
+	    read back as the 0.4 we wrote while GetAppliedDescription() still
+	    reported HeightScale 0.96 and the rig still measured its full 5.16
+	    studs. Setting one to 1.0 and back to 0.4 moved the rig 0.00 studs in
+	    both directions - the mechanism is simply inert here.
+	  - Humanoid:ApplyDescription() is server-only ("can only be called by the
+	    backend server"), so the client cannot go via the description either.
+	  - There are NO Motor6D joints on this rig to rewrite by hand. It is a
+	    constraint rig - AnimationConstraint, BallSocketConstraint, 55
+	    Attachments and 15 WrapTargets of layered clothing. Model:ScaleTo
+	    handles all of that, and HipHeight with it, needing none of that
+	    surgery.
+
+	⚠️ THE OLD MARKER COULD NOT TELL SUCCESS FROM DOING NOTHING, which is why
+	this looked like it worked for a whole session. It printed the scale it
+	ASKED for beside HumanoidRootPart.Size.Y, and the "1.92 studs" it reported
+	was just this player's own untouched avatar. The marker below prints the
+	height MEASURED AFTER THE FACT, so it cannot lie the same way.
+
+	COSMETIC, and it changes nothing physical. The seated pilot is already
 	invisible, massless and non-collidable (setCharacterNeutralised above), so
 	scaling cannot disturb the aircraft's mass budget; the cockpit eye is
 	anchored to the PilotSeat, not the head (CameraController.EYE_OFFSET), so
-	the view does not move; and property/scale changes from the client do not
-	replicate, so other players are unaffected. Nothing here touches the
-	physics, the world scale, or the unit conversions.
+	the view does not move. Nothing here touches the physics, the world scale,
+	or the unit conversions. Boarding was re-measured after the change and
+	still moves the aircraft 0.000 m (section 6e).
 ]]
-local HUMAN_SCALE = 0.4
-local SCALE_VALUE_NAMES = { "BodyHeightScale", "BodyWidthScale", "BodyDepthScale", "HeadScale" }
+local PILOT_HEIGHT_M = 1.75 -- studs too; 1 stud = 1 m (section 2)
+local HEIGHT_TOLERANCE = 0.02
+-- A rig caught mid-assembly measures nonsense. Anything outside this band is
+-- not a body yet, so it is re-measured rather than scaled from.
+local MIN_PLAUSIBLE_HEIGHT = 0.5
+local MAX_PLAUSIBLE_HEIGHT = 12.0
+-- Two readings this close together mean the pose has stopped moving. At rest
+-- the measure repeats to four decimals, so this is a loose bound on "still".
+local POSE_EPSILON = 0.005
+
+--[[
+	Sole-to-crown height of a character, in studs.
+
+	The HumanoidRootPart is excluded because it is an invisible collision box
+	that does not track the visible rig - reading it is precisely the mistake
+	the old marker made. Accessories are excluded because hair and hats are
+	not height.
+]]
+function FlightController.rigHeightStuds(character: Model?): number?
+	if not character then
+		return nil
+	end
+	local top, bottom = -math.huge, math.huge
+	for _, descendant in character:GetDescendants() do
+		if
+			descendant:IsA("BasePart")
+			and descendant.Name ~= "HumanoidRootPart"
+			and not descendant:FindFirstAncestorOfClass("Accessory")
+		then
+			top = math.max(top, descendant.Position.Y + descendant.Size.Y / 2)
+			bottom = math.min(bottom, descendant.Position.Y - descendant.Size.Y / 2)
+		end
+	end
+	if top <= bottom then
+		return nil
+	end
+	return top - bottom
+end
+
+--[[
+	The Model scale that puts a rig of `measuredHeight` at PILOT_HEIGHT_M.
+
+	Model:ScaleTo takes an ABSOLUTE scale relative to the rig as it was built,
+	not a multiplier, so the scale the rig is already at has to be folded back
+	in. Measuring rather than hard-coding a factor is what makes this land on
+	1.75 m for any player's avatar rather than only for a default one.
+
+	Idempotent by construction: hand it a rig already at the target and it
+	returns the scale that rig is already at, so re-applying is a no-op.
+]]
+function FlightController.pilotScaleFor(currentScale: number?, measuredHeight: number?): number?
+	if not currentScale or not measuredHeight then
+		return nil
+	end
+	if currentScale <= 0 or measuredHeight <= 0 then
+		return nil
+	end
+	return currentScale * PILOT_HEIGHT_M / measuredHeight
+end
 
 function FlightController.scaleForHumanProportions(character: Model?)
 	if not character then
@@ -561,38 +634,104 @@ function FlightController.scaleForHumanProportions(character: Model?)
 	end
 
 	task.spawn(function()
-		-- The scale NumberValues may not exist until the rig has finished
-		-- assembling, so retry until they are there. A fresh character is
-		-- usually ready after a few frames.
-		for attempt = 1, 40 do
-			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			if not humanoid then
-				return
-			end
-			local ok = pcall(function()
-				humanoid.AutomaticScalingEnabled = true
-				for _, name in SCALE_VALUE_NAMES do
-					local value = humanoid:FindFirstChild(name)
-					if not value then
-						value = Instance.new("NumberValue")
-						value.Name = name
-						value.Parent = humanoid
-					end
-					value.Value = HUMAN_SCALE
-				end
-			end)
-			if ok then
-				local hrp = character:FindFirstChild("HumanoidRootPart")
-				print(string.format(
-					"[Avatar] scaled to %.2fx (root part %.2f studs)",
-					HUMAN_SCALE,
-					hrp and hrp.Size.Y or 0
-				))
-				return
-			end
-			task.wait(0.1)
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		if not humanoid or not humanoid:IsA("Humanoid") then
+			return
 		end
-		print("[Avatar] FAILED to scale after 40 attempts")
+		-- The measure is meaningless until the part it measures to exists.
+		if not character:WaitForChild("Head", 10) then
+			return
+		end
+		if typeof(character.ScaleTo) ~= "function" then
+			print("[Avatar] Model:ScaleTo unavailable - pilot left at default size")
+			return
+		end
+
+		--[[
+			⚠️ DO NOT SET humanoid.AutomaticScalingEnabled = false HERE.
+
+			It was set false once as a precaution against the engine re-applying
+			the avatar description over the top. It does not do that - ScaleTo
+			survives with automatic scaling either way, measured - and turning
+			it off BREAKS THE CAMERA. Roblox's default camera picks its focus
+			height from R15_HEAD_OFFSET when automatic scaling is on, which
+			scales with the root part, and from a fixed 2-stud constant when it
+			is off. On a 0.33x pilot that constant puts the camera's centre
+			1.30 studs above the head - most of a body length of empty air, and
+			reported as "the center is a few studs above our head". Left on, the
+			focus sits 0.12 studs above the head, which is normal framing.
+		]]
+
+		--[[
+			WAIT FOR THE POSE TO STOP MOVING BEFORE MEASURING IT.
+
+			The measure reads the POSED rig, so it is the standing height only
+			once the character is actually standing still. Waiting on the
+			physics is not enough and was tried first: a character that spawns
+			on the pad is already Running with no vertical velocity within a
+			frame, while the Animate script is still easing the limbs into the
+			idle pose for about a second afterwards. Measured mid-pose it read
+			5.06 and 4.22 studs against a settled 5.156, which scaled the pilot
+			to 1.69 m and 1.41 m instead of 1.75.
+
+			So the wait is on the MEASUREMENT settling rather than on any
+			state flag: two consecutive readings that agree mean the limbs have
+			stopped. At rest the reading repeats to four decimal places, and
+			the settled value is repeatable across sessions (5.155, 5.156,
+			5.158), which is what makes this safe to key on.
+		]]
+		local function stableHeight(): number?
+			local previous: number? = nil
+			for _ = 1, 60 do
+				local height = FlightController.rigHeightStuds(character)
+				if height and height > MIN_PLAUSIBLE_HEIGHT and height < MAX_PLAUSIBLE_HEIGHT then
+					if previous and math.abs(height - previous) < POSE_EPSILON then
+						return height
+					end
+					previous = height
+				end
+				task.wait(0.1)
+			end
+			return FlightController.rigHeightStuds(character)
+		end
+
+		--[[
+			Converge rather than compute once. pilotScaleFor is idempotent, so
+			a pass costs nothing when the previous one was right, and corrects
+			it when the rig moved while it was being measured - which it does,
+			because scaling changes HipHeight and drops the character onto the
+			ground again.
+		]]
+		for _ = 1, 4 do
+			local height = stableHeight()
+			if not height then
+				break
+			end
+			if math.abs(height - PILOT_HEIGHT_M) <= HEIGHT_TOLERANCE then
+				break
+			end
+			local scale = FlightController.pilotScaleFor(character:GetScale(), height)
+			if not scale then
+				break
+			end
+			pcall(character.ScaleTo, character, scale)
+			task.wait(0.2)
+		end
+
+		local measured = FlightController.rigHeightStuds(character)
+		if measured and math.abs(measured - PILOT_HEIGHT_M) <= HEIGHT_TOLERANCE then
+			print(string.format(
+				"[Avatar] pilot is %.2f m (model scale %.3fx)",
+				measured,
+				character:GetScale()
+			))
+		else
+			print(string.format(
+				"[Avatar] FAILED to scale pilot - measures %s, wanted %.2f m",
+				measured and string.format("%.2f m", measured) or "nothing",
+				PILOT_HEIGHT_M
+			))
+		end
 	end)
 end
 
@@ -1428,6 +1567,91 @@ function FlightController.runTests(): (boolean, { any })
 		"A character with no Humanoid scales as a no-op",
 		pcall(FlightController.scaleForHumanProportions, fakeCharacter),
 		string.format("Humanoid found: %s", tostring(fakeCharacter:FindFirstChildOfClass("Humanoid")))
+	)
+
+	--[[
+		A rig 5.0 studs sole to crown, carrying the two things that must NOT
+		count toward height: an oversized HumanoidRootPart (the box the old
+		marker read, which is why it reported success while nothing had
+		happened) and a tall hat.
+	]]
+	local heightRig = Instance.new("Model")
+	heightRig.Name = "__TestHeightRig"
+
+	local sole = Instance.new("Part")
+	sole.Name = "LeftFoot"
+	sole.Anchored = true
+	sole.Size = Vector3.new(1, 1, 1)
+	sole.Position = Vector3.new(0, 0.5, 0) -- sole at y = 0
+	sole.Parent = heightRig
+
+	local crown = Instance.new("Part")
+	crown.Name = "Head"
+	crown.Anchored = true
+	crown.Size = Vector3.new(1, 1, 1)
+	crown.Position = Vector3.new(0, 4.5, 0) -- crown at y = 5
+	crown.Parent = heightRig
+
+	local rootBox = Instance.new("Part")
+	rootBox.Name = "HumanoidRootPart"
+	rootBox.Anchored = true
+	rootBox.Size = Vector3.new(2, 20, 1)
+	rootBox.Position = Vector3.new(0, 2.5, 0)
+	rootBox.Parent = heightRig
+
+	local hat = Instance.new("Accessory")
+	hat.Parent = heightRig
+	local hatHandle = Instance.new("Part")
+	hatHandle.Name = "Handle"
+	hatHandle.Anchored = true
+	hatHandle.Size = Vector3.new(1, 4, 1)
+	hatHandle.Position = Vector3.new(0, 7, 0)
+	hatHandle.Parent = hat
+
+	heightRig.Parent = workspace
+
+	local measured = FlightController.rigHeightStuds(heightRig)
+	record(
+		"Rig height is measured sole to crown",
+		measured ~= nil and math.abs(measured - 5.0) < 1e-3,
+		string.format("measured %.3f studs, expected 5.000", measured or -1)
+	)
+	record(
+		"The root box and the hat do not count as height",
+		measured ~= nil and measured < 20,
+		string.format("a 20-stud root box and a hat at y = 9 left the height at %.3f", measured or -1)
+	)
+	record(
+		"A nil character has no measurable height",
+		FlightController.rigHeightStuds(nil) == nil,
+		"returned nil rather than a number"
+	)
+
+	heightRig:Destroy()
+
+	--[[
+		THE property that matters, and the one the old approach never had: the
+		scale is derived from a measurement, so re-applying it to a rig already
+		at the target changes nothing. That is what lets scaleForHumanProportions
+		converge in a loop instead of having to measure perfectly the first time.
+	]]
+	local fullSize = FlightController.pilotScaleFor(1, 5.156)
+	record(
+		"A full-size avatar scales down to 1.75 m",
+		fullSize ~= nil and math.abs(fullSize - 1.75 / 5.156) < 1e-6,
+		string.format("5.156 studs -> scale %.4f", fullSize or -1)
+	)
+	record(
+		"Re-applying the scale to a correct rig is a no-op",
+		fullSize ~= nil and math.abs(FlightController.pilotScaleFor(fullSize, 1.75) - fullSize) < 1e-9,
+		string.format("scale %.4f measured at 1.75 m returns %.4f", fullSize or -1, FlightController.pilotScaleFor(fullSize, 1.75) or -1)
+	)
+	record(
+		"A missing or zero height cannot produce a scale",
+		FlightController.pilotScaleFor(1, 0) == nil
+			and FlightController.pilotScaleFor(1, nil) == nil
+			and FlightController.pilotScaleFor(0, 5) == nil,
+		"nil rather than a division by zero"
 	)
 
 	fakeCharacter:Destroy()

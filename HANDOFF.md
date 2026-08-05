@@ -6,7 +6,9 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 453 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 459 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+
+🕹️ **THE YOKE WAS BIASED NOSE-UP BY THE GUI INSET, AND FULL NOSE-DOWN WAS UNREACHABLE** (§16). Reported as *"it breaks the mouse cursor movement, extremely difficult to pitch down and very easy to pitch up"* in a loop. All of it was true. Measured: the top of the screen produced **−0.766** against the bottom's **+1.000**, neutral sat 58 px above the middle of the screen, and a cursor off the game view — which Roblox reports as (−1, −1) — slammed the controls to **hard nose-down and hard left roll**. §6g had the inset the wrong way round and its live verification only proved the arithmetic was self-consistent. **The aerodynamics were not involved**: elevator authority measures exactly proportional to dynamic pressure. Phase 2 has not started.
 
 🛫 **THE FLIGHT-TEST ENVIRONMENT IS NOW AN AIRPORT, NOT THE BASEPLATE.** Runway 18/36, 1,000 × 23 m, with a parallel taxiway, an apron, full markings and vertical reference objects. See §11 — including why the markings are load-bearing rather than decorative.
 
@@ -25,11 +27,13 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 🛞 **Nosewheel steering was rebuilt** (§12). Reported as too weak and too rudder-dependent; measured at a **207 m turn radius** with full pedal, now **19.3 m**. The nose wheel was being shoved sideways while pointed straight ahead; it is now actually steered.
 
 **Open items for the pilot**, in order:
-1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
-2. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
-3. Then Phase 2 cockpit instruments.
+1. **Re-fly the pitch axis (§16).** Confirm the cursor at the middle of the screen is now genuinely hands-off, that full nose-down is there when you want it, and that a loop no longer throws the controls to a corner. **This is worth flying before the landings** — every landing so far was flown with a third of the nose-down authority missing.
+2. Re-fly landings on runway 36 and say whether the flare is judgeable now.
+3. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
+4. Then Phase 2 cockpit instruments.
 
 **What landed this session**
+- **The yoke's inset bug (§16)** — the pointer is now reduced to the same space as the viewport, an off-view cursor holds the yoke instead of jumping to a corner, and losing window focus releases it. Six new checks; `FlightController` 29 → 35.
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
 - **`ViewToggle` on T** (§6k) — first person ↔ third person in one press, asked for as a "button". It is a **key** rather than an on-screen button, and §6k records why: the cursor is the yoke, so a button in a screen corner can only be clicked by dragging the controls to near-full deflection on the way to it.
 - **The board prompt now hides while somebody is aboard** (§9) — a gate finding, fixed.
@@ -134,7 +138,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (453 checks total)
+### Verified green (459 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -146,7 +150,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `FlightModel` | `Physics/FlightModel.luau` | 44/44 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 81/81 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 29/29 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 35/35 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
@@ -414,14 +418,17 @@ InputController.neutralSnapshot()                   -- hands off the yoke
 - **Typing releases the yoke.** With a free cursor, reaching for the chat box would otherwise command hard nose-up and full left roll. `FlightController` sends `neutralSnapshot()` while a text box is focused. Trim is untouched, so a trimmed aircraft holds its attitude exactly as it would hands-off.
 
 ### The GUI inset, which is the trap in this file
-`GetMouseLocation()` and `Camera.ViewportSize` are **not** in the same coordinate space. The viewport includes the strip behind Roblox's top bar; the mouse does not. Comparing one against the other puts "centre" half the inset too low — about 18 px on a 1080p screen, a few percent of permanent nose-up that reads as a mistrimmed aircraft and that nobody would think to blame on a coordinate space.
 
-`FlightController.readPointer()` therefore reduces both to the usable area, `ViewportSize - GetGuiInset()`.
+⚠️ **This section got the inset BACKWARDS, and it was a live bug for two sessions. §16 has the measurement and the fix. What follows is kept because the reasoning is still right — only the direction was wrong.**
 
-**Verified rather than assumed**, and worth knowing how, because the obvious tests are inconclusive: a 20 px tall Frame at GUI y 300..320 is found by `GetGuiObjectsAtPosition(700, 310)` and **not** at `(700, 368)`. Since that function shares its coordinate space with `GetMouseLocation()`, the mouse is proven to be in inset-respecting GUI space. Live probe confirms it: cursor at (663, 392) on a 1326×783 usable area gives exactly `roll +0.000, pitch +0.000`.
+`GetMouseLocation()` and `Camera.ViewportSize` are **not** in the same coordinate space, and comparing one against the other biases the pitch axis. The original conclusion was that the viewport includes the strip behind Roblox's top bar and the mouse does not, so `readPointer()` reduced the **viewport** by the inset and left the **pointer** alone.
+
+**Measured, it is the other way round.** `GetMouseLocation()` reports in the FULL viewport space: on a 1572 × 841 viewport with a 58 px inset, the cursor's reachable Y range is exactly **58 … 841**. Both must therefore be reduced, and `readPointer()` now subtracts the inset from the pointer as well.
+
+**The "verification" here is what let it through**, and it is the useful lesson: the live probe checked that a cursor at y 392 gave `pitch +0.000` against a half-height of 391.5. That proved the arithmetic was self-consistent and nothing else — the cursor was not physically halfway down the screen, it was 57 px above centre. **Check the reachable RANGE, not one point inside it.** The `GetGuiObjectsAtPosition` experiment was misread the same way: it shares its space with GUI objects, not with `GetMouseLocation()`.
 
 ### Verified live
-Real cursor, real code, all four quadrants:
+Real cursor, real code, all four quadrants. **These readings are pre-§16** — the roll figures still hold (the horizontal inset is 0), the pitch figures were biased nose-up by the whole vertical inset:
 
 | cursor vs centre | result |
 |---|---|
@@ -606,6 +613,10 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox sanitises NaN inside property setters.** A NaN velocity is stored as `(0, 0, 0)` and a NaN CFrame position as `y = -1,000,000`. So a NaN check cannot be tested through the datamodel — the assertion would only prove Roblox scrubs NaN. Test the pure predicate directly. (The −1,000,000 does trip the altitude floor, so a position that has gone numerically bad is still caught.)
 - **`BasePart:IsNetworkOwner()` does not exist on the client** — *"IsNetworkOwner is not a valid member of Part"*. A client-side ownership check is dead code that silently never fires. Verify with `GetNetworkOwner()` on the server. (`ReceiveAge == 0` is the usable client-side hint, and was used to confirm the handover by hand.)
 - **The Humanoid forces `HumanoidRootPart.CanCollide = true` every frame.** You cannot make a seated pilot non-collidable by setting `CanCollide`; it will be reverted. Use a collision group. See §6e.
+- **`UserInputService:GetMouseLocation()` reports in the FULL viewport space, including the strip behind the top bar.** Its Y can never be below `GetGuiInset().Y` and its maximum is `ViewportSize.Y` — measured as a reachable range of exactly 58…841 on a 1572×841 viewport. So a pointer compared against `ViewportSize - inset` is biased by the whole inset. **Subtract the inset from both.** §6g asserted the opposite for two sessions; see §16.
+- **Checking one point inside a mapping does not verify the mapping.** The bug above survived a live probe that confirmed a cursor at y 392 gave pitch 0.000 against a half-height of 391.5 — self-consistent arithmetic, and the cursor was nowhere near the middle of the screen. **Verify the reachable RANGE: both extremes and the centre.**
+- **Roblox reports `GetMouseLocation()` as (−1, −1) when the cursor is not on the game view** — another window, or Studio's own panels in a Play session. Read as a position that is the top-left corner, which for an absolute yoke is hard nose-down and hard left roll in one frame. Treat it as missing data. See §16.
+- **An absolute yoke has to handle window focus explicitly, and a relative one does not.** A relative stick simply stops receiving deltas and stays where it was; an absolute one keeps reading a cursor position that is now being moved for some entirely different purpose. `WindowFocusReleased` releases it to neutral (trim kept), the same path typing already used.
 - **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
 
 ---
@@ -970,3 +981,68 @@ Measured live: `< buffet` at 13.6°, `<< STALL` at 18.5°, against a 16.0° stal
 
 ### Reading this later
 The lesson generalises past this panel and is worth carrying into the Phase 2 gauges: **a raw number is not an instrument.** Alpha was right, available and displayed, and still told the pilot nothing useful, because an instrument has to carry the reference the number is judged against.
+
+---
+
+## 16. The yoke was biased nose-up by the GUI inset (2026-08-04)
+
+Reported by the pilot: *"when I pitch up into a stall and do a loop de loop, it breaks the mouse cursor movement, it is extremely difficult to pitch down and is very easy to pitch up."*
+
+**All three halves of that were literally true, and there were two separate defects behind them.** `FlightController` 29 → 35; everything else is untouched. **459/459 across 13 suites.**
+
+### The measurement that found it
+
+Injecting the cursor down a ladder of screen positions and reading `UserInputService:GetMouseLocation()` back, on a 1572 × 841 viewport with a 58 px inset:
+
+| cursor | `GetMouseLocation().Y` |
+|---|---|
+| top of the game view | **58** |
+| bottom of the game view | **841** |
+| pushed below the view | 841 — clamped |
+| off the view entirely | **−1** |
+
+So the cursor's reachable range is `inset .. viewportHeight`, **not** `0 .. usable`. `readPointer()` was reducing `ViewportSize` by the inset (giving a half-height of 391.5) while feeding it a pointer that never went below 58 (whose true centre is 449.5).
+
+Driving the real `InputController` with real pointer values, before the fix:
+
+| cursor | pitch command |
+|---|---|
+| top of the screen — full nose-down | **−0.766** |
+| mouse y 391 (nowhere in particular) | +0.000 |
+| **middle of the screen** | **+0.085** |
+| mouse y 783 — 58 px above the bottom | +1.000 |
+| bottom of the screen | +1.000 — already saturated |
+| **off the game view** | **−1.000, and roll −1.000** |
+
+### Defect 1: neutral sat 58 px above the middle of the screen
+
+Every one of the pilot's three complaints falls out of that table.
+
+- **"Very easy to pitch up"** — the yoke's neutral point was the whole inset above centre, so resting the cursor in the visual middle of the screen already commanded +0.085 nose-up, and full nose-up arrived 58 px before the bottom edge with the last 58 px dead.
+- **"Extremely difficult to pitch down"** — full nose-down was **unreachable**. The top edge of the screen, as far as the cursor can physically go, produced **−0.766** against the bottom's **+1.000**. A third of the nose-down authority did not exist.
+
+**The fix is one line of arithmetic**: subtract the inset from the pointer as well as from the viewport. Verified live, real cursor through the real code path — top **−1.000**, middle **+0.000**, bottom **+1.000**.
+
+### Defect 2: off the game view, Roblox reports (−1, −1)
+
+Which the mapping read as a position: the top-left corner, **hard nose-down and hard left roll, arriving in a single frame**. That is the "breaks the mouse cursor movement", and defect 1 is what caused it — a pilot holding full back stick sits on the bottom edge of the screen by definition, and the last 58 px being dead invites pushing further, straight off the view and into the opposite corner.
+
+An off-view pointer is now treated as **missing data, not a position**: `FlightController.resolvePointer()` holds the yoke where the pilot last put it, which is what a real yoke against its stop does. With no memory yet it answers with the **centre**, because `Vector2.zero` is the very corner this exists to prevent.
+
+**Losing window focus is handled differently, and the distinction is deliberate.** Cursor off the view → the pilot is still flying, so the yoke holds. Alt-tabbed → they are not flying at all, so the yoke is released to neutral via the `neutralSnapshot()` path that typing already used. Trim survives both, so a trimmed aircraft simply flies on hands-off. An absolute yoke needs this and a relative one does not: a relative stick stops receiving deltas and stays put, while an absolute one keeps reading a cursor that is now being moved for something else entirely.
+
+### What was NOT wrong
+
+**The aerodynamics.** Elevator authority was measured at a loop-top condition — 20° alpha, full nose-down stick, across the speed range — and it scales **exactly** with dynamic pressure: 102 N·m at 40 kt to 638 N·m at 100 kt, and (100/40)² = 6.25 against a measured ratio of 6.25. It also pushes the same way as the aircraft's own high-alpha restoring moment, which is large and nose-down at 20° alpha — the aeroplane wants to recover, and was never fighting the pilot.
+
+So **a slow loop still going mushy over the top is correct and will stay**: control authority falls with the square of airspeed, and that is the aeroplane, not the mapping.
+
+**Trim, though it compounded this badly and is worth knowing.** `commandedPitch = clamp(rawPitch + trim, -1, 1)`, so full nose-up trim genuinely costs nose-down authority — measured, +0.70 of trim leaves **−0.300** of nose-down. That is real aircraft behaviour and §13 chose the ±0.7 limit deliberately. But **before this fix the two stacked to −0.066**, which is no nose-down authority at all. A pilot who had trimmed for the climb and then pulled into a loop had effectively no way out of it.
+
+### The tests that would have caught it
+
+Six new checks in `FlightController.runTests()`, and the fixture is the **measured** 1572 × 841 viewport with its 58 px inset rather than a round 1920 × 1080 with no inset — which is precisely the case that cannot fail.
+
+The load-bearing one is written as a **symmetry**: *nose-down authority equals nose-up authority*. It needs no agreement about what full deflection ought to be, only that the yoke reaches as much of one as of the other, and it read −0.766 against +1.000. A second check pins where neutral physically **sits** — the middle of the visible strip, mouse y 449.5 — because a symmetry check alone cannot see the whole mapping being shifted. The rest cover the two edges mapping to the ends of travel, the off-view sentinel holding rather than jumping to a corner, the no-memory case being neutral, and an on-view cursor passing through untouched.
+
+`FlightController.pointerSpace()` and `FlightController.resolvePointer()` are pure and exported for exactly this, the same shape as `shouldReset()` — the impure `readPointer()` is now only the two datamodel reads and a call to each.

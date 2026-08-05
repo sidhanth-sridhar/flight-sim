@@ -129,6 +129,18 @@ local initialised = false
 local lastResetAt = -math.huge
 
 --[[
+	The last pointer position that was actually on the game view, in usable-area
+	pixels. This is the yoke's memory for as long as the cursor is off the view -
+	see FlightController.resolvePointer. Cleared whenever the loop starts, so a
+	fresh aircraft never inherits a deflection from the last one.
+]]
+local lastPointer: Vector2? = nil
+
+-- False while the Roblox window does not have focus. A pilot who alt-tabs is
+-- not flying, and must not be left holding whatever the yoke was doing.
+local windowFocused = true
+
+--[[
 	Reused every frame rather than reallocated. One small table per frame per
 	aircraft is real collector pressure at 240 fps for no benefit - the input
 	layer reads these numbers immediately and never retains them.
@@ -320,28 +332,84 @@ local setCharacterNeutralised = FlightController.setCharacterNeutralised
 --[[
 	Where the yoke is, in screen pixels, and the screen it is measured against.
 
-	THE GUI INSET IS THE TRAP HERE, and it is worth the explanation because it
-	produces a small permanent bias rather than an obvious failure.
-	GetMouseLocation() measures from the top-left of the area BELOW Roblox's top
-	bar, while Camera.ViewportSize describes the whole render viewport including
-	the strip behind it. Comparing one against the other puts "centre" about
-	half the inset too low - roughly 18 px on a 1080p screen, a few percent of
-	permanent nose-up that a pilot would feel as a trimmed-out aircraft and
-	never think to blame on a coordinate space.
+	THE GUI INSET IS THE TRAP HERE, and the first attempt got it backwards.
 
-	Both are therefore reduced to the same space: the usable area below the top
-	bar. Verified live rather than assumed - see the handoff.
+	GetMouseLocation() reports in the FULL viewport space, including the strip
+	behind Roblox's top bar - so its Y can never be less than the inset, and its
+	maximum is the whole viewport height. Measured live on a 1572 x 841 viewport
+	with a 58 px inset: the cursor's reachable range is exactly 58 .. 841.
+
+	The previous version reduced the VIEWPORT by the inset and left the POINTER
+	alone, on the belief that GetMouseLocation() already excluded it. That put
+	neutral at y = 391 when the middle of the visible screen is y = 449 - the
+	whole inset of permanent nose-up bias - and, worse, made full nose-down
+	UNREACHABLE: the top of the screen produced -0.766 while the bottom produced
+	+1.000 and saturated 58 px early. That is what the pilot reported as "very
+	easy to pitch up, extremely difficult to pitch down".
+
+	It was verified at the time by checking that a cursor at y 392 gave pitch
+	0.000 against a half-height of 391.5 - which only proved the arithmetic was
+	self-consistent, not that the cursor was physically halfway down the screen.
+	The check that matters is the reachable RANGE, not one point inside it.
+
+	Both are therefore reduced to the same space by subtracting the inset from
+	BOTH: the usable area below the top bar, with the pointer expressed in it.
 ]]
+function FlightController.pointerSpace(mouse: Vector2, viewport: Vector2, inset: Vector2): (Vector2, Vector2)
+	return mouse - inset, viewport - inset
+end
+
+--[[
+	What to do when the cursor is not on the game view at all.
+
+	Roblox reports (-1, -1) when it has no mouse position for us - the cursor is
+	over another window, or over Studio's own panels in a Play session. Read as a
+	position, that is the top-left corner: hard nose-down AND hard left roll,
+	arriving in one frame with no warning. A pilot holding full back stick
+	through a loop sits on the bottom edge of the screen by definition, so it is
+	exactly the manoeuvre most likely to push the cursor off the view and get the
+	controls slammed to the opposite corner.
+
+	So an off-view pointer is not a position, it is missing data. The yoke HOLDS
+	where the pilot last put it, which is what a real yoke against its stop does
+	and what makes the cursor slipping off the bottom edge a non-event. Losing
+	window focus is different and is handled separately - see startLoop().
+
+	With no memory to hold - the cursor was already off the view when the loop
+	started - the answer is the CENTRE of the usable area, which is neutral.
+	Vector2.zero would be the top-left corner, which is the very failure this
+	function exists to prevent.
+
+	Pure, and exported, so the boundary can be tested without a mouse.
+]]
+function FlightController.resolvePointer(mouse: Vector2, usable: Vector2, lastValid: Vector2?): (Vector2, boolean)
+	local onView = mouse.X >= 0 and mouse.Y >= 0 and mouse.X <= usable.X and mouse.Y <= usable.Y
+	if onView then
+		return mouse, true
+	end
+	return lastValid or (usable * 0.5), false
+end
+
 local function readPointer(): (Vector2, Vector2)
 	local camera = workspace.CurrentCamera
 	if not camera then
 		return Vector2.zero, Vector2.zero
 	end
 
-	local inset = GuiService:GetGuiInset()
-	local usable = camera.ViewportSize - Vector2.new(inset.X, inset.Y)
+	local guiInset = GuiService:GetGuiInset()
+	local pointer, usable =
+		FlightController.pointerSpace(
+			UserInputService:GetMouseLocation(),
+			camera.ViewportSize,
+			Vector2.new(guiInset.X, guiInset.Y)
+		)
 
-	return UserInputService:GetMouseLocation(), usable
+	local resolved, onView = FlightController.resolvePointer(pointer, usable, lastPointer)
+	if onView then
+		lastPointer = resolved
+	end
+
+	return resolved, usable
 end
 
 local function stopLoop()
@@ -378,6 +446,11 @@ local function startLoop()
 	UserInputService.MouseBehavior = Enum.MouseBehavior.Default
 	UserInputService.MouseIconEnabled = true
 
+	-- Forget the last yoke position. Without this a new aircraft would inherit
+	-- the deflection the last one was destroyed holding. nil means "no memory
+	-- yet", which resolvePointer answers with neutral rather than a corner.
+	lastPointer = nil
+
 	stepConnection = RunService.Stepped:Connect(function(_, deltaTime)
 		if not rig or not rig.model.Parent then
 			stopLoop()
@@ -395,7 +468,18 @@ local function startLoop()
 			attitude exactly as it would with the pilot's hands off the yoke.
 		]]
 		local snapshot
-		if isTyping() then
+		if isTyping() or not windowFocused then
+			--[[
+				Both release the yoke rather than freezing it, and both keep
+				trim, so a trimmed aircraft simply flies on hands-off.
+
+				Focus loss is deliberately NOT treated the same way as the cursor
+				leaving the game view. Off the view, the pilot is still flying
+				and the yoke holds (resolvePointer). Alt-tabbed, they are not
+				flying at all, and holding full back stick because that is where
+				the cursor happened to be would keep looping the aeroplane while
+				they read something else.
+			]]
 			snapshot = InputController.neutralSnapshot()
 		else
 			local pointer, viewport = readPointer()
@@ -687,6 +771,27 @@ function FlightController.Init()
 		still work when there is no rig - see the note above resetKey().
 	]]
 	table.insert(connections, UserInputService.InputBegan:Connect(onInputBegan))
+
+	--[[
+		Window focus, which the yoke needs because it is absolute.
+
+		A relative stick simply stops receiving deltas when the window loses
+		focus and stays where it was. An absolute one keeps reading a cursor
+		position that is now being moved for some entirely different purpose, so
+		the yoke must be released explicitly. Lifetime connections: focus can be
+		lost while standing on the apron and regained while seated.
+
+		It starts true because there is no getter for the current focus state -
+		UserInputService exposes the two events and nothing to seed from. Getting
+		that wrong in the safe direction would be a dead yoke on startup, so the
+		initial value is optimistic and the first WindowFocusReleased corrects it.
+	]]
+	table.insert(connections, UserInputService.WindowFocused:Connect(function()
+		windowFocused = true
+	end))
+	table.insert(connections, UserInputService.WindowFocusReleased:Connect(function()
+		windowFocused = false
+	end))
 
 	--[[
 		Dying gets you a fresh aircraft.
@@ -1167,6 +1272,92 @@ function FlightController.runTests(): (boolean, { any })
 		FlightController.shouldReset(Enum.KeyCode.Delete, false, Enum.KeyCode.Delete, 100, -math.huge)
 			and not FlightController.shouldReset(RESET, false, Enum.KeyCode.Delete, 100, -math.huge),
 		"Delete accepted, Backspace ignored"
+	)
+
+	--[[
+		THE POINTER BOUNDARY - where the GUI inset bug lived.
+
+		Measured live in Studio: a 1572 x 841 viewport with a 58 px inset, and
+		GetMouseLocation() reaching exactly 58 at the top of the screen and 841 at
+		the bottom. Those are the real numbers this arithmetic has to survive, so
+		they are the fixture rather than a round 1920 x 1080 with no inset, which
+		is precisely the case that cannot fail.
+	]]
+	local VIEWPORT_M = Vector2.new(1572, 841)
+	local INSET_M = Vector2.new(0, 58)
+	local TOP_EDGE = Vector2.new(786, 58) -- highest the cursor can physically go
+	local BOTTOM_EDGE = Vector2.new(786, 841) -- lowest
+
+	local topP, usableM = FlightController.pointerSpace(TOP_EDGE, VIEWPORT_M, INSET_M)
+	local bottomP = FlightController.pointerSpace(BOTTOM_EDGE, VIEWPORT_M, INSET_M)
+
+	record(
+		"The screen's top and bottom edges map to the ends of the yoke",
+		math.abs(topP.Y) < 1e-6 and math.abs(bottomP.Y - usableM.Y) < 1e-6,
+		string.format("top -> %.1f, bottom -> %.1f of %.0f", topP.Y, bottomP.Y, usableM.Y)
+	)
+
+	--[[
+		The assertion the original bug would have failed, and the reason it is
+		written as a SYMMETRY rather than as two absolute values: it needs no
+		agreement about what full deflection should be, only that the yoke can
+		reach as much of one as of the other. It read -0.766 against +1.000.
+	]]
+	local function pitchAt(mouse: Vector2): number
+		local p, u = FlightController.pointerSpace(mouse, VIEWPORT_M, INSET_M)
+		local st = InputController.new(Cessna172)
+		for _ = 1, 60 do
+			InputController.update(st, dt, { held = {}, pointer = p, viewportSize = u })
+		end
+		return st.controls.pitch
+	end
+
+	local pitchTop, pitchBottom = pitchAt(TOP_EDGE), pitchAt(BOTTOM_EDGE)
+	record(
+		"Nose-down authority equals nose-up authority",
+		math.abs(pitchTop + pitchBottom) < 1e-3 and math.abs(pitchBottom - 1) < 1e-3,
+		string.format("top %+.3f, bottom %+.3f", pitchTop, pitchBottom)
+	)
+
+	--[[
+		And where neutral physically SITS, which is the half of the bug a
+		symmetry check cannot see: both edges could be reachable with the whole
+		mapping still shifted. Neutral must be the middle of the visible strip -
+		mouse y (58 + 841) / 2 = 449.5 - not the middle of a usable area measured
+		from zero, which is where it used to be at y 391.5.
+	]]
+	local pitchCentre = pitchAt(Vector2.new(786, (TOP_EDGE.Y + BOTTOM_EDGE.Y) * 0.5))
+	record(
+		"Neutral is the middle of the visible screen",
+		math.abs(pitchCentre) < 1e-6,
+		string.format("pitch %+.6f at mouse y %.1f", pitchCentre, (TOP_EDGE.Y + BOTTOM_EDGE.Y) * 0.5)
+	)
+
+	--[[
+		Off the game view, Roblox reports (-1, -1). Read as a position that is the
+		top-left corner: hard nose-down AND hard left roll in one frame. It has to
+		be recognised as missing data instead.
+	]]
+	local sentinel = FlightController.pointerSpace(Vector2.new(-1, -1), VIEWPORT_M, INSET_M)
+	local held, onView = FlightController.resolvePointer(sentinel, usableM, bottomP)
+	record(
+		"An off-view cursor holds the yoke instead of jumping to a corner",
+		not onView and (held - bottomP).Magnitude < 1e-6,
+		string.format("held y %.1f, not %.1f", held.Y, sentinel.Y)
+	)
+
+	local fresh = FlightController.resolvePointer(sentinel, usableM, nil)
+	record(
+		"An off-view cursor with no memory is neutral, not a corner",
+		math.abs(fresh.Y - usableM.Y * 0.5) < 1e-6 and math.abs(fresh.X - usableM.X * 0.5) < 1e-6,
+		string.format("%.1f, %.1f", fresh.X, fresh.Y)
+	)
+
+	local inside, insideOk = FlightController.resolvePointer(Vector2.new(100, 200), usableM, bottomP)
+	record(
+		"A cursor on the view is passed through untouched",
+		insideOk and inside == Vector2.new(100, 200),
+		"passed through"
 	)
 	end
 

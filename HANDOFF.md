@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 640 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 658 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -185,7 +185,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
-| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 80/80 | **Server** |
+| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 98/98 | **Server** |
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -1605,3 +1605,54 @@ Verified live rather than only in tests — the same player, moved between field
 2. Streaming: deferred, recorded in §22.
 
 Then the altitude-hold oscillation, which is now in scope.
+
+---
+
+## 25. Navigation between airports (2026-08-05, Phase 3 build complete)
+
+**658/658 across 17 suites**; `AirportService` 80 → 98. **This is the last item in §14's Phase 3 list.** Terrain ✅, more than one airport ✅, navigation between them ✅, streaming explicitly deferred ✅.
+
+### A flight plan, not two numbers
+
+`AirportService.flightPlan(fromId, toId)` is shaped **like `navPoints`** on purpose — named keys, world `Vector3`s for the geographic points, `nil` for a route that does not exist — so the two read as one navigation system rather than two.
+
+```
+Meadow Field -> Ridge Strip: 1,612 m on 097, back 277
+climb +150 m, cruise 705 m, depart runway 18, arrive runway 09
+Departure (0, 250, 500) -> TopOfClimb (400, 705, 50)
+  -> CircuitEntry (1600, 705, -700) -> Destination (1325, 400, 200)
+```
+
+**Everything is derived, nothing is chosen to look plausible.** The cruise is circuit height above the *higher* of the two fields (arriving below the destination would be the alternative). The arrival runway is whichever best matches the inbound course — `bestRunwayFor` maximises the dot product, so it stays right if a runway is added or a field moves. The climb is simply the difference in elevation.
+
+**It hands off to `navPoints` rather than duplicating the circuit.** `CircuitEntry` *is* the arrival runway's own `Downwind` — a test asserts they are the same point, because two copies of a circuit will drift.
+
+Also added: `headingOf(direction)` (the exact inverse of `directionFor`), `bearingBetween`, and `bestRunwayFor`.
+
+⚠️ **A published bearing is a number the pilot flies by reading the DI**, so the conventions must agree or the plan is wrong in a way that only shows up in the air. `headingOf` round-trips through `directionFor` at every cardinal, and is checked against **FlightModel's own** `atan2(look.X, -look.Z)` — verified live at 97.125 from both, dot product 1.000000000. North reads **360**, not 0, matching how runways are designated.
+
+### The bug this exposed: a circuit leg that was not at its own airport
+
+Building the plan surfaced a real pre-existing fault. **`Downwind` was the only circuit point with no airport anchor** — computed as `lateral * DOWNWIND_OFFSET + up * PATTERN_ALTITUDE`, an offset from *nothing*:
+
+| | was | should be |
+|---|---|---|
+| Meadow Downwind | (−900, **305**, 0) | (−900, **555**, 0) |
+| Ridge Downwind | (**0**, **305**, **−900**) | (**1600**, **705**, **−700**) |
+
+It was **correct by coincidence** while Meadow was the only field, sitting on the world origin, at y = 0. Both assumptions died: §20 lifted the airport to 250 m, and §23 put a second field 1.6 km east. The result was a downwind leg 250 m too low at Meadow, and at Ridge one that was *over Meadow entirely*.
+
+Every other point in that table was already built from `threshold` or `departureEnd` and was correct throughout.
+
+**Nothing reported it** because the existing checks only asked whether airborne points were above ground points and whether they fitted inside the world — both of which a badly wrong point passes comfortably. Two new checks ask the questions that matter, for **every runway at every field**: is each circuit point *near its own aerodrome*, and is it at circuit height *above that field*.
+
+### And one more wrong assertion
+`"Pattern altitude is a standard 1000 ft"` read `nav.Downwind.Y` directly and expected ~305 m. It passed only because Downwind's Y was the pattern altitude **by accident rather than being an altitude at all**. It now measures height above the field: Meadow's downwind is 555 m, being 250 m of field plus 305 m of circuit, which is what a 1,000 ft pattern means.
+
+### How to test it
+```lua
+require(game.ServerScriptService.FlightSim.Services.AirportService).runTests()  -- Server
+```
+
+### Phase 3 is built
+Nothing in §14's Phase 3 list is outstanding. **Phase 3 has no gate** in §14 — unlike Phases 2, 5 and 6 — so there is nothing specified for the pilot to fly and sign off. If one is wanted, the obvious shape is *fly Meadow → Ridge on this plan, land on the strip, press reset and confirm you are still at Ridge*, which exercises §23, §24 and §25 at once. Not invented here, because it was not asked for.

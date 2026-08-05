@@ -505,8 +505,24 @@ function AirportService.navPoints(airportId: string?, runwayId: string?): { [str
 			+ lateral * (DOWNWIND_OFFSET / 2)
 			+ up * PATTERN_ALTITUDE,
 
-		-- Abeam the middle of the runway, tracking back the other way.
-		Downwind = lateral * DOWNWIND_OFFSET + up * PATTERN_ALTITUDE,
+		--[[
+			Abeam the middle of the runway, tracking back the other way.
+
+			ANCHORED TO THE RUNWAY'S MIDPOINT, and it was not until a second
+			aerodrome existed. This point alone was written as
+			`lateral * DOWNWIND_OFFSET + up * PATTERN_ALTITUDE` - no base
+			position at all - which was exactly right while Meadow was the only
+			field, sat on the world origin, at y = 0. Both of those stopped
+			being true: §20 lifted the airport to 250 m and §23 added a field
+			1.6 km east.
+
+			The result was a downwind leg 250 m too low at Meadow, and at Ridge
+			one that was not at Ridge at all - it was over Meadow. Every other
+			point in this table was already built from `threshold` or
+			`departureEnd` and was correct throughout; this one was correct by
+			coincidence, which is the only reason nothing reported it.
+		]]
+		Downwind = (threshold + departureEnd) * 0.5 + lateral * DOWNWIND_OFFSET + up * PATTERN_ALTITUDE,
 
 		-- Abeam the threshold and turning base.
 		Base = threshold - dir * CIRCUIT_EXTENSION + lateral * DOWNWIND_OFFSET + up * PATTERN_ALTITUDE,
@@ -626,6 +642,167 @@ function AirportService.distanceBetween(fromId: string, toId: string): number?
 		return nil
 	end
 	return (Vector3.new(b.origin.X - a.origin.X, 0, b.origin.Z - a.origin.Z)).Magnitude
+end
+
+--[[
+	The heading a direction vector represents, in degrees, 0 .. 360.
+
+	The exact inverse of directionFor(), and it has to be: a bearing this module
+	publishes is a number the pilot will fly by reading the DI, so if the two
+	disagree the flight plan is wrong in a way that only shows up in the air.
+	runTests() round-trips every cardinal through both.
+
+	Returns 360 rather than 0 for north, matching how runways are designated -
+	runway 36, not runway 0.
+]]
+function AirportService.headingOf(direction: Vector3): number
+	local heading = math.deg(math.atan2(direction.X, -direction.Z))
+	if heading <= 0 then
+		heading += 360
+	end
+	return heading
+end
+
+--[[
+	True bearing from one field to another, in degrees.
+
+	Horizontal, for the same reason nearestAirport is (§24): Ridge is 150 m
+	above Meadow, and a bearing is a compass direction, not a line of sight.
+]]
+function AirportService.bearingBetween(fromId: string, toId: string): number?
+	local a, b = AIRPORTS[fromId], AIRPORTS[toId]
+	if not a or not b or a.id == b.id then
+		return nil
+	end
+	return AirportService.headingOf(Vector3.new(b.origin.X - a.origin.X, 0, b.origin.Z - a.origin.Z))
+end
+
+--[[
+	Which runway at an airport best suits arriving on a given track.
+
+	The one whose direction most nearly matches the inbound course, which is what
+	a pilot picks in the absence of wind. Derived rather than declared, so it
+	stays right if a runway is added or an airport is moved.
+]]
+function AirportService.bestRunwayFor(airportId: string, course: Vector3): Runway?
+	local runways = RUNWAYS[airportId]
+	if not runways then
+		return nil
+	end
+
+	local flat = Vector3.new(course.X, 0, course.Z)
+	if flat.Magnitude < 1e-6 then
+		return nil
+	end
+	flat = flat.Unit
+
+	local best, bestDot = nil, -math.huge
+	for _, designator in AirportService.runwayIds(airportId) do
+		local runway = runways[designator]
+		local dot = runway.direction:Dot(flat)
+		if dot > bestDot then
+			best, bestDot = runway, dot
+		end
+	end
+	return best
+end
+
+--[[
+	A FLIGHT PLAN from one field to another.
+
+	Shaped like navPoints deliberately: named keys, world Vector3s for the
+	geographic points, and nil for a route that does not exist. A pilot planning
+	Meadow to Ridge gets the same kind of answer they already get for a circuit,
+	so the two read as one navigation system rather than two.
+
+	It is more than a distance and a bearing because a distance and a bearing do
+	not tell you what to do. This carries the climb, the runway to expect at the
+	far end, and the point the circuit begins - and then HANDS OFF to navPoints
+	for the circuit itself rather than duplicating it, which is what stops the
+	two drifting apart.
+
+	Everything here is derived. Nothing is a number chosen to look plausible:
+	the cruise altitude is circuit height above the higher of the two fields,
+	the arrival runway is whichever best matches the inbound course, and the
+	climb is simply the difference in elevation.
+]]
+export type FlightPlan = {
+	from: string,
+	to: string,
+	fromName: string,
+	toName: string,
+	distance: number, -- m, horizontal
+	bearing: number, -- degrees true, from -> to
+	reciprocal: number, -- degrees, the way home
+	departureElevation: number,
+	arrivalElevation: number,
+	climb: number, -- m, positive means the destination is higher
+	cruiseAltitude: number, -- m above sea level
+	departureRunway: string,
+	arrivalRunway: string,
+	Departure: Vector3,
+	TopOfClimb: Vector3,
+	CircuitEntry: Vector3,
+	Destination: Vector3,
+}
+
+function AirportService.flightPlan(fromId: string, toId: string): FlightPlan?
+	local a, b = AIRPORTS[fromId], AIRPORTS[toId]
+	if not a or not b or a.id == b.id then
+		return nil
+	end
+
+	local from = Vector3.new(a.origin.X, a.elevation, a.origin.Z)
+	local to = Vector3.new(b.origin.X, b.elevation, b.origin.Z)
+	local course = Vector3.new(to.X - from.X, 0, to.Z - from.Z)
+	local distance = course.Magnitude
+	local bearing = AirportService.headingOf(course)
+
+	-- Depart on the runway pointing most nearly at the destination, arrive on
+	-- the one most nearly aligned with the course in.
+	local departureRunway = AirportService.bestRunwayFor(a.id, course) :: Runway
+	local arrivalRunway = AirportService.bestRunwayFor(b.id, course) :: Runway
+
+	--[[
+		Circuit height above the HIGHER field, so the leg clears both and the
+		descent into the arrival circuit is a normal one. Derived from
+		PATTERN_ALTITUDE rather than picked, so it moves if the pattern does.
+	]]
+	local cruiseAltitude = math.max(a.elevation, b.elevation) + PATTERN_ALTITUDE
+
+	local arrivalNav = AirportService.navPoints(b.id, arrivalRunway.id) :: { [string]: Vector3 }
+
+	return {
+		from = a.id,
+		to = b.id,
+		fromName = a.name,
+		toName = b.name,
+		distance = distance,
+		bearing = bearing,
+		reciprocal = AirportService.headingOf(-course),
+		departureElevation = a.elevation,
+		arrivalElevation = b.elevation,
+		climb = b.elevation - a.elevation,
+		cruiseAltitude = cruiseAltitude,
+		departureRunway = departureRunway.id,
+		arrivalRunway = arrivalRunway.id,
+
+		-- Off the departure runway's far end, where the climb-out starts.
+		Departure = departureRunway.departureEnd,
+
+		-- Level at cruise, a quarter of the way along. Short legs like this one
+		-- spend most of their time climbing or descending, which is honest.
+		TopOfClimb = Vector3.new(
+			from.X + course.Unit.X * distance * 0.25,
+			cruiseAltitude,
+			from.Z + course.Unit.Z * distance * 0.25
+		),
+
+		-- Where the arrival field's own circuit takes over. This is navPoints'
+		-- answer, not a second copy of it.
+		CircuitEntry = arrivalNav.Downwind,
+		Destination = arrivalNav.Threshold,
+	}
 end
 
 AirportService.APRON_CENTRE = APRON_CENTRE
@@ -1465,6 +1642,65 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("045 -> %s, magnitude %.9f", tostring(d45), d45.Magnitude)
 	)
 
+	-- 2bb. Every circuit belongs to its own airport ---------------------------
+	--[[
+		THE CLASS OF BUG THIS PAIR EXISTS TO CATCH, and it caught a real one.
+
+		`Downwind` was written as an offset from nothing - no threshold, no
+		origin - which was correct while Meadow was the only field, on the world
+		origin, at y = 0. After §20 it was 250 m too low, and after §23 Ridge's
+		downwind leg was over MEADOW, 1.6 km from the field it belonged to.
+
+		Nothing reported it because the old checks only asked whether airborne
+		points were above ground points and whether they fitted in the world -
+		both of which a wrong point comfortably passes. These two ask the
+		questions that actually matter: is every circuit point NEAR ITS OWN
+		AERODROME, and is it at circuit height ABOVE THAT FIELD.
+	]]
+	local strayPoints, wrongHeight = {}, {}
+	for _, airportIdCheck in AirportService.airportIds() do
+		local elev = AirportService.elevationOf(airportIdCheck)
+		local origin = (AirportService.getAirport(airportIdCheck) :: any).origin
+		for _, designator in AirportService.runwayIds(airportIdCheck) do
+			local points = AirportService.navPoints(airportIdCheck, designator) :: { [string]: Vector3 }
+			for name, point in points do
+				--[[
+					Generously sized: the circuit legitimately reaches
+					DOWNWIND_OFFSET out and CIRCUIT_EXTENSION beyond each
+					threshold, so anything inside that plus a margin is its own.
+					Ridge's stray downwind was 1.6 km out and failed by a mile.
+				]]
+				local flat = Vector3.new(point.X - origin.X, 0, point.Z - origin.Z).Magnitude
+				local reach = RUNWAY_HALF + CIRCUIT_EXTENSION + DOWNWIND_OFFSET + 100
+				if flat > reach then
+					table.insert(strayPoints, string.format("%s/%s %s %.0f m out", airportIdCheck, designator, name, flat))
+				end
+
+				-- Ground points at field elevation, airborne points at circuit
+				-- height above THAT field - not above sea level.
+				local above = point.Y - elev
+				local isGround = name == "Threshold" or name == "DepartureEnd" or name == "AimingPoint"
+				if isGround and math.abs(above) > 1e-6 then
+					table.insert(wrongHeight, string.format("%s/%s %s %+.1f m", airportIdCheck, designator, name, above))
+				elseif not isGround and above < PATTERN_ALTITUDE * 0.4 then
+					table.insert(wrongHeight, string.format("%s/%s %s only %+.1f m above field", airportIdCheck, designator, name, above))
+				end
+			end
+		end
+	end
+	record(
+		"Every circuit point belongs to its own aerodrome",
+		#strayPoints == 0,
+		if #strayPoints == 0 then "all points within reach of their own field" else table.concat(strayPoints, ", ")
+	)
+	record(
+		"Circuit heights are measured from their own field, not from sea level",
+		#wrongHeight == 0,
+		if #wrongHeight == 0
+			then string.format("ground at field elevation, airborne near +%d m at both fields", PATTERN_ALTITUDE)
+			else table.concat(wrongHeight, ", ")
+	)
+
 	-- 2c. Nearest airport, and per-field parking ------------------------------
 	--[[
 		The rule a player spawns by. The pilot's decision is nearest-to-them with
@@ -1568,6 +1804,160 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("%.0f m off the centreline, strip is %.0f m wide", acrossStrip, (ridge09 :: any).width)
 	)
 
+	-- 2d. Navigation between airports -----------------------------------------
+	--[[
+		THE bearing check, and it is the one that matters most: a bearing this
+		module publishes is a number the pilot flies by reading the DI. If the
+		two conventions disagree the plan is wrong in a way that only shows up
+		in the air, so headingOf() is round-tripped against directionFor() at
+		every cardinal and against FlightModel's own formula.
+	]]
+	local roundTrip = {}
+	for _, h in { 90, 180, 270, 360, 45, 123.4 } do
+		local back = AirportService.headingOf(AirportService.directionFor(h))
+		if math.abs(back - h) > 1e-4 then
+			table.insert(roundTrip, string.format("%.1f -> %.4f", h, back))
+		end
+	end
+	record(
+		"headingOf and directionFor are exact inverses",
+		#roundTrip == 0,
+		if #roundTrip == 0 then "90, 180, 270, 360, 45 and 123.4 all round-trip" else table.concat(roundTrip, ", ")
+	)
+	record(
+		"North reads 360, not 0, matching how runways are designated",
+		AirportService.headingOf(Vector3.new(0, 0, -1)) == 360,
+		"runway 36, not runway 0"
+	)
+	--[[
+		Agreement with FlightModel, which computes heading as
+		atan2(look.X, -look.Z). Written out here rather than imported because
+		this module must not depend on the physics - but the two MUST match, so
+		the formula is duplicated deliberately and checked.
+	]]
+	local fmMismatch = {}
+	for _, h in { 30, 97.125, 200, 359 } do
+		local d = AirportService.directionFor(h)
+		local fm = math.deg(math.atan2(d.X, -d.Z)) % 360
+		if math.abs(fm - (h % 360)) > 1e-3 then
+			table.insert(fmMismatch, string.format("%.3f vs %.3f", fm, h % 360))
+		end
+	end
+	record(
+		"Bearings agree with the heading the DI will show",
+		#fmMismatch == 0,
+		if #fmMismatch == 0 then "FlightModel's atan2(x, -z) matches at every angle tried" else table.concat(fmMismatch, ", ")
+	)
+
+	local plan = AirportService.flightPlan("meadow", "ridge") :: any
+	record("A flight plan exists between the two fields", plan ~= nil, plan and string.format("%s -> %s", plan.fromName, plan.toName) or "nil")
+	record(
+		"There is no plan from a field to itself, or to nowhere",
+		AirportService.flightPlan("meadow", "meadow") == nil
+			and AirportService.flightPlan("meadow", "nowhere") == nil,
+		"nil for both"
+	)
+	record(
+		"The plan's distance agrees with distanceBetween",
+		math.abs(plan.distance - (AirportService.distanceBetween("meadow", "ridge") :: number)) < 1e-6,
+		string.format("%.0f m", plan.distance)
+	)
+	--[[
+		Flying the published bearing must actually get you there. Asserted as a
+		dot product against the true course rather than by comparing two angles,
+		because that catches a 180 degree error which a modulo comparison can
+		hide.
+	]]
+	local courseUnit = Vector3.new(
+		(AirportService.getAirport("ridge") :: any).origin.X - (AirportService.getAirport("meadow") :: any).origin.X,
+		0,
+		(AirportService.getAirport("ridge") :: any).origin.Z - (AirportService.getAirport("meadow") :: any).origin.Z
+	).Unit
+	record(
+		"Flying the published bearing tracks toward the destination",
+		AirportService.directionFor(plan.bearing):Dot(courseUnit) > 0.9999,
+		string.format("bearing %.1f", plan.bearing)
+	)
+	record(
+		"The reciprocal is the way home",
+		math.abs(((plan.reciprocal - plan.bearing) % 360) - 180) < 1e-3,
+		string.format("%.1f out, %.1f back", plan.bearing, plan.reciprocal)
+	)
+	local back = AirportService.flightPlan("ridge", "meadow") :: any
+	record(
+		"The return plan is the mirror of the outbound one",
+		math.abs(back.distance - plan.distance) < 1e-6
+			and math.abs(back.bearing - plan.reciprocal) < 1e-3
+			and math.abs(back.climb + plan.climb) < 1e-6,
+		string.format("%.0f m, bearing %.1f, climb %+.0f m", back.distance, back.bearing, back.climb)
+	)
+
+	--[[
+		The climb is the thing a short leg between two fields 150 m apart in
+		height is actually about, and the cruise must clear the HIGHER field by
+		a circuit height - not the departure field, which would arrive below the
+		destination.
+	]]
+	record(
+		"The plan carries the climb between the two fields",
+		math.abs(plan.climb - (AirportService.elevationOf("ridge") - AirportService.elevationOf("meadow"))) < 1e-6,
+		string.format("%+.0f m", plan.climb)
+	)
+	record(
+		"Cruise clears the higher field by a circuit height",
+		plan.cruiseAltitude >= math.max(plan.departureElevation, plan.arrivalElevation) + PATTERN_ALTITUDE - 1e-6,
+		string.format("%.0f m against fields at %.0f and %.0f", plan.cruiseAltitude, plan.departureElevation, plan.arrivalElevation)
+	)
+
+	--[[
+		The runway to expect at the far end, derived from the course rather than
+		declared. Ridge runs 09/27 east-west and the course is easterly, so 09
+		is the one that lines up - and this is the check that would fail if
+		bestRunwayFor picked the reciprocal.
+	]]
+	record(
+		"The arrival runway is the one aligned with the inbound course",
+		plan.arrivalRunway == "09",
+		string.format("arrive %s at Ridge on a %.0f bearing", plan.arrivalRunway, plan.bearing)
+	)
+	record(
+		"...and the return arrives at Meadow on the reciprocal-aligned runway",
+		back.arrivalRunway == "18" or back.arrivalRunway == "36",
+		string.format("arrive %s at Meadow", back.arrivalRunway)
+	)
+
+	--[[
+		The plan HANDS OFF to navPoints rather than duplicating the circuit, so
+		its entry point must literally be the arrival runway's own downwind. If
+		these ever differ, there are two copies of the circuit and they will
+		drift.
+	]]
+	local arrivalNav = AirportService.navPoints("ridge", plan.arrivalRunway) :: { [string]: Vector3 }
+	record(
+		"The plan hands off to the arrival field's own circuit",
+		(plan.CircuitEntry - arrivalNav.Downwind).Magnitude < 1e-6
+			and (plan.Destination - arrivalNav.Threshold).Magnitude < 1e-6,
+		"CircuitEntry is navPoints' Downwind, not a second copy"
+	)
+	--[[
+		And the waypoints must be near the fields they belong to - the same
+		question the circuit check above asks, applied to the route.
+	]]
+	record(
+		"The plan's waypoints are at the right ends of the route",
+		(Vector3.new(plan.Departure.X, 0, plan.Departure.Z)
+			- Vector3.new((AirportService.getAirport("meadow") :: any).origin.X, 0, (AirportService.getAirport("meadow") :: any).origin.Z)).Magnitude < 1500
+			and (Vector3.new(plan.Destination.X, 0, plan.Destination.Z)
+			- Vector3.new((AirportService.getAirport("ridge") :: any).origin.X, 0, (AirportService.getAirport("ridge") :: any).origin.Z)).Magnitude < 1500,
+		"departure near Meadow, destination near Ridge"
+	)
+	record(
+		"Top of climb is at cruise and on the way",
+		math.abs(plan.TopOfClimb.Y - plan.cruiseAltitude) < 1e-6
+			and Vector3.new(plan.TopOfClimb.X - plan.Departure.X, 0, plan.TopOfClimb.Z - plan.Departure.Z):Dot(courseUnit) > 0,
+		string.format("y = %.0f, ahead of the departure end", plan.TopOfClimb.Y)
+	)
+
 	local nav = AirportService.navPoints("meadow", "36") :: { [string]: Vector3 }
 	record("Navigation points exist for runway 36", nav ~= nil, "returned a table")
 	record("Navigation points are nil for an unknown runway", AirportService.navPoints("meadow", "09") == nil, "nil")
@@ -1607,7 +1997,22 @@ function AirportService.runTests(): (boolean, { any })
 	)
 
 	checkRange("Downwind is about half a mile out", math.abs(nav.Downwind.X), 700, 1200, "m")
-	checkRange("Pattern altitude is a standard 1000 ft", nav.Downwind.Y, 290, 320, "m")
+	--[[
+		ABOVE THE FIELD, not above sea level, and this assertion had it wrong.
+
+		It read `nav.Downwind.Y` directly and expected ~305 m, which passed only
+		because Downwind was the one circuit point with no airport anchor - so
+		its Y was the pattern altitude by accident rather than an altitude at
+		all. With the anchor fixed, Meadow's downwind is at 555 m: 250 m of
+		field plus 305 m of circuit, which is what a 1,000 ft pattern means.
+	]]
+	checkRange(
+		"Pattern altitude is a standard 1000 ft above the field",
+		nav.Downwind.Y - AirportService.elevationOf("meadow"),
+		290,
+		320,
+		"m AGL"
+	)
 	record(
 		"Ground points are on the ground and airborne points are not",
 		nav.Threshold.Y == SURFACE_Y and nav.DepartureEnd.Y == SURFACE_Y

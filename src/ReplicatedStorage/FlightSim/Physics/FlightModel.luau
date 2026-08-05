@@ -569,6 +569,17 @@ function FlightModel.computeForces(
 	telemetry.thrust = thrust
 	telemetry.rpm = state.engine.rpm
 	telemetry.fuelKg = state.engine.fuelKg
+	--[[
+		Published for the INSTRUMENTS, not used by the physics.
+
+		The ASI's static-source position error depends on flap setting - the
+		POH prints a separate calibration table for flaps down - so the
+		instrument layer needs to know which one to read. Telemetry is the
+		display channel and already carries alpha and beta the same way, so
+		this belongs here rather than widening the six-field Controls contract
+		(§6c) that the aerodynamics consumes.
+	]]
+	telemetry.flaps = controls.flaps or 0
 	telemetry.force = totalForce
 	telemetry.torque = totalTorque
 

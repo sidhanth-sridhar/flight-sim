@@ -46,6 +46,9 @@ local Instrument = require(Instruments:WaitForChild("Instrument"))
 -- The panel itself. Unlike the framework this one has a lifecycle, and this
 -- controller owns it for the reason the header gives.
 local SixPack = require(Instruments:WaitForChild("SixPack"))
+-- Display errors for the gauges (§32). Pure, and tested alongside the widgets
+-- it feeds rather than in a suite of its own, because it has no lifecycle.
+local InstrumentError = require(Instruments:WaitForChild("InstrumentError"))
 
 local UIController = {}
 
@@ -147,7 +150,7 @@ function UIController.runTests(): (boolean, { any })
 	local combined = {}
 	local allOk = true
 
-	for _, suite in { DebugHud, Instrument, SixPack } do
+	for _, suite in { DebugHud, Instrument, InstrumentError, SixPack } do
 		local ok, results = suite.runTests()
 		allOk = allOk and ok
 		for _, r in results do

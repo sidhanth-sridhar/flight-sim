@@ -51,6 +51,7 @@ local Units = require(FlightSim.Shared.Units)
 local Cessna172 = require(FlightSim.Aircraft.Definitions.Cessna172)
 
 local Instrument = require(script.Parent:WaitForChild("Instrument"))
+local InstrumentError = require(script.Parent:WaitForChild("InstrumentError"))
 local FlightController = require(script.Parent.Parent.Parent:WaitForChild("Controllers"):WaitForChild("FlightController"))
 
 local SixPack = {}
@@ -304,17 +305,45 @@ SixPack.FUEL = {
 	asserted against published figures without building a single frame.
 ]]
 SixPack.samplers = {
+	--[[
+		⚠️ THE GAUGES READ LIKE INSTRUMENTS, NOT LIKE THE PHYSICS (§32).
+
+		Three of these samplers now inject a real instrument's error before the
+		needle sees the number. The physics is untouched and never sees any of
+		it - the aeroplane still flies on true values, and only the display
+		lies, in the ways real displays lie.
+
+		This is the right layer for it precisely because the samplers are the
+		one door every panel value already comes through.
+	]]
 	airspeedKt = function(t: any): number
-		return Units.msToKnots(t.airspeedIndicated or 0)
+		-- Static-source position error, from the POH calibration table. Worst
+		-- slow and nose-high, which is when the pilot most needs the number.
+		return Units.msToKnots(InstrumentError.indicatedAirspeed(t.airspeedIndicated or 0, t.flaps))
 	end,
 	altitudeFt = function(t: any): number
-		return Units.metersToFeet(t.altitude or 0)
+		-- What the Kollsman window says, not what the aeroplane's height is.
+		return Units.metersToFeet(InstrumentError.indicatedAltitude(
+			t.altitude or 0,
+			t.qnhPa,
+			t.altimeterSettingPa
+		))
 	end,
 	verticalSpeedFpm = function(t: any): number
 		return Units.msToFeetPerMin(t.verticalSpeed or 0)
 	end,
+	--[[
+		MAGNETIC, not true - the DI is set from the compass, and so is every
+		runway number and published bearing.
+
+		It gets magnetic variation and NOTHING else. The turning error in
+		InstrumentError belongs to the wet compass, which is a different
+		instrument that fails differently; a gyroscopic DI is steady in a turn
+		by design. See §32 - putting dip error on this gauge would be modelling
+		the wrong instrument.
+	]]
 	headingDeg = function(t: any): number
-		return deg(t.heading or 0)
+		return deg(InstrumentError.magneticHeading(t.heading or 0))
 	end,
 	turnRateDegPerSec = function(t: any): number
 		return deg(t.turnRate or 0)
@@ -584,20 +613,50 @@ function SixPack.runTests(): (boolean, { any })
 		to know what a knot is.
 	]]
 	local s = SixPack.samplers
-	checkRange("Airspeed converts m/s to knots", s.airspeedKt({ airspeedIndicated = 51.4444 }), 99.9, 100.1, "kt")
+	--[[
+		⚠️ 80 KT IS DELIBERATE, AND SO IS THE VARIATION BELOW.
+
+		Since §32 three of these samplers inject a real instrument's error, so
+		a test that feeds 100 kt and demands 100 kt back is asserting the
+		absence of the feature. 80 kt is the one speed the POH calibration
+		table says the ASI reads correctly, so this still tests the unit
+		boundary and only the unit boundary. The error itself is asserted
+		against published numbers in InstrumentError's own suite, and the two
+		checks below pin the fact that it reaches the panel at all.
+	]]
+	checkRange("Airspeed converts m/s to knots", s.airspeedKt({ airspeedIndicated = Units.knotsToMs(80) }), 79.9, 80.1, "kt")
 	checkRange("Altitude converts metres to feet", s.altitudeFt({ altitude = 304.8 }), 999.9, 1000.1, "ft")
 	checkRange("Vertical speed converts m/s to fpm", s.verticalSpeedFpm({ verticalSpeed = 5.08 }), 999, 1001, "fpm")
-	checkRange("Heading converts radians to degrees", s.headingDeg({ heading = math.pi }), 179.9, 180.1, "deg")
+	local magneticOf180 = 180 - InstrumentError.MAGNETIC_VARIATION_DEG
+	checkRange(
+		"Heading converts radians to degrees, and reads MAGNETIC",
+		s.headingDeg({ heading = math.pi }),
+		magneticOf180 - 0.1,
+		magneticOf180 + 0.1,
+		"deg"
+	)
 	checkRange("Turn rate converts radians to degrees", s.turnRateDegPerSec({ turnRate = math.rad(3) }), 2.99, 3.01, "deg/s")
 	record(
 		"The ball stays in SI, because that is what it reads",
 		s.lateralAccel({ lateralAcceleration = -1.25 }) == -1.25,
 		"m/s^2 passed through unconverted"
 	)
+	--[[
+		The position error reaches the panel. Fed the calibrated speed the POH
+		pairs with 40 kt indicated, the gauge must show 40 - if this reads 48
+		the sampler has been "simplified" back to the raw number.
+	]]
 	record(
-		"Absent telemetry reads zero rather than erroring",
-		s.airspeedKt({}) == 0 and s.headingDeg({}) == 0 and s.pitchDeg({}) == 0,
-		"an empty table is survivable"
+		"The ASI shows INDICATED airspeed, not calibrated",
+		math.abs(s.airspeedKt({ airspeedIndicated = Units.knotsToMs(48) }) - 40) < 0.05,
+		string.format("48 kt calibrated shows %.1f kt indicated", s.airspeedKt({ airspeedIndicated = Units.knotsToMs(48) }))
+	)
+	record(
+		"Absent telemetry is survivable rather than an error",
+		s.airspeedKt({}) == 0
+			and s.pitchDeg({}) == 0
+			and s.headingDeg({}) == (-InstrumentError.MAGNETIC_VARIATION_DEG) % 360,
+		"an empty table reads zero, except the DI - a TRUE heading of zero is genuinely not magnetic zero"
 	)
 
 	-- 2. The airspeed face is the aircraft's ------------------------------
@@ -877,10 +936,19 @@ function SixPack.runTests(): (boolean, { any })
 		}
 		SixPack.render(built, telemetry)
 
+		--[[
+			Against what the SAMPLER produced, not against 95.
+
+			The needle's job is to point at the number the instrument shows,
+			and since §32 that is 95 kt corrected for position error. Asserting
+			the raw 95 here would make the gauge and the instrument model
+			disagree, and only one of them is what the pilot reads.
+		]]
+		local shownKt = SixPack.samplers.airspeedKt(telemetry)
 		record(
-			"Airspeed points where 95 kt belongs on its own face",
-			math.abs(built.airspeed.needle.Rotation - Instrument.angleFor(SixPack.ASI, 95)) < 1e-3,
-			string.format("%.1f deg", built.airspeed.needle.Rotation)
+			"Airspeed points where its indicated speed belongs on the face",
+			math.abs(built.airspeed.needle.Rotation - Instrument.angleFor(SixPack.ASI, shownKt)) < 1e-3,
+			string.format("95 kt calibrated shows %.1f kt indicated; needle %.1f deg", shownKt, built.airspeed.needle.Rotation)
 		)
 
 		--[[
@@ -899,10 +967,13 @@ function SixPack.runTests(): (boolean, { any })
 			string.format("hundreds %.1f deg, thousands %.1f deg", hundreds, thousands)
 		)
 
+		-- The DI reads magnetic (§32), so a TRUE 090 is not 090 under the
+		-- lubber line - it is 090 less the variation.
+		local shownHeading = SixPack.samplers.headingDeg(telemetry)
 		record(
-			"The heading card turns to put 090 under the lubber line",
-			math.abs(built.heading.card.Rotation + 90) < 1e-3,
-			string.format("card at %.1f deg", built.heading.card.Rotation)
+			"The heading card puts the MAGNETIC heading under the lubber line",
+			math.abs(built.heading.card.Rotation + shownHeading) < 1e-3,
+			string.format("true 090 is %.0f magnetic; card at %.1f deg", shownHeading, built.heading.card.Rotation)
 		)
 
 		record(
@@ -1029,10 +1100,11 @@ function SixPack.runTests(): (boolean, { any })
 				rpm = 2400,
 				fuelKg = Cessna172.engine.fuelCapacityKg,
 			})
+			local surfaceKt = SixPack.samplers.airspeedKt({ airspeedIndicated = Units.knotsToMs(110) })
 			record(
 				"The panel builds and drives inside a SurfaceGui, not just a ScreenGui",
 				surfacePanel.Parent == surface
-					and math.abs(surfaceBuilt.airspeed.needle.Rotation - Instrument.angleFor(SixPack.ASI, 110)) < 1e-3,
+					and math.abs(surfaceBuilt.airspeed.needle.Rotation - Instrument.angleFor(SixPack.ASI, surfaceKt)) < 1e-3,
 				"the 3D panel needs no rewrite of this module"
 			)
 			record(

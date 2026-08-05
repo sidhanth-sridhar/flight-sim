@@ -94,6 +94,16 @@ export type Ticks = {
 	labelScale: number?, -- printed label = value * this (altimeter: 0.01)
 	labelFormat: string?,
 	labelRadius: number?, -- fraction of the dial radius, default 0.66
+	--[[
+		Text labels, in order, replacing the numbers on the labelled majors.
+
+		A fuel gauge is marked E, 1/4, 1/2, 3/4, F, not 0 to 153. Matched by
+		POSITION rather than keyed by value on purpose: both tick loops
+		accumulate by repeated addition, so a table keyed on 38.25 would miss
+		38.249999999999996 - the same float trap the major/minor coincidence
+		test already had to solve.
+	]]
+	labelNames: { string }?,
 }
 
 --[[
@@ -307,6 +317,7 @@ function Instrument.tickMarks(spec: DialSpec): { { value: number, angle: number,
 	end
 
 	local majorIndex = 0
+	local labelIndex = 0
 	local majorValues: { number } = {}
 
 	--[[
@@ -330,11 +341,25 @@ function Instrument.tickMarks(spec: DialSpec): { { value: number, angle: number,
 	while value <= maxValue + 1e-9 do
 		local labelled = labelEvery > 0 and (majorIndex % labelEvery) == 0
 		table.insert(majorValues, value)
+
+		local text: string? = nil
+		if labelled then
+			labelIndex += 1
+			if ticks.labelNames then
+				-- Runs out rather than wrapping: a name list shorter than the
+				-- face leaves the remaining majors unlabelled, which is a
+				-- visible mistake rather than a silently repeating scale.
+				text = ticks.labelNames[labelIndex]
+			else
+				text = string.format(labelFormat, value * labelScale)
+			end
+		end
+
 		table.insert(marks, {
 			value = value,
 			angle = Instrument.angleFor(spec, value),
 			major = true,
-			label = if labelled then string.format(labelFormat, value * labelScale) else nil,
+			label = text,
 		})
 		majorIndex += 1
 		value += ticks.major

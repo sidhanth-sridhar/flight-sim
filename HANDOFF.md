@@ -6,13 +6,19 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 561 checks green across 15 suites.** Thirteen run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 585 checks green across 16 suites.** Fourteen run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+
+# 🛠️ **PHASE 2 IS BUILT. Only the gate is left** — fly a circuit on instruments (§14): hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall. **The pilot flies it and signs off.**
+
+⚙️ **Tachometer and fuel are in, and the debug HUD toggles on H (§19).** The tach's green arc and redline come from `engine.maxRPM` by identity; the fuel gauge **reads a level, not a mass**, marked E/½/F against `fuelCapacityKg` with a red reserve band derived from 45 minutes at cruise burn. H replaces `Constants.DEBUG.SHOW_PHYSICS_OVERLAY` as the pilot-facing control — the constant is now only the starting state.
+
+🧭 **The 3D-panel roadmap is now written down (§19), because it was not recorded anywhere.** The instruments will eventually live on a real panel inside the Cessna, so `Instrument.luau` stays rendering-agnostic and `SixPack` is split: `buildPanel()` is a fixed-pixel frame that knows nothing about a screen, and `build()` is the throwaway `ScreenGui` wrapper. **A test builds the panel into a real `SurfaceGui` and drives it**, so the constraint cannot rot.
 
 🎛️ **THE SIX-PACK IS FLYING (§18).** Airspeed, attitude, altimeter, turn coordinator, heading and VSI, in the standard layout, driven by real telemetry — verified live in the cockpit, not just in tests. `FlightModel` now publishes **heading, turn rate and lateral acceleration**; the ball is real lateral acceleration rather than sideslip, because in a forward slip the two disagree and only the ball tells the pilot what their feet are doing. The gauge framework (§17) grew multi-needle dials, a rotating compass card, the inclinometer ball and a wings symbol — **all of it as spec data, no bespoke gauge code**.
 
 ⚠️ **`ClipsDescendants` cannot clip a rotated descendant** — measured three ways, no workaround (§7). The attitude indicator is therefore drawn as a stack of chords, each one inscribed in the dial by construction. **The suite passed 33/33 while the horizon smeared across the airspeed indicator and the altimeter**; only a screenshot found it, which is now the second time. If a module draws something, look at it.
 
-➡️ **Next in Phase 2**: tachometer and fuel, then the debug HUD's toggle key. **The HUD does not have one yet** — it is still gated on `Constants.DEBUG.SHOW_PHYSICS_OVERLAY`, and binding a key is a pilot decision that has not been made.
+✅ **The VSI's 2.0 s lag is confirmed by the pilot and is not to be touched.** A real one is 6–9 s; the snappier instrument is the right trade when you cannot feel the g-forces, and the circuit gate needs it.
 
 🕹️ **THE YOKE WAS BIASED NOSE-UP BY THE GUI INSET, AND FULL NOSE-DOWN WAS UNREACHABLE** (§16). Reported as *"it breaks the mouse cursor movement, extremely difficult to pitch down and very easy to pitch up"* in a loop. All of it was true. Measured: the top of the screen produced **−0.766** against the bottom's **+1.000**, neutral sat 58 px above the middle of the screen, and a cursor off the game view — which Roblox reports as (−1, −1) — slammed the controls to **hard nose-down and hard left roll**. §6g had the inset the wrong way round and its live verification only proved the arithmetic was self-consistent. **The aerodynamics were not involved**: elevator authority measures exactly proportional to dynamic pressure. Phase 2 has not started.
 
@@ -37,10 +43,10 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 **Open items for the pilot**, in order:
 1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
 2. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
-3. **Fly the six-pack (§18).** It has been driven with synthetic telemetry and checked on the apron, but never flown. The Phase 2 gate is §14's — hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall.
-4. **Say whether the VSI's 2.0 s lag is right.** A real one is 6–9 s; this is a deliberate compromise and yours to overrule.
+3. ⬅️ **FLY THE PHASE 2 GATE (§14).** A circuit on instruments: hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall. The panel has been driven with synthetic telemetry, cross-checked against the debug HUD on a takeoff roll, and photographed — but **never flown**. Nothing in Phase 2 is left to build.
 
 **What landed this session**
+- **Tachometer, fuel and the H toggle (§19)** — Phase 2's build is complete. `SixPack` 34 → 48, `UIController` +10.
 - **The six-pack (§18)** — all six instruments, live on real telemetry. `SixPack` 34, `Instrument` 38 → 59, `FlightModel` 44 → 53.
 - **The gauge framework (§17)** — Phase 2's first system.
 - **The yoke's inset bug (§16)** — the pointer is now reduced to the same space as the viewport, an off-view cursor holds the yoke instead of jumping to a corner, and losing window focus releases it. Six new checks; `FlightController` 29 → 35.
@@ -148,7 +154,9 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (561 checks total)
+### Verified green (585 checks total)
+
+⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -164,7 +172,8 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
-| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 34/34 | Client |
+| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
+| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
@@ -628,6 +637,7 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **`ClipsDescendants` DOES NOT CLIP A ROTATED DESCENDANT**, and there is no workaround. Measured three ways — a plain `Frame` clipper, a `CanvasGroup` clipper, and a clipper that is itself rotated — and in all three the rotated child escaped and smeared across the neighbouring instruments. So anything rotated must fit inside its container **by its own geometry**. The attitude indicator is therefore drawn as a stack of chords (§18), and a needle's rotating pivot is checked against the dial radius rather than trusted to be trimmed. Note the corollary that makes this cheap to assert: **a corner's distance from the centre of rotation does not depend on the rotation**, so one check covers every angle at once.
 - **Roblox rotates a `GuiObject` about its own CENTRE, not about its `AnchorPoint`.** The AnchorPoint positions the frame and has nothing to do with the pivot. **Measured, not read**: a needle anchored (0.5, 1) at a dial's centre and set to `Rotation = 180` pointed straight *up*, identical to 0 — an anchor pivot would have pointed straight down. To pivot about a point, the rotating frame's **centre** must be that point, so a needle is a transparent frame of twice its length centred on the hub with the visible bar as a child in its top half. See §17. The failure is silent: every angle can be correct and every arithmetic test can pass while the needle points at the wrong number.
 - **Arithmetic tests cannot verify a rendering.** All 37 checks on the gauge framework passed while every needle pointed somewhere wrong. If a module draws something, look at it — one screenshot found what the whole suite could not. **It happened twice**: the six-pack then passed 33/33 while the attitude indicator painted itself across the airspeed indicator and the altimeter.
+- **A feature gated at CONSTRUCTION cannot be toggled at RUNTIME.** `DebugHud.Init()` used to return early when `Constants.DEBUG.SHOW_PHYSICS_OVERLAY` was false, building no panel at all — so when the pilot asked for a toggle key there was nothing for it to switch back on, and the key would have worked in one direction only. Build the thing and gate its **visibility**; a constant that decides whether something *exists* is a constant nobody can override in flight. Toggling now costs no instances, so flicking it through a landing is free.
 - **A Play session snapshots the datamodel when it STARTS, so entering Play before Rojo has synced runs the old code.** It looks exactly like a test you just wrote failing to appear — the suite runs and reports the previous count. Check the **Edit** datamodel's `Source` for a string you just added before pressing play; the whole cost is one `execute_luau` call.
 - **`UserInputService:GetMouseLocation()` reports in the FULL viewport space, including the strip behind the top bar.** Its Y can never be below `GetGuiInset().Y` and its maximum is `ViewportSize.Y` — measured as a reachable range of exactly 58…841 on a 1572×841 viewport. So a pointer compared against `ViewportSize - inset` is biased by the whole inset. **Subtract the inset from both.** §6g asserted the opposite for two sessions; see §16.
 - **Checking one point inside a mapping does not verify the mapping.** The bug above survived a live probe that confirmed a cursor at y 392 gave pitch 0.000 against a half-height of 391.5 — self-consistent arithmetic, and the cursor was nowhere near the middle of the screen. **Verify the reachable RANGE: both extremes and the centre.**
@@ -936,6 +946,8 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 
 **Gate:** fly a circuit on instruments — hold an altitude on the altimeter, a speed on the ASI, and a heading on the DI, and confirm the AoA indication marks the stall.
 
+🧭 **The gauges are a stepping stone to a 3D panel inside the Cessna** — a `SurfaceGui` on a part, not a screen overlay. That is why `Instrument.luau` is rendering-agnostic and `SixPack.buildPanel()` is separable from its `ScreenGui` wrapper. See §19; the constraint is held by a test rather than by prose.
+
 ### Phase 3 — The world
 
 **Goal:** somewhere to fly *to*. Depends on Phase 2 only for the navigation display.
@@ -1192,3 +1204,64 @@ require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controllers.UIControlle
 **And look at it.** Twice now the arithmetic has been perfect while the picture was wrong. `SixPack.build(parent)` and `SixPack.render(built, telemetry)` are exported precisely so a panel can be driven with synthetic numbers and photographed without flying.
 
 Verified live rather than only in tests: seated in the aircraft on the apron, the panel reads **0 kt on the bottom peg, 5 ft, 000 on the DI, level horizon, zero VSI, ball centred** — every one of them from real telemetry.
+
+---
+
+## 19. Tachometer, fuel, and the HUD toggle — Phase 2 build complete (2026-08-04)
+
+**585/585 across 16 suites.** `SixPack` 34 → 48, `UIController` gains its own 10, `Cessna172.limits` gains two entries. **This closes the Phase 2 build; only the gate is left.**
+
+### 🧭 THE 3D-PANEL ROADMAP, recorded here because it was not written down anywhere
+
+**The instruments are eventually going to live inside the Cessna on a real panel, not floating on the screen.** That constraint was given verbally and was **not in this handoff** — it is now, because it changes how everything in `UI/Instruments/` must be written and would otherwise be lost.
+
+The rule: **`Instrument.luau` stays rendering-agnostic.** No viewport, no GUI inset, no camera, no screen-space assumption anywhere in it — a gauge is a pixel-sized frame inside whatever parent it is given. In Roblox a 3D panel is a `SurfaceGui` on a part, and a SurfaceGui hosts exactly the same `GuiObject`s, so nothing has to be rewritten when the move happens.
+
+`SixPack` is therefore split in two:
+
+| | |
+|---|---|
+| `SixPack.buildPanel(parent)` | The panel itself — a fixed-pixel `Frame` of eight instruments, no scale positioning, **no knowledge of a screen**. This is what gets reparented into the cockpit. |
+| `SixPack.build(parent)` | Wraps it in a `ScreenGui` and hangs it bottom-centre, under the cowling, where the 3D panel will sit. **This is the only throwaway part.** |
+
+**A test builds the panel into a real `SurfaceGui` and drives it**, asserting the airspeed needle lands where its face says. If that check ever fails, something screen-specific has leaked into `buildPanel` and the 3D cockpit has quietly become a rewrite.
+
+### The two gauges
+
+**Tachometer** — 0…3,000 rpm. The green arc is `limits.rpmGreenLow` to **`engine.maxRPM`**, and the redline **is** `engine.maxRPM` by identity rather than by a matching literal, so changing the engine moves the arc with it. Same rule as the airspeed arcs.
+
+Zero sits at the **lower left** and the scale sweeps clockwise through the top to the redline at the lower right. That is not decoration and it was a correction: the first version started at the top, which drove the cruise range round to the left-hand side of the dial. The green arc belongs across the top right, where the eye lands.
+
+**Fuel** — and **it reads a LEVEL, not a mass**, which is why there is no unit conversion in it and no invented fuel density. A real float-type gauge measures how full the tank is; showing `fuelKg` as a fraction of `fuelCapacityKg` is the honest presentation of what the model actually has. Printing gallons would have meant inventing a kg-per-gallon constant the definition does not contain.
+
+Marked **E, ½, F** with unlabelled quarter ticks. Five labels across 120° overlapped — drawn, looked at, and fixed — and the real gauge is sparse for the same reason. The red band is `limits.fuelReserveKg`, **derived** in the definition: 45 minutes at the cruise burn of 27.9 kg/h ≈ 21 kg.
+
+Both are heavily lagged, and deliberately: 0.25 s on the tachometer because a real one is mechanically damped, **4 s on the fuel** because a gauge that twitched as the fuel sloshed through every turn would be worse than useless.
+
+`ticks.labelNames` is the one framework addition — text labels matched to the labelled majors **by position, not keyed by value**, because both tick loops accumulate by repeated addition and a table keyed on 38.25 would miss 38.249999999999996. Same float trap the major/minor coincidence check already had to solve.
+
+### The debug HUD toggles on H
+
+The pilot's key, and it **replaces `Constants.DEBUG.SHOW_PHYSICS_OVERLAY` as the pilot-facing control**. The constant survives as the *starting* state and nothing reads it afterwards.
+
+That forced a real change: `DebugHud.Init()` used to return early when the flag was false and build **nothing**, so there would have been no panel for a key to switch back on. The HUD is now always built and only its visibility is gated — see §7, because the lesson generalises.
+
+**Owned by `UIController` on a lifetime `InputBegan` connection, not by `update()`** — the same rule as `ResetAircraft` (§6j) and for the same reason: `update()` only runs while a flyable aircraft is being flown, and the pilot must be able to set this from the apron so the HUD is already in the state they want when they board. Two checks assert H stays inert inside `update()`.
+
+**H is a letter**, which makes the typing guard more than housekeeping: without it, typing "how high" in chat would strobe the panel. Both `gameProcessedEvent` and a focused-text-box check are applied, exactly as Backspace does.
+
+`UIController.shouldToggleHud(keyCode, blocked, boundKey)` is pure and exported — the same shape as `FlightController.shouldReset()` — so the key is tested without a keyboard. **Verified live too**: real H presses, HUD off then on, with the six-pack unaffected both times.
+
+### Verified live, not only in tests
+Seated, engine started with E, full throttle on the takeoff roll, every gauge cross-checked against the debug HUD it does not replace:
+
+| debug HUD | panel |
+|---|---|
+| RPM 2618 | needle in the green arc, below the redline |
+| FUEL 152.8 of 153 kg | needle at F |
+| IAS 68.9 kt | needle in the green arc |
+| ALT 1.4 m | 5 ft on the hundreds needle |
+| heading | 000 under the lubber line, on runway 36 |
+
+### What is left in Phase 2
+**Nothing to build. The gate remains**: fly a circuit on instruments — hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall.

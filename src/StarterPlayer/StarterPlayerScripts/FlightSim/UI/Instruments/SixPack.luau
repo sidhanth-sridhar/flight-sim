@@ -65,6 +65,10 @@ local DIAL_SIZE = 116
 local GAP = 8
 local BOTTOM_MARGIN = 14
 
+-- Four across: the six-pack occupies the left three, the engine cluster the
+-- fourth, which is the arrangement on the real aeroplane.
+local COLUMNS = 4
+
 -- =========================================================================
 -- THE SIX FACES, AS DATA
 -- =========================================================================
@@ -213,6 +217,83 @@ SixPack.VSI = {
 	lagTau = 2.0,
 }
 
+--[[
+	TACHOMETER. 0 to 3,000 rpm over 300 degrees, labelled in hundreds as every
+	light-aircraft tachometer is.
+
+	The green arc runs from `limits.rpmGreenLow` to `engine.maxRPM`, and the
+	redline IS `engine.maxRPM` - taken from the definition rather than typed,
+	so the arc cannot drift away from the engine it describes. Same rule as the
+	airspeed arcs.
+
+	A small lag, because a real tachometer is mechanically damped and the
+	engine model's rpm steps as the throttle ramps.
+]]
+SixPack.TACHOMETER = {
+	name = "Tachometer",
+	caption = "RPM x100",
+	captionY = 0.62,
+	--[[
+		Zero at the lower LEFT, sweeping clockwise through the top to the
+		redline at the lower right. That is not decoration: it puts the cruise
+		range - the green arc, and the only part of the scale anyone reads in
+		flight - across the top right of the dial where the eye lands.
+
+		Starting at the top instead was tried and looked wrong for exactly that
+		reason: it drove 2,100 to 2,700 rpm round to the left-hand side.
+	]]
+	breakpoints = Instrument.linearFace(0, 3000, 210, 300),
+	ticks = { major = 500, minor = 100, labelScale = 0.01, labelRadius = 0.60 },
+	arcs = {
+		{ from = Cessna172.limits.rpmGreenLow, to = Cessna172.engine.maxRPM, color = Instrument.ARC.GREEN, radius = 0.86, thickness = 5 },
+	},
+	redline = Cessna172.engine.maxRPM,
+	lagTau = 0.25,
+}
+
+--[[
+	FUEL. Marked E, 1/4, 1/2, 3/4, F over a quarter of a turn.
+
+	IT READS A LEVEL, NOT A MASS, and that is why there is no unit conversion
+	here and no invented fuel density. A real float-type fuel gauge measures how
+	full the tank is; showing a fraction of capacity is the honest presentation
+	of `fuelKg` against `fuelCapacityKg`, and inventing a kg-per-gallon constant
+	to print gallons would be making up a number the definition does not have.
+
+	The red band at the bottom is `limits.fuelReserveKg` - 45 minutes at cruise
+	burn, derived in the definition rather than drawn by eye.
+
+	Lagged hard, at 4 s. Real fuel gauges are heavily damped precisely so the
+	needle does not swing about with every attitude change as the fuel sloshes;
+	a fuel gauge that twitched during a turn would be worse than useless.
+]]
+SixPack.FUEL = {
+	name = "Fuel",
+	caption = "FUEL",
+	-- Below the hub: this face uses only the top of the dial, so the bottom is
+	-- free and the caption cannot collide with a number.
+	captionY = 0.72,
+	breakpoints = Instrument.linearFace(0, Cessna172.engine.fuelCapacityKg, -60, 120),
+	--[[
+		Ticks at every quarter but numbers only at E, 1/2 and F.
+
+		Five labels across 120 degrees overlap - drawn and looked at, "1/4",
+		"1/2" and "3/4" ran into each other - and the real gauge is sparse for
+		the same reason. The quarter marks are still there as ticks, which is
+		all a level gauge needs.
+	]]
+	ticks = {
+		major = Cessna172.engine.fuelCapacityKg / 4,
+		labelEvery = 2,
+		labelNames = { "E", "1/2", "F" },
+		labelRadius = 0.58,
+	},
+	arcs = {
+		{ from = 0, to = Cessna172.limits.fuelReserveKg, color = Instrument.ARC.RED, radius = 0.86, thickness = 5 },
+	},
+	lagTau = 4.0,
+}
+
 -- =========================================================================
 -- SAMPLERS - THE UNIT BOUNDARY
 -- =========================================================================
@@ -249,6 +330,15 @@ SixPack.samplers = {
 	lateralAccel = function(t: any): number
 		return t.lateralAcceleration or 0
 	end,
+	-- Engine rpm and fuel are already in the units their faces are marked in -
+	-- rpm is rpm, and the fuel gauge reads a level against capacity in the same
+	-- kilograms the physics burns. Nothing to convert, which is the point.
+	rpm = function(t: any): number
+		return t.rpm or 0
+	end,
+	fuelKg = function(t: any): number
+		return t.fuelKg or 0
+	end,
 }
 
 -- =========================================================================
@@ -274,6 +364,79 @@ local initialised = false
 	nothing that swallows a click" is not a question arithmetic can answer, and
 	section 17 learned that the expensive way.
 ]]
+--[[
+	Build the panel itself: a plain Frame of a fixed pixel size, containing the
+	eight instruments and NOTHING that knows about a screen.
+
+	THIS IS THE SPLIT THAT KEEPS THE 3D PANEL POSSIBLE. The instruments are
+	going to end up on a real panel inside the Cessna, which in Roblox means a
+	SurfaceGui on a part - and a SurfaceGui hosts exactly the same GuiObjects.
+	So everything below is expressed in pixels within its own frame, with no
+	scale positioning, no viewport, no GUI inset and no camera. Moving the panel
+	into the cockpit becomes a matter of reparenting this frame; nothing here
+	has to be rewritten.
+
+	`SixPack.build` wraps it in a ScreenGui for now. That wrapper is the only
+	part that is throwaway.
+]]
+function SixPack.buildPanel(parent: Instance): (Frame, { [string]: any })
+	local panelWidth = DIAL_SIZE * COLUMNS + GAP * (COLUMNS - 1)
+	local panelHeight = DIAL_SIZE * 2 + GAP
+
+	local panel = Instance.new("Frame")
+	panel.Name = "Panel"
+	panel.Size = UDim2.fromOffset(panelWidth, panelHeight)
+	panel.BackgroundTransparency = 1
+	panel.BorderSizePixel = 0
+	panel.Parent = parent
+
+	local built: { [string]: any } = {}
+
+	local function positionAt(root: Frame, column: number, row: number)
+		root.Position = UDim2.fromOffset(column * (DIAL_SIZE + GAP), row * (DIAL_SIZE + GAP))
+	end
+
+	--[[
+		Top row: the three primary instruments, attitude in the middle, with the
+		engine cluster to the right of the six-pack exactly as it sits on a real
+		172 panel.
+	]]
+	built.airspeed = Instrument.build(panel, SixPack.ASI, DIAL_SIZE)
+	positionAt(built.airspeed.root, 0, 0)
+
+	built.attitude = Instrument.buildHorizon(panel, SixPack.ATTITUDE, DIAL_SIZE)
+	positionAt(built.attitude.root, 1, 0)
+
+	built.altimeter = Instrument.build(panel, SixPack.ALTIMETER, DIAL_SIZE)
+	positionAt(built.altimeter.root, 2, 0)
+
+	built.tachometer = Instrument.build(panel, SixPack.TACHOMETER, DIAL_SIZE)
+	positionAt(built.tachometer.root, 3, 0)
+
+	-- Bottom row.
+	built.turn = Instrument.build(panel, SixPack.TURN, DIAL_SIZE)
+	positionAt(built.turn.root, 0, 1)
+
+	built.heading = Instrument.build(panel, SixPack.HEADING, DIAL_SIZE)
+	positionAt(built.heading.root, 1, 1)
+
+	built.vsi = Instrument.build(panel, SixPack.VSI, DIAL_SIZE)
+	positionAt(built.vsi.root, 2, 1)
+
+	built.fuel = Instrument.build(panel, SixPack.FUEL, DIAL_SIZE)
+	positionAt(built.fuel.root, 3, 1)
+
+	return panel, built
+end
+
+--[[
+	Wrap the panel in a ScreenGui and hang it where the 3D panel will sit:
+	bottom centre, under the cowling, which is where a real panel is relative to
+	the windscreen.
+
+	Everything screen-specific in this module is in this function and nowhere
+	else. When the instruments move into the cockpit, this is what gets deleted.
+]]
 function SixPack.build(parent: Instance): (ScreenGui, { [string]: any })
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "FlightSimSixPack"
@@ -288,43 +451,9 @@ function SixPack.build(parent: Instance): (ScreenGui, { [string]: any })
 	gui.Enabled = false
 	gui.Parent = parent
 
-	local panelWidth = DIAL_SIZE * 3 + GAP * 2
-	local panelHeight = DIAL_SIZE * 2 + GAP
-
-	local panel = Instance.new("Frame")
-	panel.Name = "Panel"
+	local panel, built = SixPack.buildPanel(gui)
 	panel.AnchorPoint = Vector2.new(0.5, 1)
 	panel.Position = UDim2.new(0.5, 0, 1, -BOTTOM_MARGIN)
-	panel.Size = UDim2.fromOffset(panelWidth, panelHeight)
-	panel.BackgroundTransparency = 1
-	panel.BorderSizePixel = 0
-	panel.Parent = gui
-
-	local built: { [string]: any } = {}
-
-	local function positionAt(root: Frame, column: number, row: number)
-		root.Position = UDim2.fromOffset(column * (DIAL_SIZE + GAP), row * (DIAL_SIZE + GAP))
-	end
-
-	-- Top row: the three primary instruments, attitude in the middle.
-	built.airspeed = Instrument.build(panel, SixPack.ASI, DIAL_SIZE)
-	positionAt(built.airspeed.root, 0, 0)
-
-	built.attitude = Instrument.buildHorizon(panel, SixPack.ATTITUDE, DIAL_SIZE)
-	positionAt(built.attitude.root, 1, 0)
-
-	built.altimeter = Instrument.build(panel, SixPack.ALTIMETER, DIAL_SIZE)
-	positionAt(built.altimeter.root, 2, 0)
-
-	-- Bottom row.
-	built.turn = Instrument.build(panel, SixPack.TURN, DIAL_SIZE)
-	positionAt(built.turn.root, 0, 1)
-
-	built.heading = Instrument.build(panel, SixPack.HEADING, DIAL_SIZE)
-	positionAt(built.heading.root, 1, 1)
-
-	built.vsi = Instrument.build(panel, SixPack.VSI, DIAL_SIZE)
-	positionAt(built.vsi.root, 2, 1)
 
 	return gui, built
 end
@@ -348,6 +477,10 @@ function SixPack.render(built: { [string]: any }, telemetry: any, dt: number?)
 	-- different quantities and neither follows from the other.
 	Instrument.setNeedle(built.turn, "Symbol", s.turnRateDegPerSec(telemetry), dt)
 	Instrument.setBall(built.turn, s.lateralAccel(telemetry), dt)
+
+	-- Engine cluster.
+	Instrument.setValue(built.tachometer, s.rpm(telemetry), dt)
+	Instrument.setValue(built.fuel, s.fuelKg(telemetry), dt)
 end
 
 -- =========================================================================
@@ -560,6 +693,105 @@ function SixPack.runTests(): (boolean, { any })
 		string.format("%d labels on a 1000 ft revolution", altLabels)
 	)
 
+	-- 3b. The engine cluster -------------------------------------------------
+	--[[
+		The tachometer's markings come from the engine, not from this file. The
+		redline being `engine.maxRPM` by IDENTITY rather than by a matching
+		literal is the point: change the engine and the arc follows.
+	]]
+	local tachBands = Instrument.arcBands(SixPack.TACHOMETER)
+	record(
+		"The tachometer's green arc runs to the engine's own maximum",
+		tachBands[1].from == Cessna172.limits.rpmGreenLow
+			and tachBands[1].to == Cessna172.engine.maxRPM,
+		string.format("%d..%d rpm", tachBands[1].from, tachBands[1].to)
+	)
+	record(
+		"The tachometer redline IS engine.maxRPM",
+		SixPack.TACHOMETER.redline == Cessna172.engine.maxRPM,
+		string.format("%d rpm", Cessna172.engine.maxRPM)
+	)
+	local tachMin, tachMax = Instrument.faceRange(SixPack.TACHOMETER)
+	record(
+		"The tachometer scale reaches past the redline",
+		tachMax > Cessna172.engine.maxRPM and tachMin <= Cessna172.engine.idleRPM,
+		string.format("face %d..%d against idle %d and max %d",
+			tachMin, tachMax, Cessna172.engine.idleRPM, Cessna172.engine.maxRPM)
+	)
+
+	--[[
+		The fuel gauge reads a LEVEL. Full tanks must put the needle at the top
+		of the scale, and the scale's top must be the aircraft's actual capacity
+		- a gauge that reads three quarters on full tanks is worse than none.
+	]]
+	local fuelMin, fuelMax = Instrument.faceRange(SixPack.FUEL)
+	record(
+		"The fuel scale is exactly the aircraft's capacity",
+		fuelMin == 0 and fuelMax == Cessna172.engine.fuelCapacityKg,
+		string.format("0..%d kg", Cessna172.engine.fuelCapacityKg)
+	)
+	local fuelBands = Instrument.arcBands(SixPack.FUEL)
+	record(
+		"The red band is the reserve from the definition",
+		fuelBands[1].from == 0 and fuelBands[1].to == Cessna172.limits.fuelReserveKg,
+		string.format("0..%d kg, about 45 min at cruise burn", Cessna172.limits.fuelReserveKg)
+	)
+	record(
+		"...and the reserve is a small part of the tanks, not most of them",
+		Cessna172.limits.fuelReserveKg < Cessna172.engine.fuelCapacityKg * 0.25,
+		string.format("%d of %d kg", Cessna172.limits.fuelReserveKg, Cessna172.engine.fuelCapacityKg)
+	)
+
+	--[[
+		E, 1/4, 1/2, 3/4, F rather than numbers - and in that ORDER, since the
+		names are matched to the majors by position.
+	]]
+	local fuelMarks = Instrument.tickMarks(SixPack.FUEL)
+	local fuelLabels = {}
+	for _, m in fuelMarks do
+		if m.label then
+			table.insert(fuelLabels, m.label)
+		end
+	end
+	record(
+		"The fuel gauge is marked E to F, not in kilograms",
+		table.concat(fuelLabels, ",") == "E,1/2,F",
+		table.concat(fuelLabels, " ")
+	)
+	--[[
+		The quarter marks survive as unlabelled ticks. Dropping the numbers to
+		stop them overlapping must not also drop the graduations, or the gauge
+		loses the resolution that makes "about a quarter left" readable.
+	]]
+	local fuelMajors = 0
+	for _, m in fuelMarks do
+		if m.major then
+			fuelMajors += 1
+		end
+	end
+	record(
+		"The quarter marks are still graduated, just not numbered",
+		fuelMajors == 5,
+		string.format("%d major ticks, %d numbered", fuelMajors, #fuelLabels)
+	)
+	--[[
+		The names must land on the values they claim. "1/2" sitting anywhere but
+		half a tank is an instrument that lies, and the label list is matched by
+		position rather than by value, so this is the check that ties the two
+		back together.
+	]]
+	local halfMark
+	for _, m in fuelMarks do
+		if m.label == "1/2" then
+			halfMark = m
+		end
+	end
+	record(
+		"The 1/2 mark sits at half the tanks",
+		halfMark ~= nil and math.abs(halfMark.value - Cessna172.engine.fuelCapacityKg / 2) < 1e-6,
+		string.format("%.1f kg of %d", halfMark and halfMark.value or -1, Cessna172.engine.fuelCapacityKg)
+	)
+
 	-- 4. The built panel ----------------------------------------------------
 	local holder = Instance.new("Folder")
 	holder.Name = "__SixPackTest"
@@ -569,10 +801,10 @@ function SixPack.runTests(): (boolean, { any })
 		local gui, built = SixPack.build(holder)
 
 		record(
-			"All six instruments are built",
-			built.airspeed and built.attitude and built.altimeter
-				and built.turn and built.heading and built.vsi ~= nil,
-			"airspeed, attitude, altimeter, turn, heading, VSI"
+			"All eight instruments are built",
+			built.airspeed and built.attitude and built.altimeter and built.tachometer
+				and built.turn and built.heading and built.vsi and built.fuel ~= nil,
+			"six-pack plus tachometer and fuel"
 		)
 
 		record(
@@ -762,6 +994,87 @@ function SixPack.runTests(): (boolean, { any })
 			#overflow == 0,
 			if #overflow == 0 then string.format("all within a %.0f px radius", DIAL_SIZE * 0.5)
 			else table.concat(overflow, ", ")
+		)
+
+		--[[
+			5b. THE PANEL MUST WORK OFF A SCREEN.
+
+			The instruments are going to live on a real panel inside the Cessna,
+			which in Roblox is a SurfaceGui on a part. So the panel is built into
+			one here and driven, which proves it carries no screen-space
+			assumption - no viewport, no GUI inset, no camera. If this ever fails,
+			something screen-specific has leaked out of SixPack.build() and into
+			buildPanel(), and the 3D cockpit has just become a rewrite.
+		]]
+		local board = Instance.new("Part")
+		board.Size = Vector3.new(6, 3, 0.2)
+		board.Anchored = true
+		board.Parent = holder
+
+		local surface = Instance.new("SurfaceGui")
+		surface.Face = Enum.NormalId.Front
+		surface.Parent = board
+
+		local surfaceOk, surfaceErr = pcall(function()
+			local surfacePanel, surfaceBuilt = SixPack.buildPanel(surface)
+			SixPack.render(surfaceBuilt, {
+				airspeedIndicated = Units.knotsToMs(110),
+				altitude = Units.feetToMeters(3200),
+				verticalSpeed = 0,
+				heading = math.rad(270),
+				turnRate = 0,
+				pitchAttitude = 0,
+				bankAngle = 0,
+				lateralAcceleration = 0,
+				rpm = 2400,
+				fuelKg = Cessna172.engine.fuelCapacityKg,
+			})
+			record(
+				"The panel builds and drives inside a SurfaceGui, not just a ScreenGui",
+				surfacePanel.Parent == surface
+					and math.abs(surfaceBuilt.airspeed.needle.Rotation - Instrument.angleFor(SixPack.ASI, 110)) < 1e-3,
+				"the 3D panel needs no rewrite of this module"
+			)
+			record(
+				"The panel frame carries no scale-based positioning of its own",
+				surfacePanel.Size.X.Scale == 0 and surfacePanel.Size.Y.Scale == 0,
+				string.format("%d x %d px, fixed", surfacePanel.Size.X.Offset, surfacePanel.Size.Y.Offset)
+			)
+		end)
+		if not surfaceOk then
+			record("The panel builds inside a SurfaceGui", false, tostring(surfaceErr))
+		end
+
+		-- 6. The engine cluster, driven ---------------------------------------
+		telemetry.rpm = 2400
+		telemetry.fuelKg = Cessna172.engine.fuelCapacityKg * 0.5
+		telemetry.airspeedIndicated = Units.knotsToMs(95)
+		SixPack.render(built, telemetry)
+
+		record(
+			"The tachometer points where 2400 rpm belongs",
+			math.abs(built.tachometer.needle.Rotation - Instrument.angleFor(SixPack.TACHOMETER, 2400)) < 1e-3,
+			string.format("%.1f deg at 2400 rpm", built.tachometer.needle.Rotation)
+		)
+		record(
+			"Half tanks put the fuel needle at the 1/2 mark",
+			math.abs(built.fuel.needle.Rotation - Instrument.angleFor(SixPack.FUEL, Cessna172.engine.fuelCapacityKg / 2)) < 1e-3,
+			string.format("%.1f deg", built.fuel.needle.Rotation)
+		)
+
+		--[[
+			Dry tanks and a dead engine must read at the bottom of both scales,
+			not somewhere in the middle. This is the state the aircraft spawns
+			in, so it is the reading the pilot sees most often.
+		]]
+		telemetry.rpm = 0
+		telemetry.fuelKg = 0
+		SixPack.render(built, telemetry)
+		record(
+			"Engine stopped and tanks dry both read empty",
+			math.abs(built.tachometer.needle.Rotation - Instrument.angleFor(SixPack.TACHOMETER, 0)) < 1e-3
+				and math.abs(built.fuel.needle.Rotation - Instrument.angleFor(SixPack.FUEL, 0)) < 1e-3,
+			"both needles on their bottom stops"
 		)
 
 		gui:Destroy()

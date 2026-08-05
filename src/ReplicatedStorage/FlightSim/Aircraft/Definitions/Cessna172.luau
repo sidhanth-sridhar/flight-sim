@@ -405,6 +405,23 @@ Cessna172.limits = {
 	gNegative = -1.52,
 
 	serviceCeiling = 4267, -- m (14,000 ft)
+
+	--[[
+		The tachometer's green arc. 2,100 rpm is the bottom of the normal
+		operating range on the 172S; the top of the arc is the redline and is
+		NOT repeated here - it is `engine.maxRPM`, and a second copy of a number
+		is a second place for it to go stale.
+	]]
+	rpmGreenLow = 2100,
+
+	--[[
+		The red band at the bottom of the fuel gauge.
+
+		Derived, not chosen: 45 minutes at cruise is the VFR night reserve, and
+		this aircraft burns 27.9 kg/h at cruise (see section 4), so 0.75 h gives
+		about 21 kg. Reaching this band means landing somewhere, not pressing on.
+	]]
+	fuelReserveKg = 21,
 }
 
 -- =========================================================================

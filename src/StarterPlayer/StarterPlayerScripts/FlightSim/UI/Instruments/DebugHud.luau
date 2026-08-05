@@ -81,6 +81,16 @@ local rows: { [string]: TextLabel } = {}
 local connection: RBXScriptConnection? = nil
 local initialised = false
 
+--[[
+	Whether the pilot wants the HUD at all, as opposed to whether there is
+	anything to show on it.
+
+	Two separate questions, and conflating them was the old design: the panel is
+	visible only when this is true AND the pilot is flying. The constant seeds
+	it and nothing else reads the constant afterwards - see setVisible().
+]]
+local hudWanted = Constants.DEBUG.SHOW_PHYSICS_OVERLAY == true
+
 local redrawAccumulator = 0
 
 --[[
@@ -578,11 +588,17 @@ local function onHeartbeat(dt: number)
 	local telemetry = FlightController.getTelemetry()
 	local flying = telemetry ~= nil and FlightController.isFlying()
 
-	if not flying then
+	--[[
+		Hidden because the pilot switched it off is not the same as hidden
+		because there is nothing to show, but the panel looks identical either
+		way. Sampling stops in BOTH cases: peaks accumulated while the HUD was
+		off would be shown as if they had just happened the moment it came back.
+	]]
+	if not flying or not hudWanted then
 		if gui.Enabled then
 			gui.Enabled = false
-			DebugHud.resetPeaks(peaks)
 		end
+		DebugHud.resetPeaks(peaks)
 		return
 	end
 
@@ -608,18 +624,40 @@ end
 -- LIFECYCLE
 -- =========================================================================
 
+--[[
+	Show or hide the panel. Returns the new state.
+
+	THE HUD IS NOW ALWAYS BUILT, and that is the change the toggle key forced.
+	It used to return early from Init() when Constants.DEBUG.SHOW_PHYSICS_OVERLAY
+	was false, which built nothing at all - so there was no panel for a key to
+	switch back on, and the pilot's control would have worked in one direction
+	only. The constant is now the STARTING state and nothing more.
+
+	Pure enough to test directly: it touches one boolean, and the redraw loop
+	reads it. No instance is created or destroyed by toggling, so a pilot
+	flicking it on and off through a landing costs nothing.
+]]
+function DebugHud.setVisible(visible: boolean): boolean
+	hudWanted = visible == true
+	local gui = screenGui
+	if gui and not hudWanted then
+		-- Take it off the screen immediately rather than at the next redraw,
+		-- which at 30 Hz is a visible lag on a key the pilot just pressed.
+		gui.Enabled = false
+	end
+	return hudWanted
+end
+
+function DebugHud.toggle(): boolean
+	return DebugHud.setVisible(not hudWanted)
+end
+
+function DebugHud.isVisible(): boolean
+	return hudWanted
+end
+
 function DebugHud.Init()
 	if initialised then
-		return
-	end
-
-	--[[
-		The master switch is the flag that already exists and already says it
-		does this: Constants.DEBUG.SHOW_PHYSICS_OVERLAY, documented as
-		"draws force vectors and shows the raw-numbers panel in flight".
-		No new keybinding, because the bindings belong to the pilot.
-	]]
-	if not Constants.DEBUG.SHOW_PHYSICS_OVERLAY then
 		return
 	end
 
@@ -631,7 +669,8 @@ function DebugHud.Init()
 	connection = RunService.Heartbeat:Connect(onHeartbeat)
 
 	if Constants.DEBUG.ENABLED then
-		print("[FlightSim:HUD] Debug HUD ready")
+		print(string.format("[FlightSim:HUD] Debug HUD ready (starts %s, toggle with H)",
+			if hudWanted then "shown" else "hidden"))
 	end
 end
 

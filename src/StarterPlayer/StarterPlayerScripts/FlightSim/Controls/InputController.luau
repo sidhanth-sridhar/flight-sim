@@ -132,6 +132,22 @@ InputController.DEFAULT_BINDINGS = {
 	ResetAircraft = Enum.KeyCode.Backspace, -- specified
 
 	--[[
+		Show or hide the debug HUD. H, specified by the pilot.
+
+		This is now the pilot-facing control for the raw-numbers panel.
+		Constants.DEBUG.SHOW_PHYSICS_OVERLAY still exists and still decides what
+		state the HUD STARTS in, but it is a developer default rather than
+		something anyone reaches for mid-flight.
+
+		Consumed by UIController off InputBegan, NOT by update(), for the same
+		reason as ResetAircraft directly above: update() only runs while an
+		aircraft is being flown, and the pilot must be able to set this from the
+		apron so the HUD is already in the state they want when they board.
+		Two tests assert it stays inert here.
+	]]
+	ToggleHud = Enum.KeyCode.H, -- specified
+
+	--[[
 		X (RecenterStick) and M (MouseModeToggle) were removed when the yoke
 		became absolute. Neither could still mean anything: there are no mouse
 		modes left, and Roblox exposes no API to warp the cursor, so "recentre

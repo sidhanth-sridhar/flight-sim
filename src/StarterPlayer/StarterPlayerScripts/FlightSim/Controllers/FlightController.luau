@@ -77,6 +77,8 @@ local InputController = require(script.Parent.Parent:WaitForChild("Controls"):Wa
 local FlightController = {}
 
 local min = math.min
+local atan2 = math.atan2
+local TAU = math.pi * 2
 
 -- =========================================================================
 -- CONFIGURATION
@@ -145,7 +147,15 @@ local windowFocused = true
 	aircraft is real collector pressure at 240 fps for no benefit - the input
 	layer reads these numbers immediately and never retains them.
 ]]
-local flightState = { altitude = 0, verticalSpeed = 0 }
+local flightState = {
+	altitude = 0,
+	verticalSpeed = 0,
+	-- The lateral three, for the stability augmentation mode. See
+	-- InputController.stabilityRoll.
+	bankAngle = 0,
+	rollRate = 0,
+	heading = 0,
+}
 
 local function log(message: string, ...)
 	if Constants.DEBUG.ENABLED then
@@ -181,6 +191,25 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 
 	flightState.altitude = k.altitude
 	flightState.verticalSpeed = k.velocity.Y
+
+	--[[
+		The lateral state the stability mode needs, taken from the SAME single
+		reading of the assembly as everything else this frame.
+
+		Bank and heading use exactly the constructions FlightModel already
+		publishes as telemetry (see §15 and §18), rather than second versions of
+		them - the DI a pilot reads and the heading this mode steers by must not
+		be two different numbers.
+
+		Roll rate is the angular velocity about the aircraft's OWN roll axis, so
+		it is projected onto the nose vector. Using the world X component would
+		read a pitching aeroplane as rolling the moment it turned onto an
+		east-west heading.
+	]]
+	local cf = k.cframe
+	flightState.bankAngle = -atan2(cf.RightVector.Y, cf.UpVector.Y)
+	flightState.heading = atan2(cf.LookVector.X, -cf.LookVector.Z) % TAU
+	flightState.rollRate = k.angularVelocity:Dot(cf.LookVector)
 
 	-- 2. Input.
 	local controls, systems = InputController.update(r.input, dt, snapshot, flightState)

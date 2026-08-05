@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 665 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 679 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -176,7 +176,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 88/88 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 102/102 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 35/35 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
@@ -1718,3 +1718,61 @@ require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controls.InputControlle
 Seven new checks: the uncaptured cascade saturates at Vy and above 2.5 m/s (the bug, pinned), capture commands nothing on the first frame for entries from −5 to +12 m/s, a fast entry is captured at its true rate, the demand walks at `captureAccel` and converges, and a settled capture still commands full authority when far off.
 
 **Not yet flown.** The measurements are closed-loop against the real aerodynamics, but a pilot has not pressed R in the air since the change.
+
+---
+
+## 27. R is a stability augmentation mode (2026-08-05)
+
+**679/679 across 17 suites**; `InputController` 88 → 102. Rescoped by the pilot: R is no longer "hold this altitude", it is **help me hold the aeroplane**.
+
+### The prime suspect was innocent
+
+The reported symptom was pitch hunting, and the named suspect was the cascade saturating at ±0.45. **Measured, in level flight the pitch channel was already fine** — 2.2 m of error over 15 s, zero saturation, zero reversals.
+
+The real fault was in an axis nothing was controlling. Engaging mid-climb:
+
+| | bank | heading | vs | pitch |
+|---|---|---|---|---|
+| 0 s | −29.9° | 315.7 | +2.52 | +0.242 |
+| 15 s | **−61.3°** | **106.4** — 209° of turn | −7.74 | **+0.450 saturated** |
+
+A **spiral**. Nothing held the wings, so the aeroplane rolled off; the bank stole vertical lift; the altitude channel pulled harder — and **in a bank, pulling tightens the turn instead of climbing**. Pitch saturated for 723 of 901 frames fighting a problem that lives in roll. That is the hunting: the pitch axis chasing a lateral divergence it cannot fix.
+
+### What the mode does now
+
+`InputController.stabilityRoll` — pure, and three terms in order of authority:
+
+1. **Rate damping** opposes whatever roll rate exists. A spiral is a rate before it is an angle, so this is what actually stops one.
+2. **Wings level** rolls out bank the pilot did not ask for.
+3. **Heading hold** banks — gently, never past `maxBank` = 20° — to steer back to the heading captured at engagement.
+
+**And it gets out of the way.** If the pilot rolls with the cursor *or uses any rudder at all*, the augmentation returns their command untouched and the heading reference **follows the aeroplane**. So a bootful of rudder yaws the aircraft, the mode accepts the new heading, and letting go does not snap back to where R was pressed.
+
+**`controls.yaw` is never written anywhere in this mode.** The rudder is the pilot's alone; the augmentation only reads it to know when to stand down.
+
+### Before and after
+
+| | level: max err | level: heading drift | climb: max err | climb: bank | climb: saturated |
+|---|---|---|---|---|---|
+| before | 2.2 m | **56°** | **69.6 m** | **−61.3°** | **723 / 901** |
+| after | **0.2 m** | **1°** | **2.9 m** | rolls out to +1.6° | **0 / 901** |
+
+Rudder while engaged: roll command goes to exactly **+0.000**, heading moves 344.5 → 355 under rudder, and on release settles near **351** — followed, not snapped back. Altitude error stayed ≤ 0.3 m throughout.
+
+**No tuned pitch gain was touched.** `altitudeGain`, `verticalSpeedGain`, `maxClimbRate`, `pitchLimit` and `disconnectThreshold` are all unchanged — the measurement showed they were never the problem. The new gains live in a separate `stability` block.
+
+`FlightState` gained `bankAngle`, `rollRate` and `heading`, all optional: without them only the pitch channel augments, which is the previous behaviour and a sane degraded state. `FlightController` fills them from the **same single reading** of the assembly, using the constructions `FlightModel` already publishes — the DI a pilot reads and the heading this mode steers by must not be two different numbers. Roll rate is projected onto the nose vector, because the world X component reads a *pitching* aeroplane as rolling once it turns east–west.
+
+### How to test it
+```lua
+require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controls.InputController).runTests()  -- Client
+```
+In the air: **engage level** (wings should settle and stay), **engage mid-climb** (should roll level and level off without hunting), and **kick the rudder while engaged** — the aeroplane must yaw, and when you release it should hold the *new* heading rather than turning back.
+
+### Three harness bugs in two sessions
+The first measurement of this bug was taken with **throttle at 0.000** — `IC.update()` derives throttle from held keys and nothing was held, so the aeroplane was gliding at idle and every trace showed a sink that was pure artefact. That is the **third** harness fault in two sessions, after the terrain written outside `MaxExtents` and the engine never started. **Check the harness before believing the result** is now earning its place in §7 repeatedly: measure the entry condition and print it, rather than assuming the setup did what it was told.
+
+### And one more wrong assertion
+A heading-hold check used an error of **exactly 180°**, where the shortest way round is genuinely ambiguous and `angleDelta` returns −π as legitimately as +π. It asserted a turn direction that has no correct answer, and failed on correct code.
+
+⚠️ **Not yet flown.** Every number here is closed-loop against the real aerodynamics with the engine running and the throttle commanded, but a pilot has not pressed R in the air since the change.

@@ -229,10 +229,74 @@ InputController.DEFAULTS = {
 			altitudeHoldPitchCaptured for what it fixes.
 		]]
 		captureAccel = 1.0,
+
 		-- Stick movement AWAY FROM where it sat at engagement that disconnects
 		-- it, as every autopilot does. Measured as a change, not an absolute -
 		-- see the note at the disconnect test.
 		disconnectThreshold = 0.15,
+	},
+
+	--[[
+		STABILITY AUGMENTATION - the lateral half of the mode on R.
+
+		Measured before any of this was written: with the pitch cascade alone,
+		engaging in a climb produced a SPIRAL. The aeroplane rolled off (nothing
+		was holding the wings), the bank stole vertical lift, the altitude
+		channel pulled harder - and in a bank, pulling tightens the turn rather
+		than climbing. Over fifteen seconds the bank went -29.9 to -61.3 degrees
+		and the heading swung 209 degrees, with pitch saturated for 723 of 901
+		frames. The pitch axis was fighting a problem that lives in roll.
+
+		So the mode holds the wings and the heading, and the altitude channel is
+		then asked to do only what it can actually do.
+
+		These are NEW gains. None of the tuned pitch gains are touched.
+	]]
+	stability = {
+		--[[
+			Roll rate damping, roll command per rad/s. This is the term that
+			stops a roll rather than one that chooses a bank, and it is first
+			because a divergence is a rate before it is an angle.
+		]]
+		rollDamping = 1.6,
+
+		-- Roll command per radian of bank error. 1.2 rolls out of 20 degrees of
+		-- unwanted bank with about 0.42 of aileron, which is firm but not a
+		-- snatch.
+		levelGain = 1.2,
+
+		--[[
+			Bank demanded per radian of heading error, and the limit on it.
+
+			25 degrees of heading error asks for the full 20 degrees of bank; a
+			light-aircraft autopilot uses 20 to 25 degrees and no more, because
+			a steeper turn to correct a heading is how a spiral starts.
+		]]
+		headingGain = 0.8,
+		maxBank = math.rad(20),
+
+		-- Never commands more aileron than this, however lost it is. The same
+		-- reasoning as pitchLimit: an augmentation that can hit the stops is a
+		-- divergence waiting to happen.
+		rollLimit = 0.6,
+
+		--[[
+			How far the cursor must move off centre before the pilot is judged
+			to be flying the ailerons themselves. Above this the augmentation
+			hands the roll axis back completely and the heading reference
+			follows the aeroplane, so releasing the yoke does not snap it back
+			to where it was engaged.
+		]]
+		pilotRollThreshold = 0.06,
+
+		--[[
+			Rudder input does the same to the heading reference, and this is the
+			pilot's explicit requirement: the mode must never fight the rudder.
+			Any rudder at all releases the reference to follow, so a bootful of
+			rudder yaws the aeroplane and the mode simply accepts the new
+			heading instead of rolling against it.
+		]]
+		pilotYawThreshold = 0.02,
 	},
 
 	-- Cockpit / chase / free, per the camera modes the design calls for.
@@ -304,9 +368,19 @@ export type InputSnapshot = {
 	viewportSize: Vector2,
 }
 
+--[[
+	What the stability augmentation mode needs to know about the aeroplane.
+
+	The lateral three arrived with that mode. They are optional: without them
+	only the pitch channel augments, which is what the mode did before and is
+	still a sane degraded state rather than an error.
+]]
 export type FlightState = {
 	altitude: number, -- m
 	verticalSpeed: number, -- m/s
+	bankAngle: number?, -- rad, positive = right wing down
+	rollRate: number?, -- rad/s about the aircraft's own roll axis
+	heading: number?, -- rad, 0 .. 2pi, clockwise from north
 }
 
 -- =========================================================================
@@ -319,6 +393,7 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 	-- share one - and a per-player rebind of either would silently rebind
 	-- everybody's. table.clone is shallow; this is the whole of what it misses.
 	config.altHold = table.clone(InputController.DEFAULTS.altHold)
+	config.stability = table.clone(InputController.DEFAULTS.stability)
 	config.toggleViews = table.clone(InputController.DEFAULTS.toggleViews)
 	if overrides then
 		for k, v in overrides do
@@ -363,6 +438,9 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 		-- Set on engagement, so the demanded climb starts where the aeroplane
 		-- already is. nil while altitude hold is off.
 		altHoldCapture = nil :: any,
+		-- The heading the stability mode steers back to. Set on engagement and
+		-- allowed to follow whenever the pilot rolls or uses rudder.
+		headingReference = nil :: any,
 
 		-- Previous frame's held set, for edge detection.
 		wasHeld = {} :: { [string]: boolean },
@@ -484,6 +562,74 @@ function InputController.altitudeHoldPitchCaptured(
 
 	local pitch = clamp((demanded - verticalSpeedMs) * a.verticalSpeedGain, -a.pitchLimit, a.pitchLimit)
 	return pitch, { demandedClimb = demanded }
+end
+
+--[[
+	THE LATERAL HALF OF THE STABILITY AUGMENTATION MODE.
+
+	Returns the roll command to fly, and the heading reference to carry into the
+	next frame. Pure, so the whole law can be driven from the test suite with
+	plain numbers.
+
+	Three things, in order of authority:
+
+	  1. RATE DAMPING. Opposes whatever roll rate exists. A spiral is a rate
+	     before it is an angle, so this is the term that actually stops one.
+	  2. WINGS LEVEL. Rolls out any bank the pilot did not ask for.
+	  3. HEADING. Banks - gently, and never past maxBank - to steer back to the
+	     reference heading.
+
+	AND IT GETS OUT OF THE WAY. If the pilot is rolling with the cursor, or
+	using ANY rudder, the augmentation returns their own roll command untouched
+	and the heading reference follows the aeroplane. That is the pilot's
+	requirement stated exactly: the mode must not fight the rudder, and letting
+	go must not snap the heading back to where it was engaged.
+
+	`controls.yaw` is never read here and never written anywhere in this mode.
+	The rudder is the pilot's alone.
+]]
+function InputController.stabilityRoll(
+	config: any,
+	headingReference: number?,
+	bankAngle: number?,
+	rollRate: number?,
+	heading: number?,
+	pilotRoll: number,
+	pilotYaw: number
+): (number, number?)
+	local s = config.stability
+
+	-- Nothing to work with: hand the pilot's own command straight back.
+	if bankAngle == nil or rollRate == nil then
+		return pilotRoll, headingReference
+	end
+
+	--[[
+		The pilot is flying. Hand the axis back and let the reference follow, so
+		that whatever heading they roll or kick the aeroplane onto becomes the
+		one it then holds.
+	]]
+	if abs(pilotRoll) > s.pilotRollThreshold or abs(pilotYaw) > s.pilotYawThreshold then
+		return pilotRoll, heading
+	end
+
+	local reference = headingReference or heading
+
+	--[[
+		Steer toward the reference by demanding a bank, bounded hard. The error
+		is wrapped to the shortest way round, or turning from 350 to 010 would
+		be commanded the long way - 340 degrees of turn to correct 20.
+	]]
+	local demandedBank = 0
+	if reference and heading then
+		-- angleDelta(from, to) is to - from, so this is "how far right must I
+		-- turn to reach the reference". Reversed, it steers away from it.
+		demandedBank = clamp(MathUtil.angleDelta(heading, reference) * s.headingGain, -s.maxBank, s.maxBank)
+	end
+
+	local command = (demandedBank - bankAngle) * s.levelGain - rollRate * s.rollDamping
+
+	return clamp(command, -s.rollLimit, s.rollLimit), reference
 end
 
 -- =========================================================================
@@ -683,6 +829,9 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 			]]
 			state.altHoldCapture = InputController.altHoldCapture(config, flightState.verticalSpeed)
 
+			-- And the heading to hold, which is simply the one being flown.
+			state.headingReference = flightState.heading
+
 			engagedThisFrame = true
 		end
 	end
@@ -730,10 +879,35 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 	-- ---- Smoothing -------------------------------------------------------
 	-- The yoke has mass. Applied last so it smooths whatever produced the
 	-- command, including an altitude-hold handover.
+	--[[
+		The lateral half of the stability mode.
+
+		Measured cause: without it, engaging in a climb rolled off into a spiral
+		and the PITCH axis saturated trying to fix it - because in a bank,
+		pulling tightens the turn instead of climbing. Holding the wings is what
+		lets the altitude channel work at all.
+
+		`controls.yaw` is deliberately untouched here and everywhere else in
+		this mode. The rudder belongs to the pilot; the augmentation only reads
+		it, to know when to get out of the way.
+	]]
+	local commandedRoll = rawRoll
+	if systems.altitudeHold and flightState then
+		commandedRoll, state.headingReference = InputController.stabilityRoll(
+			config,
+			state.headingReference,
+			flightState.bankAngle,
+			flightState.rollRate,
+			flightState.heading,
+			rawRoll,
+			controls.yaw
+		)
+	end
+
 	controls.pitch, state.pitchVelocity =
 		MathUtil.smoothDamp(controls.pitch, commandedPitch, state.pitchVelocity, config.controlSmoothTime, dt)
 	controls.roll, state.rollVelocity =
-		MathUtil.smoothDamp(controls.roll, rawRoll, state.rollVelocity, config.controlSmoothTime, dt)
+		MathUtil.smoothDamp(controls.roll, commandedRoll, state.rollVelocity, config.controlSmoothTime, dt)
 
 	--[[
 		smoothDamp can overshoot fractionally on a large step, and a control
@@ -1315,6 +1489,155 @@ function InputController.runTests(): (boolean, { any })
 		"A settled capture still commands full authority when far off",
 		strong >= cfgCap.altHold.pitchLimit - 1e-9,
 		string.format("%.3f, 5000 m below target", strong)
+	)
+
+	-- 9c. Stability augmentation, the lateral half -----------------------------
+	--[[
+		WHAT THIS FIXES, measured before it was written: with the pitch cascade
+		alone, engaging in a climb produced a SPIRAL. Nothing held the wings, so
+		the aeroplane rolled off; the bank stole vertical lift; the altitude
+		channel pulled harder; and in a bank, pulling tightens the turn instead
+		of climbing. Bank went -29.9 to -61.3 degrees, heading swung 209
+		degrees, and pitch was saturated for 723 of 901 frames. The pitch axis
+		was fighting a problem that lives in roll.
+	]]
+	local sCfg = fresh().config
+	local sMax = sCfg.stability.maxBank
+
+	--[[
+		THE PILOT'S EXPLICIT REQUIREMENT: the mode must never fight the rudder.
+		Any rudder at all hands the roll axis back and lets the heading
+		reference follow, so a bootful of rudder yaws the aeroplane and the mode
+		accepts the new heading rather than rolling against it.
+	]]
+	local ruddered, refAfterRudder = InputController.stabilityRoll(
+		sCfg, math.rad(90), math.rad(15), 0.3, math.rad(120), 0, 1.0)
+	record(
+		"Rudder input hands the roll axis straight back to the pilot",
+		ruddered == 0,
+		string.format("roll command %.4f with full rudder and 15 deg of bank", ruddered)
+	)
+	record(
+		"...and the heading reference FOLLOWS rather than snapping back",
+		refAfterRudder ~= nil and math.abs((refAfterRudder :: number) - math.rad(120)) < 1e-9,
+		string.format("reference moved to the flown heading %.0f, not the engaged %.0f",
+			math.deg(refAfterRudder or 0), 90)
+	)
+
+	local rolled, refAfterRoll = InputController.stabilityRoll(
+		sCfg, math.rad(90), math.rad(15), 0.3, math.rad(120), 0.5, 0)
+	record(
+		"Cursor roll input is passed through untouched",
+		rolled == 0.5,
+		string.format("%.3f in, %.3f out", 0.5, rolled)
+	)
+	record(
+		"...and the reference follows the pilot's roll too",
+		refAfterRoll ~= nil and math.abs((refAfterRoll :: number) - math.rad(120)) < 1e-9,
+		"letting go does not snap the heading back"
+	)
+
+	--[[
+		Hands-off, the three terms. Wings level first, because uncommanded bank
+		is the pilot's stated complaint.
+	]]
+	local levelling = InputController.stabilityRoll(sCfg, nil, math.rad(20), 0, nil, 0, 0)
+	record(
+		"Unwanted right bank commands left aileron to level the wings",
+		levelling < -0.1,
+		string.format("%.3f at 20 deg of bank", levelling)
+	)
+	local levellingLeft = InputController.stabilityRoll(sCfg, nil, math.rad(-20), 0, nil, 0, 0)
+	record(
+		"...and left bank commands right, symmetrically",
+		math.abs(levellingLeft + levelling) < 1e-9,
+		string.format("%+.3f against %+.3f", levellingLeft, levelling)
+	)
+	--[[
+		Rate damping is the term that actually stops a divergence, because a
+		spiral is a rate before it is an angle. Rolling right with the wings
+		already level must still command left.
+	]]
+	local damping = InputController.stabilityRoll(sCfg, nil, 0, 0.5, nil, 0, 0)
+	record(
+		"A roll RATE is opposed even with the wings level",
+		damping < -0.1,
+		string.format("%.3f at 0.5 rad/s of roll rate", damping)
+	)
+
+	--[[
+		Heading hold demands a bank, and never more than maxBank - a steeper
+		turn to correct a heading is how a spiral starts.
+	]]
+	--[[
+		90 degrees off, not 180. At exactly 180 the shortest way round is
+		genuinely ambiguous - angleDelta returns -pi as legitimately as +pi -
+		so the first version of this check asserted a turn direction that has
+		no correct answer, and failed on correct code.
+	]]
+	local farOff = InputController.stabilityRoll(sCfg, math.rad(90), 0, 0, math.rad(0), 0, 0)
+	record(
+		"A large heading error still never demands more than maxBank",
+		farOff > 0 and farOff <= sMax * sCfg.stability.levelGain + 1e-9,
+		string.format("%.3f commanded for 90 deg off, maxBank is %.0f deg", farOff, math.deg(sMax))
+	)
+	--[[
+		And it turns the SHORT way round. Steering from 350 to 010 must go
+		right through north, not 340 degrees the other way - which is what an
+		unwrapped error would do.
+	]]
+	local wrapped = InputController.stabilityRoll(sCfg, math.rad(10), 0, 0, math.rad(350), 0, 0)
+	record(
+		"Heading hold turns the short way across north",
+		wrapped > 0,
+		string.format("%.3f - positive is right, toward 010 from 350", wrapped)
+	)
+
+	record(
+		"Roll command is bounded by rollLimit",
+		math.abs(InputController.stabilityRoll(sCfg, math.rad(180), math.rad(80), 3, 0, 0, 0))
+			<= sCfg.stability.rollLimit + 1e-9,
+		string.format("limit %.2f", sCfg.stability.rollLimit)
+	)
+	--[[
+		Without lateral state the mode degrades to what it was before rather
+		than erroring - a flightState from an older caller is a sane no-op.
+	]]
+	record(
+		"With no lateral state the pilot's roll passes through unchanged",
+		InputController.stabilityRoll(sCfg, nil, nil, nil, nil, 0.42, 0) == 0.42,
+		"degrades to hands-off rather than failing"
+	)
+
+	--[[
+		THE RUDDER MUST REACH THE AEROPLANE. Driven through the whole of
+		update() rather than the law alone, because the requirement is about
+		what the aircraft receives, not what one function returns.
+	]]
+	local sState = fresh()
+	local lateral: FlightState = {
+		altitude = 500, verticalSpeed = 0,
+		bankAngle = math.rad(10), rollRate = 0, heading = math.rad(90),
+	}
+	run(sState, 1, { "AltitudeHold" }, nil, lateral)
+	local withRudder = nil
+	for _ = 1, 60 do
+		withRudder = InputController.update(sState, dt, snap({ "YawRight" }), lateral)
+	end
+	record(
+		"Engaged, the rudder still reaches the aeroplane",
+		(withRudder :: any).yaw > 0.5,
+		string.format("yaw %.3f after a second of right rudder while engaged", (withRudder :: any).yaw)
+	)
+	record(
+		"...and the mode stops commanding roll while the rudder is in",
+		math.abs((withRudder :: any).roll) < 0.05,
+		string.format("roll %.4f", (withRudder :: any).roll)
+	)
+	record(
+		"Engaging captures the heading being flown",
+		sState.headingReference ~= nil,
+		string.format("reference %.0f deg", math.deg(sState.headingReference or 0))
 	)
 
 	-- 10. Altitude hold ------------------------------------------------------

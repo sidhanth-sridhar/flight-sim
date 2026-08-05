@@ -21,7 +21,17 @@
 	ordering is the thing that makes startup dependencies visible.
 ]]
 
-local DebugHud = require(script.Parent.Parent:WaitForChild("UI"):WaitForChild("Instruments"):WaitForChild("DebugHud"))
+local Instruments = script.Parent.Parent:WaitForChild("UI"):WaitForChild("Instruments")
+
+local DebugHud = require(Instruments:WaitForChild("DebugHud"))
+
+--[[
+	The gauge framework. Required here only so its suite is reachable from
+	UIController.runTests() - it has no Init() and starts nothing on its own,
+	exactly as InputController is a library FlightController drives rather than
+	a controller the bootstrap starts.
+]]
+local Instrument = require(Instruments:WaitForChild("Instrument"))
 
 local UIController = {}
 
@@ -43,10 +53,27 @@ function UIController.Shutdown()
 	initialised = false
 end
 
--- Delegated so the whole UI surface can be verified from one entry point as
--- more instruments arrive.
+--[[
+	Delegated so the whole UI surface can be verified from one entry point as
+	more instruments arrive.
+
+	Both suites always run - the second is NOT skipped when the first fails, or
+	a broken HUD would hide every instrument result behind it and each fix would
+	surface exactly one more problem.
+]]
 function UIController.runTests(): (boolean, { any })
-	return DebugHud.runTests()
+	local hudOk, hudResults = DebugHud.runTests()
+	local instrumentOk, instrumentResults = Instrument.runTests()
+
+	local combined = {}
+	for _, r in hudResults do
+		table.insert(combined, r)
+	end
+	for _, r in instrumentResults do
+		table.insert(combined, r)
+	end
+
+	return hudOk and instrumentOk, combined
 end
 
 return UIController

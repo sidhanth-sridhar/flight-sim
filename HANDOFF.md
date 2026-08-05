@@ -6,7 +6,9 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 459 checks green across 13 suites.** Eleven run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 497 checks green across 14 suites.** Twelve run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+
+🎛️ **PHASE 2 HAS STARTED. The gauge framework is built (§17) — no gauge sits on it yet.** A dial is a spec table, not a module: one breakpoint-table mechanism covers linear, compressed and wrapping faces, arcs come from `Cessna172.limits`, and ticks/arcs/needle all resolve through the same `angleFor` so the paint and the pointer cannot disagree. **It passed 37/37 while every needle pointed at the wrong speed** — Roblox rotates a GuiObject about its centre, not its AnchorPoint, and only a screenshot found it. See §17 and the two new §7 traps.
 
 🕹️ **THE YOKE WAS BIASED NOSE-UP BY THE GUI INSET, AND FULL NOSE-DOWN WAS UNREACHABLE** (§16). Reported as *"it breaks the mouse cursor movement, extremely difficult to pitch down and very easy to pitch up"* in a loop. All of it was true. Measured: the top of the screen produced **−0.766** against the bottom's **+1.000**, neutral sat 58 px above the middle of the screen, and a cursor off the game view — which Roblox reports as (−1, −1) — slammed the controls to **hard nose-down and hard left roll**. §6g had the inset the wrong way round and its live verification only proved the arithmetic was self-consistent. **The aerodynamics were not involved**: elevator authority measures exactly proportional to dynamic pressure. Phase 2 has not started.
 
@@ -26,13 +28,15 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 
 🛞 **Nosewheel steering was rebuilt** (§12). Reported as too weak and too rudder-dependent; measured at a **207 m turn radius** with full pedal, now **19.3 m**. The nose wheel was being shoved sideways while pointed straight ahead; it is now actually steered.
 
+✅ **The pitch axis was re-flown by the pilot after §16 and signed off** — the yoke reads correctly, full nose-down is reachable, and the loop no longer throws the controls.
+
 **Open items for the pilot**, in order:
-1. **Re-fly the pitch axis (§16).** Confirm the cursor at the middle of the screen is now genuinely hands-off, that full nose-down is there when you want it, and that a loop no longer throws the controls to a corner. **This is worth flying before the landings** — every landing so far was flown with a third of the nose-down authority missing.
-2. Re-fly landings on runway 36 and say whether the flare is judgeable now.
-3. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
-4. Then Phase 2 cockpit instruments.
+1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
+2. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
+3. **Phase 2 continues**: the six-pack on top of §17's framework, then tachometer and fuel, then the debug HUD's toggle key. The gate is §14's — fly a circuit on instruments.
 
 **What landed this session**
+- **The gauge framework (§17)** — Phase 2's first system. 38 checks; nothing built on it yet.
 - **The yoke's inset bug (§16)** — the pointer is now reduced to the same space as the viewport, an off-view cursor holds the yoke instead of jumping to a corner, and losing window focus releases it. Six new checks; `FlightController` 29 → 35.
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
 - **`ViewToggle` on T** (§6k) — first person ↔ third person in one press, asked for as a "button". It is a **key** rather than an on-screen button, and §6k records why: the cursor is the yoke, so a button in a screen corner can only be clicked by dragging the controls to near-full deflection on the way to it.
@@ -138,7 +142,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (459 checks total)
+### Verified green (497 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -153,6 +157,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 35/35 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
+| `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 38/38 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
@@ -613,6 +618,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox sanitises NaN inside property setters.** A NaN velocity is stored as `(0, 0, 0)` and a NaN CFrame position as `y = -1,000,000`. So a NaN check cannot be tested through the datamodel — the assertion would only prove Roblox scrubs NaN. Test the pure predicate directly. (The −1,000,000 does trip the altitude floor, so a position that has gone numerically bad is still caught.)
 - **`BasePart:IsNetworkOwner()` does not exist on the client** — *"IsNetworkOwner is not a valid member of Part"*. A client-side ownership check is dead code that silently never fires. Verify with `GetNetworkOwner()` on the server. (`ReceiveAge == 0` is the usable client-side hint, and was used to confirm the handover by hand.)
 - **The Humanoid forces `HumanoidRootPart.CanCollide = true` every frame.** You cannot make a seated pilot non-collidable by setting `CanCollide`; it will be reverted. Use a collision group. See §6e.
+- **Roblox rotates a `GuiObject` about its own CENTRE, not about its `AnchorPoint`.** The AnchorPoint positions the frame and has nothing to do with the pivot. **Measured, not read**: a needle anchored (0.5, 1) at a dial's centre and set to `Rotation = 180` pointed straight *up*, identical to 0 — an anchor pivot would have pointed straight down. To pivot about a point, the rotating frame's **centre** must be that point, so a needle is a transparent frame of twice its length centred on the hub with the visible bar as a child in its top half. See §17. The failure is silent: every angle can be correct and every arithmetic test can pass while the needle points at the wrong number.
+- **Arithmetic tests cannot verify a rendering.** All 37 checks on the gauge framework passed while every needle pointed somewhere wrong. If a module draws something, look at it — one screenshot found what the whole suite could not.
 - **`UserInputService:GetMouseLocation()` reports in the FULL viewport space, including the strip behind the top bar.** Its Y can never be below `GetGuiInset().Y` and its maximum is `ViewportSize.Y` — measured as a reachable range of exactly 58…841 on a 1572×841 viewport. So a pointer compared against `ViewportSize - inset` is biased by the whole inset. **Subtract the inset from both.** §6g asserted the opposite for two sessions; see §16.
 - **Checking one point inside a mapping does not verify the mapping.** The bug above survived a live probe that confirmed a cursor at y 392 gave pitch 0.000 against a half-height of 391.5 — self-consistent arithmetic, and the cursor was nowhere near the middle of the screen. **Verify the reachable RANGE: both extremes and the centre.**
 - **Roblox reports `GetMouseLocation()` as (−1, −1) when the cursor is not on the game view** — another window, or Studio's own panels in a Play session. Read as a position that is the top-left corner, which for an absolute yoke is hard nose-down and hard left roll in one frame. Treat it as missing data. See §16.
@@ -1046,3 +1053,65 @@ Six new checks in `FlightController.runTests()`, and the fixture is the **measur
 The load-bearing one is written as a **symmetry**: *nose-down authority equals nose-up authority*. It needs no agreement about what full deflection ought to be, only that the yoke reaches as much of one as of the other, and it read −0.766 against +1.000. A second check pins where neutral physically **sits** — the middle of the visible strip, mouse y 449.5 — because a symmetry check alone cannot see the whole mapping being shifted. The rest cover the two edges mapping to the ends of travel, the off-view sentinel holding rather than jumping to a corner, the no-memory case being neutral, and an on-view cursor passing through untouched.
 
 `FlightController.pointerSpace()` and `FlightController.resolvePointer()` are pure and exported for exactly this, the same shape as `shouldReset()` — the impure `readPointer()` is now only the two datamodel reads and a call to each.
+
+---
+
+## 17. `Instrument` — the gauge framework, built and green (2026-08-04, Phase 2 begins)
+
+`src/StarterPlayer/StarterPlayerScripts/FlightSim/UI/Instruments/Instrument.luau`, **38/38**. The first item of §14's Phase 2 scope. **No gauge is built on it yet** — that is the next system.
+
+It has no `Init()` and starts nothing. Like `InputController`, it is a library its consumer drives; `UIController` requires it only so `runTests()` covers the whole UI surface from one entry point.
+
+### A gauge is a spec, not a module
+
+An ASI and an altimeter differ in their numbers, not their behaviour: both map a value to a needle angle, tick at intervals, and paint bands over parts of the range. Written as code each they would be six near-copies drifting apart. So a dial is a `DialSpec` table, and **if a new instrument needs new code here rather than a new spec, the spec format is what is wrong.**
+
+**The face is a breakpoint table** — `{ value, angle }` pairs, interpolated between and clamped outside — and that one mechanism covers every face in the six-pack:
+
+| face | expressed as |
+|---|---|
+| linear dial | two breakpoints (`Instrument.linearFace`) |
+| VSI, compressed above 1,000 fpm | three or four breakpoints |
+| heading card | `period = 360` |
+| altimeter hundreds needle | `period = 1000` |
+
+A `curve` function was the alternative and was rejected: **a function cannot be inspected**, so the tests could not assert the green arc lands exactly on Vno without re-running the code they are meant to be checking.
+
+**Angles are degrees clockwise from 12 o'clock**, which is exactly what `GuiObject.Rotation` does — so the computed angle is written straight to `Rotation` with no conversion. That is the whole reason for the convention.
+
+### Ticks, arcs and the needle all go through `angleFor`
+
+Which is what makes *"the needle is on the redline at Vne"* true by construction rather than by eye, and it is asserted anyway — "by construction" is precisely what §6g claimed about the yoke's centre. `arcBands` resolves each band's ends through the same function the needle uses, so the paint and the pointer cannot disagree.
+
+**Arcs come from `Cessna172.limits`.** The white arc *is* vs0…vfe, the green *is* vs1…vno, the yellow *is* vno…vne, and the redline *is* vne — asserted against the definition, never against a number typed twice.
+
+### The trap: Roblox rotates about the CENTRE, not the AnchorPoint
+
+**All 38 checks' worth of arithmetic was correct and every needle still pointed at the wrong speed.** The suite passed 37/37 on its first run; a screenshot showed 95 kt indicating up and to the left, where it should have been down and to the right.
+
+Measured rather than reasoned about, and the second probe is the decisive one: a needle anchored (0.5, 1) at the dial's centre and set to `Rotation = 180` pointed straight **up**, identical to 0. An anchor pivot would have pointed straight down. At `Rotation = 90` it sat as a horizontal bar centred half a needle-length *above* the hub — rotation about the frame's own centre, exactly.
+
+So the frame that carries `Rotation` is now a **transparent pivot of twice the needle's length, centred on the hub**, with the visible bar a child occupying its top half. Two structural checks pin it down, because the failure mode is silent — no error, no crash, just a gauge that lies.
+
+**The general lesson is in §7: arithmetic tests cannot verify a rendering.** If a module draws something, look at it.
+
+### Two rates, which is §6i's lesson carried forward rather than rediscovered
+
+The shared loop is **one** Heartbeat connection for the whole panel — eight gauges with eight accumulators would redraw at eight phases and make the panel shimmer. `update` runs at `INSTRUMENT_HZ`; **`sample` runs every frame.** §6i and §15 learned twice that a 30 Hz readout drops what happens between samples, and that the stall break lasts under a second. Anything needing a peak or an edge registers a sampler.
+
+`stepLoop(dt)` is exported and driven by hand from the tests, which is the only way to assert the redraw rate without waiting on real frames: 60 calls at 1/60 give exactly 30 redraws and 60 samples. The accumulator keeps its **remainder** (zeroing runs the panel slower than requested for any rate the frame time does not divide) but **discards a backlog**, so a 10 s hitch redraws once rather than three hundred times — nothing here needs to catch up, because a gauge shows the current value.
+
+### Needle lag is data
+
+`lagTau` on the spec, first-order and **frame-rate independent** via `1 - exp(-dt/tau)`. The naive `current + (target-current)*k` settles four times faster at 240 fps than at 60, so an instrument tuned by eye on one machine is wrong on every other — the same correction `CameraController`'s smoothing needed. A real VSI is famously slow and will use this; 0 or nil is an immediate needle.
+
+### Decisions worth not re-litigating
+
+- **A value off the end of the scale clamps, it does not wrap.** A needle that ran past Vne and reappeared at the bottom would show a gross overspeed as a comfortable cruise.
+- **A NaN parks the needle at the start of the scale.** Roblox does not reject a NaN `Rotation` — it renders nothing — so the needle would silently vanish and the gauge would look switched off rather than broken. Unlike the debug HUD, which prints `NaN` deliberately, a dial has nowhere to say it.
+- **A face whose breakpoints descend is rejected at build time** and `build()` errors rather than drawing it. A silently mirrored face is the worst failure an instrument can have.
+- **Arcs are painted as short tangential segments**, not as an image — an image would mean a new asset every time an aircraft's limits changed, which defeats deriving them from the definition. Segment size is `(length, thickness)`; ticks pass theirs the other way round, `(width, length)`, because at 12 o'clock a frame's height runs along the radius.
+- **Minor/major tick coincidence is tested with a tolerance**, not a table lookup on the value. Both loops accumulate by repeated addition, so a fractional interval — a 0.1 g turn coordinator — lands on 0.30000000000000004 in one and 0.3 in the other, and an exact-key match would stack two frames at every major tick.
+
+### Still to come in Phase 2
+The six-pack, then the tachometer and fuel, then the debug HUD's toggle key. Nothing has been built ahead: there is no panel, no layout, and no telemetry wired to a gauge yet. **`telemetry` does not currently publish heading or turn rate**, and the DI and turn coordinator will need both — that is the first thing the next system has to deal with.

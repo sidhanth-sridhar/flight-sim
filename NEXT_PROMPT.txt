@@ -1,0 +1,13 @@
+Fixed. I did some flight tests after the fix and nothing looked or felt off, the yoke is good now, full nose-down is reachable and the loop no longer throws the controls. Move on to Phase 2, the cockpit instruments.
+
+Read HANDOFF.md first — it is the source of truth, §0 has the current state and §14 has the plan. This is not optional, every prior mistake in this project came from not reading it.
+
+Build one system at a time, test it, explain what was created / where / what it does / how to test it, then move on. Don't build ahead of the phase, ask rather than guess when something is ambiguous, and MEASURE before changing anything — three "it feels wrong" reports this session each had a different cause than the one guessed.
+
+Scope: the instrument framework first (shared redraw loop at Constants.SIM.INSTRUMENT_HZ, needle-angle maths, dials as data not bespoke code), then the six-pack — ASI, attitude, altimeter, turn coordinator, heading, VSI — then tachometer and fuel. Keep DebugHud on a toggle key, it has found real bugs and the gauges don't replace it.
+
+Hard constraints, not negotiable: nothing may be Active or a GuiButton (the cursor is the yoke and covers the whole screen, an input-absorbing element eats the flight controls), IgnoreGuiInset stays false, units convert at this boundary only and the physics stays pure SI, and the airspeed arcs come from Cessna172.limits not drawn by eye.
+
+Test in Play mode, Client datamodel, same as every other suite. When a test fails decide whether the code or the assertion is wrong — six times now it's been the assertion.
+
+When done, update HANDOFF.md: §0, the §4 module table, §7 if you learn a trap, and a new numbered section for the work. A task is not done until the handoff reflects it. Then commit and push. Never leave work uncommitted. Report honestly if tests fail, with output.

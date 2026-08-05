@@ -983,10 +983,21 @@ function AircraftService.runTests(): (boolean, { any })
 	)
 
 	-- 4. Parked on the ground, not falling or embedded ----------------------
+	--[[
+		SPAWN_HEIGHT is measured from the SURFACE, not from sea level, and this
+		assertion has to say so now that the airport sits at an elevation. It
+		read `y == SPAWN_HEIGHT` while the surface was y = 0, which was the same
+		statement by accident rather than on purpose.
+
+		Nothing in the spawn path itself needed changing: slotCFrame() already
+		builds on AirportService.apronSlotCFrame(), so the aircraft followed the
+		aerodrome up without being told.
+	]]
 	record(
 		"Parks on the ground rather than spawning airborne",
-		math.abs(root.Position.Y - SPAWN_HEIGHT) < 0.01,
-		string.format("y = %.3f m", root.Position.Y)
+		math.abs(root.Position.Y - (AirportService.SURFACE_Y + SPAWN_HEIGHT)) < 0.01,
+		string.format("y = %.3f m, which is %.2f m above a surface at %.0f m",
+			root.Position.Y, root.Position.Y - AirportService.SURFACE_Y, AirportService.SURFACE_Y)
 	)
 
 	-- 4b. Parked at the airport, not at the old origin -----------------------

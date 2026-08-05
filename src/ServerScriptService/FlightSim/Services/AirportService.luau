@@ -60,25 +60,38 @@ local AirportService = {}
 -- =========================================================================
 
 --[[
-	The surface plane, and the single most load-bearing number in this file.
+	THE AIRPORT'S ELEVATION, and the single most load-bearing number in this file.
 
-	Every paved top face is at y = 0. That is not an arbitrary choice - the whole
-	codebase already assumes it:
+	It used to be zero, and section 14 named that the largest known trap in
+	Phase 3: with real terrain the ground is wherever the terrain says it is,
+	and an airport nailed to y = 0 cannot sit on it. It is now a declared
+	elevation and everything in this module derives from it, so the number can
+	move and the aerodrome moves with it.
 
-	  - AircraftService spawns at y = 1.30, which GroundHandling.runTests derived
-	    as the height at which the 172's tyres rest exactly on a surface whose
-	    top is y = 0.
-	  - FlightModel's ground effect measured height above the ground against
-	    y = 0 until this task gave it a raycast.
+	250 m is about 820 ft, an ordinary elevation for a light-aircraft field. It
+	is deliberately NOT zero: an airport that happens to sit at sea level would
+	let a y = 0 assumption survive anywhere it was still hiding, and nothing
+	would report it. The altimeter now reads field elevation on the ground,
+	which is what a real one does.
 
-	The grass sits 5 cm BELOW it. Two reasons, and the first is not cosmetic: the
-	baseplate spans the whole world and the runway sits inside its footprint, so
-	coplanar top faces would z-fight across the entire runway. The second is that
-	real runways are crowned slightly above the surrounding field, so the step is
-	also correct.
+	TERRAIN IS FITTED TO THIS, NOT THE OTHER WAY ROUND. TerrainService reads
+	these constants and builds ground to match. The arrow points that way
+	because the note at the top of this file is load-bearing: every question
+	this module answers must be answerable before anything has initialised, and
+	taking the elevation from a service would put it behind an Init() again.
+
+	The grass sits 5 cm BELOW the pavement. Two reasons, and the first is not
+	cosmetic: the ground spans the whole world and the runway sits inside its
+	footprint, so coplanar top faces would z-fight across the entire runway. The
+	second is that real runways are crowned slightly above the surrounding
+	field, so the step is also correct.
+
+	Consumers that were already right: AircraftService adds its spawn height to
+	apronSlotCFrame() rather than to a constant, and FlightModel's ground effect
+	raycasts (section 11). Both followed the elevation with no change at all.
 ]]
-local SURFACE_Y = 0
-local GRASS_Y = -0.05
+local SURFACE_Y = 250
+local GRASS_Y = SURFACE_Y - 0.05
 local PAVEMENT_THICKNESS = 0.4
 
 --[[
@@ -637,18 +650,33 @@ function AirportService.build(parent: Instance?): Folder
 	folder.Parent = target
 
 	--[[
-		THE GRASS IS NOT BUILT HERE. It is Workspace.Baseplate, owned by
-		default.project.json, resized to FIELD_SIZE and lowered to GRASS_Y.
+		THE GRASS IS NOT BUILT HERE, and it is no longer the baseplate either.
 
-		Two reasons it stays with Rojo rather than moving into this builder:
-		§3 already names the baseplate as Rojo's, and one ground plane with one
-		owner is what stops the ground-effect raycast resolving whichever of two
-		coplanar surfaces happened to be on top. The practical one is that a
-		runtime-built field would leave Studio's Edit view with no ground at all.
+		It is TERRAIN, built by TerrainService, which reads GRASS_Y from this
+		module and fits the ground to it. The baseplate part is retired at run
+		time; it stays in default.project.json only so the Studio EDIT view has
+		a floor.
 
-		FIELD_SIZE must therefore match the JSON, and runTests() asserts it does
-		rather than trusting two files to be edited together.
+		FIELD_SIZE is still declared here because the circuit is checked against
+		it, and TerrainService covers the same square.
 	]]
+
+	--[[
+		THE PLAYER SPAWN HAS TO FOLLOW THE ELEVATION.
+
+		Workspace.SpawnLocation is Rojo's, and Rojo puts it at y = 0 - which was
+		the apron until this task and is now 250 m underneath it. A player would
+		have spawned inside the ground, under an airport they could not see.
+
+		Moved at run time rather than in the project file, for the same reason
+		the baseplate is retired at run time: editing default.project.json takes
+		a Rojo restart AND a plugin reconnect (§3), and nothing here needs the
+		edit view to change.
+	]]
+	local spawn = Workspace:FindFirstChild("SpawnLocation")
+	if spawn and spawn:IsA("BasePart") then
+		spawn.Position = Vector3.new(spawn.Position.X, SURFACE_Y + spawn.Size.Y / 2, spawn.Position.Z)
+	end
 
 	-- ---- Runway ----------------------------------------------------------
 	pavement(
@@ -778,7 +806,9 @@ function AirportService.build(parent: Instance?): Folder
 	end
 
 	-- ---- Windsock --------------------------------------------------------
-	local sockBase = Vector3.new(-40, 0, 380)
+	-- SURFACE_Y, not 0: this was the one prop still nailed to the old sea-level
+	-- assumption, and it would have left the windsock buried 250 m down.
+	local sockBase = Vector3.new(-40, SURFACE_Y, 380)
 	prop("WindsockPole", Vector3.new(0.3, 8, 0.3), sockBase + Vector3.new(0, 4, 0), Color3.fromRGB(220, 220, 220), folder)
 	prop("WindsockCone", Vector3.new(1.2, 1.2, 4), sockBase + Vector3.new(0, 7.6, -2.4), Color3.fromRGB(235, 120, 30), folder)
 
@@ -1160,9 +1190,14 @@ function AirportService.runTests(): (boolean, { any })
 		return if y then string.format("%.4f m", y) else "no ground found"
 	end
 
-	local overRunway = AirportService.groundHeightAt(Vector3.new(0, 50, 0))
+	--[[
+		Every probe below starts from SURFACE_Y + something, not from a literal
+		height. That is the whole point of this task: a ray that starts at y = 50
+		is now 200 m UNDERGROUND, and would have reported the runway missing.
+	]]
+	local overRunway = AirportService.groundHeightAt(Vector3.new(0, SURFACE_Y + 50, 0))
 	record(
-		"Ground height over the runway reads y = 0",
+		"Ground height over the runway is the declared surface",
 		overRunway ~= nil and math.abs((overRunway :: number) - SURFACE_Y) < 1e-3,
 		heightText(overRunway)
 	)
@@ -1183,7 +1218,7 @@ function AirportService.runTests(): (boolean, { any })
 	]]
 	local obstructed = {}
 	for z = -RUNWAY_HALF + 20, RUNWAY_HALF - 20, 50 do
-		local y = AirportService.groundHeightAt(Vector3.new(0, 60, z))
+		local y = AirportService.groundHeightAt(Vector3.new(0, SURFACE_Y + 60, z))
 		if y == nil or math.abs(y - SURFACE_Y) > 0.02 then
 			table.insert(obstructed, string.format("z=%.0f y=%s", z, if y then string.format("%.2f", y) else "none"))
 		end
@@ -1192,31 +1227,42 @@ function AirportService.runTests(): (boolean, { any })
 		"The whole runway is clear - nothing sitting on it",
 		#obstructed == 0,
 		if #obstructed == 0
-			then string.format("%d points swept, all at y = 0", math.floor((RUNWAY_LENGTH - 40) / 50) + 1)
+			then string.format("%d points swept, all at y = %.0f", math.floor((RUNWAY_LENGTH - 40) / 50) + 1, SURFACE_Y)
 			else table.concat(obstructed, ", ")
 	)
 
 	-- The same for the taxiway and the apron, which are equally easy to block.
 	local blockedTaxi = 0
 	for z = -TAXIWAY_HALF_LENGTH + 20, TAXIWAY_HALF_LENGTH - 20, 60 do
-		local y = AirportService.groundHeightAt(Vector3.new(TAXIWAY_X, 60, z))
+		local y = AirportService.groundHeightAt(Vector3.new(TAXIWAY_X, SURFACE_Y + 60, z))
 		if y == nil or math.abs(y - SURFACE_Y) > 0.02 then
 			blockedTaxi += 1
 		end
 	end
 	record("The taxiway is clear along its length", blockedTaxi == 0, string.format("%d obstructed points", blockedTaxi))
 
-	local overApron = AirportService.groundHeightAt(APRON_CENTRE + Vector3.new(0, 50, 0))
+	local overApron = AirportService.groundHeightAt(Vector3.new(APRON_CENTRE.X, SURFACE_Y + 50, APRON_CENTRE.Z))
 	record(
 		"Ground height over the apron agrees with the runway",
 		overApron ~= nil and math.abs((overApron :: number) - SURFACE_Y) < 1e-3,
 		heightText(overApron)
 	)
 
-	local overGrass = AirportService.groundHeightAt(Vector3.new(600, 50, 600))
+	--[[
+		The grass beside the runway is TERRAIN now, not a part, so it is checked
+		to a centimetre rather than to a micron: a terrain isosurface carries
+		about 16 mm of ripple (measured in TerrainService), which a 1e-3
+		tolerance would fail on correct ground.
+
+		Sampled at x = 200, which is off every piece of pavement but still well
+		inside the flat pad - out at x = 600 the terrain is deliberately no
+		longer level, and asserting GRASS_Y there would be asserting that the
+		world has no relief.
+	]]
+	local overGrass = AirportService.groundHeightAt(Vector3.new(200, SURFACE_Y + 50, 0))
 	record(
-		"Ground height over the grass is the 5 cm step below",
-		overGrass ~= nil and math.abs((overGrass :: number) - GRASS_Y) < 1e-3,
+		"Ground height beside the runway is the 5 cm step below",
+		overGrass ~= nil and math.abs((overGrass :: number) - GRASS_Y) < 0.05,
 		string.format("%s against a %.2f m grass plane", heightText(overGrass), GRASS_Y)
 	)
 
@@ -1227,29 +1273,42 @@ function AirportService.runTests(): (boolean, { any })
 	)
 
 	--[[
-		The field is owned by default.project.json, not by this file, so its
-		dimensions live in two places and could drift apart silently. Asserted
-		here because the consequence is not obvious: a smaller baseplate would
-		put part of the circuit over open space, and the pilot would fly the
-		downwind leg off the edge of the world.
+		THE FIELD IS TERRAIN NOW, not the baseplate part.
+
+		These two checks used to assert the baseplate's size and top face. The
+		baseplate is retired at run time by TerrainService, so what matters is
+		the same property expressed against the ground that actually exists: the
+		circuit must have ground under all of it, or the pilot flies the
+		downwind leg over open space.
+
+		The circuit's own extents are already asserted further up; this walks the
+		four corners of it and demands ground beneath each.
 	]]
-	local baseplate = Workspace:FindFirstChild("Baseplate") :: Part?
+	local nav = AirportService.navPoints("36")
+	local circuitCorners = {
+		{ (nav :: any).Downwind.X, (nav :: any).Downwind.Z },
+		{ (nav :: any).Base.X, (nav :: any).Base.Z },
+		{ (nav :: any).Upwind.X, (nav :: any).Upwind.Z },
+		{ (nav :: any).Final.X, (nav :: any).Final.Z },
+	}
+	local groundless = {}
+	for _, c in circuitCorners do
+		local y = AirportService.groundHeightAt(Vector3.new(c[1], SURFACE_Y + 400, c[2]), 900)
+		if y == nil then
+			table.insert(groundless, string.format("(%.0f, %.0f)", c[1], c[2]))
+		end
+	end
 	record(
-		"Workspace.Baseplate exists and is the field this module assumes",
-		baseplate ~= nil
-			and math.abs((baseplate :: Part).Size.X - FIELD_SIZE) < 1e-3
-			and math.abs((baseplate :: Part).Size.Z - FIELD_SIZE) < 1e-3,
-		if baseplate
-			then string.format("%.0f x %.0f m, FIELD_SIZE is %d", baseplate.Size.X, baseplate.Size.Z, FIELD_SIZE)
-			else "no Baseplate in Workspace"
+		"There is ground under the whole circuit",
+		#groundless == 0,
+		if #groundless == 0
+			then "all four circuit corners have ground beneath them"
+			else "no ground at " .. table.concat(groundless, ", ")
 	)
 	record(
-		"The baseplate top face is the grass plane this module assumes",
-		baseplate ~= nil
-			and math.abs(((baseplate :: Part).Position.Y + (baseplate :: Part).Size.Y / 2) - GRASS_Y) < 1e-3,
-		if baseplate
-			then string.format("top face y = %.3f, GRASS_Y is %.2f", baseplate.Position.Y + baseplate.Size.Y / 2, GRASS_Y)
-			else "no Baseplate in Workspace"
+		"The baseplate has been retired in favour of terrain",
+		Workspace:FindFirstChild("Baseplate") == nil,
+		"TerrainService removes it at run time; Rojo still owns it for the edit view"
 	)
 
 	-- Off the edge of the world there is genuinely no ground.

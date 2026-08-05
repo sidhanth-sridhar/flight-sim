@@ -122,7 +122,8 @@ end
 	Services are added here as they are built, each as a ModuleScript under
 	ServerScriptService/FlightSim/Services exposing an Init() function.
 
-	Built: AirportService   - the world: runway, taxiway, apron, navigation
+	Built: TerrainService   - the ground itself, and the airport's flat pad
+	       AirportService   - the world: runway, taxiway, apron, navigation
 	       AircraftService  - spawning, ownership, validation
 	Later: FlightPlanService, WeatherService, PlayerDataService
 
@@ -136,6 +137,14 @@ end
 	service cannot silently fail to run - it just does not get to choose when.
 ]]
 local SERVICE_ORDER = {
+	--[[
+		Terrain first: it is the ground everything else stands on, it retires the
+		baseplate, and AirportService's obstruction sweep measures against it.
+		It reads the airport's declared elevation, so the dependency is on
+		AirportService's CONSTANTS, which are available before any Init() runs -
+		see the note at the top of that file.
+	]]
+	"TerrainService",
 	"AirportService",
 	"AircraftService",
 }

@@ -6,9 +6,13 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 497 checks green across 14 suites.** Twelve run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
+**All 561 checks green across 15 suites.** Thirteen run in **Play mode, Client datamodel**; `AircraftService` and `AirportService` run in the **Server** datamodel (see §4).
 
-🎛️ **PHASE 2 HAS STARTED. The gauge framework is built (§17) — no gauge sits on it yet.** A dial is a spec table, not a module: one breakpoint-table mechanism covers linear, compressed and wrapping faces, arcs come from `Cessna172.limits`, and ticks/arcs/needle all resolve through the same `angleFor` so the paint and the pointer cannot disagree. **It passed 37/37 while every needle pointed at the wrong speed** — Roblox rotates a GuiObject about its centre, not its AnchorPoint, and only a screenshot found it. See §17 and the two new §7 traps.
+🎛️ **THE SIX-PACK IS FLYING (§18).** Airspeed, attitude, altimeter, turn coordinator, heading and VSI, in the standard layout, driven by real telemetry — verified live in the cockpit, not just in tests. `FlightModel` now publishes **heading, turn rate and lateral acceleration**; the ball is real lateral acceleration rather than sideslip, because in a forward slip the two disagree and only the ball tells the pilot what their feet are doing. The gauge framework (§17) grew multi-needle dials, a rotating compass card, the inclinometer ball and a wings symbol — **all of it as spec data, no bespoke gauge code**.
+
+⚠️ **`ClipsDescendants` cannot clip a rotated descendant** — measured three ways, no workaround (§7). The attitude indicator is therefore drawn as a stack of chords, each one inscribed in the dial by construction. **The suite passed 33/33 while the horizon smeared across the airspeed indicator and the altimeter**; only a screenshot found it, which is now the second time. If a module draws something, look at it.
+
+➡️ **Next in Phase 2**: tachometer and fuel, then the debug HUD's toggle key. **The HUD does not have one yet** — it is still gated on `Constants.DEBUG.SHOW_PHYSICS_OVERLAY`, and binding a key is a pilot decision that has not been made.
 
 🕹️ **THE YOKE WAS BIASED NOSE-UP BY THE GUI INSET, AND FULL NOSE-DOWN WAS UNREACHABLE** (§16). Reported as *"it breaks the mouse cursor movement, extremely difficult to pitch down and very easy to pitch up"* in a loop. All of it was true. Measured: the top of the screen produced **−0.766** against the bottom's **+1.000**, neutral sat 58 px above the middle of the screen, and a cursor off the game view — which Roblox reports as (−1, −1) — slammed the controls to **hard nose-down and hard left roll**. §6g had the inset the wrong way round and its live verification only proved the arithmetic was self-consistent. **The aerodynamics were not involved**: elevator authority measures exactly proportional to dynamic pressure. Phase 2 has not started.
 
@@ -33,10 +37,12 @@ Taxi, takeoff, climb, coordinated turns, forward slip, deliberate stall and reco
 **Open items for the pilot**, in order:
 1. Re-fly landings on runway 36 and say whether the flare is judgeable now.
 2. Taxi and confirm the steering feel — and check the takeoff roll is not darty at 40+ kt, which is what the speed fade guards against.
-3. **Phase 2 continues**: the six-pack on top of §17's framework, then tachometer and fuel, then the debug HUD's toggle key. The gate is §14's — fly a circuit on instruments.
+3. **Fly the six-pack (§18).** It has been driven with synthetic telemetry and checked on the apron, but never flown. The Phase 2 gate is §14's — hold an altitude on the altimeter, a speed on the ASI and a heading on the DI, and confirm the AoA indication marks the stall.
+4. **Say whether the VSI's 2.0 s lag is right.** A real one is 6–9 s; this is a deliberate compromise and yours to overrule.
 
 **What landed this session**
-- **The gauge framework (§17)** — Phase 2's first system. 38 checks; nothing built on it yet.
+- **The six-pack (§18)** — all six instruments, live on real telemetry. `SixPack` 34, `Instrument` 38 → 59, `FlightModel` 44 → 53.
+- **The gauge framework (§17)** — Phase 2's first system.
 - **The yoke's inset bug (§16)** — the pointer is now reduced to the same space as the viewport, an off-view cursor holds the yoke instead of jumping to a corner, and losing window focus releases it. Six new checks; `FlightController` 29 → 35.
 - **`ResetAircraft` on Backspace** (§6j) — the pilot named the key. It does **not** require being seated, and the reasoning is in §6j because it decided where the code lives.
 - **`ViewToggle` on T** (§6k) — first person ↔ third person in one press, asked for as a "button". It is a **key** rather than an on-screen button, and §6k records why: the cursor is the yoke, so a button in a screen corner can only be clicked by dragging the controls to near-full deflection on the way to it.
@@ -142,7 +148,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (497 checks total)
+### Verified green (561 checks total)
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -151,13 +157,14 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 29/29 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
-| `FlightModel` | `Physics/FlightModel.luau` | 44/44 | Client |
+| `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 81/81 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 35/35 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
-| `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 38/38 | Client |
+| `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
+| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 34/34 | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 48/48 | **Server** |
 
@@ -618,8 +625,10 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **Roblox sanitises NaN inside property setters.** A NaN velocity is stored as `(0, 0, 0)` and a NaN CFrame position as `y = -1,000,000`. So a NaN check cannot be tested through the datamodel — the assertion would only prove Roblox scrubs NaN. Test the pure predicate directly. (The −1,000,000 does trip the altitude floor, so a position that has gone numerically bad is still caught.)
 - **`BasePart:IsNetworkOwner()` does not exist on the client** — *"IsNetworkOwner is not a valid member of Part"*. A client-side ownership check is dead code that silently never fires. Verify with `GetNetworkOwner()` on the server. (`ReceiveAge == 0` is the usable client-side hint, and was used to confirm the handover by hand.)
 - **The Humanoid forces `HumanoidRootPart.CanCollide = true` every frame.** You cannot make a seated pilot non-collidable by setting `CanCollide`; it will be reverted. Use a collision group. See §6e.
+- **`ClipsDescendants` DOES NOT CLIP A ROTATED DESCENDANT**, and there is no workaround. Measured three ways — a plain `Frame` clipper, a `CanvasGroup` clipper, and a clipper that is itself rotated — and in all three the rotated child escaped and smeared across the neighbouring instruments. So anything rotated must fit inside its container **by its own geometry**. The attitude indicator is therefore drawn as a stack of chords (§18), and a needle's rotating pivot is checked against the dial radius rather than trusted to be trimmed. Note the corollary that makes this cheap to assert: **a corner's distance from the centre of rotation does not depend on the rotation**, so one check covers every angle at once.
 - **Roblox rotates a `GuiObject` about its own CENTRE, not about its `AnchorPoint`.** The AnchorPoint positions the frame and has nothing to do with the pivot. **Measured, not read**: a needle anchored (0.5, 1) at a dial's centre and set to `Rotation = 180` pointed straight *up*, identical to 0 — an anchor pivot would have pointed straight down. To pivot about a point, the rotating frame's **centre** must be that point, so a needle is a transparent frame of twice its length centred on the hub with the visible bar as a child in its top half. See §17. The failure is silent: every angle can be correct and every arithmetic test can pass while the needle points at the wrong number.
-- **Arithmetic tests cannot verify a rendering.** All 37 checks on the gauge framework passed while every needle pointed somewhere wrong. If a module draws something, look at it — one screenshot found what the whole suite could not.
+- **Arithmetic tests cannot verify a rendering.** All 37 checks on the gauge framework passed while every needle pointed somewhere wrong. If a module draws something, look at it — one screenshot found what the whole suite could not. **It happened twice**: the six-pack then passed 33/33 while the attitude indicator painted itself across the airspeed indicator and the altimeter.
+- **A Play session snapshots the datamodel when it STARTS, so entering Play before Rojo has synced runs the old code.** It looks exactly like a test you just wrote failing to appear — the suite runs and reports the previous count. Check the **Edit** datamodel's `Source` for a string you just added before pressing play; the whole cost is one `execute_luau` call.
 - **`UserInputService:GetMouseLocation()` reports in the FULL viewport space, including the strip behind the top bar.** Its Y can never be below `GetGuiInset().Y` and its maximum is `ViewportSize.Y` — measured as a reachable range of exactly 58…841 on a 1572×841 viewport. So a pointer compared against `ViewportSize - inset` is biased by the whole inset. **Subtract the inset from both.** §6g asserted the opposite for two sessions; see §16.
 - **Checking one point inside a mapping does not verify the mapping.** The bug above survived a live probe that confirmed a cursor at y 392 gave pitch 0.000 against a half-height of 391.5 — self-consistent arithmetic, and the cursor was nowhere near the middle of the screen. **Verify the reachable RANGE: both extremes and the centre.**
 - **Roblox reports `GetMouseLocation()` as (−1, −1) when the cursor is not on the game view** — another window, or Studio's own panels in a Play session. Read as a position that is the top-left corner, which for an absolute yoke is hard nose-down and hard left roll in one frame. Treat it as missing data. See §16.
@@ -1114,4 +1123,72 @@ The shared loop is **one** Heartbeat connection for the whole panel — eight ga
 - **Minor/major tick coincidence is tested with a tolerance**, not a table lookup on the value. Both loops accumulate by repeated addition, so a fractional interval — a 0.1 g turn coordinator — lands on 0.30000000000000004 in one and 0.3 in the other, and an exact-key match would stack two frames at every major tick.
 
 ### Still to come in Phase 2
-The six-pack, then the tachometer and fuel, then the debug HUD's toggle key. Nothing has been built ahead: there is no panel, no layout, and no telemetry wired to a gauge yet. **`telemetry` does not currently publish heading or turn rate**, and the DI and turn coordinator will need both — that is the first thing the next system has to deal with.
+~~The six-pack~~ (built, §18), then the tachometer and fuel, then the debug HUD's toggle key.
+
+---
+
+## 18. The six-pack — built and green (2026-08-04)
+
+`src/StarterPlayer/StarterPlayerScripts/FlightSim/UI/Instruments/SixPack.luau`, **34/34**, with the framework extended to 59/59 and `FlightModel` to 53/53. **561/561 across 15 suites.** Started by `UIController`; appears whenever the pilot is flying.
+
+The standard layout, because it is the one every pilot's scan is built around:
+
+| | | |
+|---|---|---|
+| airspeed | **attitude** | altimeter |
+| turn coordinator | heading | vertical speed |
+
+### Three new telemetry values, and why the ball is not beta
+
+`FlightModel` now publishes `heading`, `turnRate` and `lateralAcceleration`, in the same block as `pitchAttitude` — §15's precedent. All three are SI and the instruments convert.
+
+- **`heading`** is `atan2(look.X, -look.Z)`, so **-Z reads 000/360**. That is not a free choice: §11 defines runway 36 as the one flown along -Z, so the DI has to agree with the numbers painted on the ground. Asserted at all four cardinal points. **Verified live: parked on the apron the card reads 000, and the aircraft is facing runway 36.**
+- **`turnRate`** is angular velocity about the **world** vertical, not the aircraft's yaw axis — they differ in a bank, and a standard rate turn is 3°/s of *heading* however steeply you bank to get it. Negated, because Roblox's positive yaw is to the left.
+- **`lateralAcceleration`** is the ball, in m/s², positive to the aircraft's right — the same construction as `loadFactor` one line above, and correct for the same reason: gravity is never applied by this model, so `totalForce` is exactly what an accelerometer senses. **Sideslip could not have stood in for it**: β says where the nose points relative to the airflow, the ball is a pendulum answering to the resultant of every force. In a forward slip — flown and signed off in the Phase 1 gate — they part company, and only the ball tells the pilot what their feet are doing.
+
+### The framework grew four things, all data
+
+Each was driven by an instrument that could not otherwise exist, and each stayed in `DialSpec` rather than becoming code:
+
+- **Multiple needles per dial** — the altimeter is one altitude geared two ways, hundreds and thousands.
+- **The inclinometer ball** — not a needle, since it slides along a tube rather than sweeping about the hub.
+- **A rotating card** (`rotatingCard`) — a DI turns its *face* under a fixed lubber line. A fixed card with a moving pointer is a different instrument and is far harder to hold a heading on, which is exactly what the gate asks for. Each number is printed at its own angle so it stands upright as it reaches the lubber line.
+- **A wings symbol** (`shape = "wings"`) — a turn coordinator banks a little aeroplane, it does not sweep a pointer.
+
+**The attitude indicator is the one exception to "a gauge is a spec"**, and it earns it: it has no needle at all. It is a moving picture, so it gets `buildHorizon`. Five pointer instruments genuinely are one mechanism; this is genuinely a second, and torturing a breakpoint table into drawing a horizon would have been the worse abstraction.
+
+### `ClipsDescendants` cannot clip a rotated child, and that rebuilt the horizon
+
+The obvious attitude indicator is an oversized sky/ground pair inside a rotating frame, clipped to a circle. **It cannot be built that way.** The suite passed 33/33 while the horizon painted itself across the airspeed indicator and the altimeter — §17's lesson, immediately repeated: a gauge that lies raises no error.
+
+Measured three ways, all failing: a plain `Frame` clipper, a `CanvasGroup` clipper, and a clipper that is itself rotated. In the last of these the clipper's own rounded background rendered correctly while its child escaped — which is what makes the rule precise, and it is now in §7.
+
+**So the horizon is drawn as a stack of chords.** A bar at perpendicular distance `d` from the centre is `2·sqrt(R² − d²)` wide — exactly the width that touches the rim and never crosses it — and the stack is rotated and recoloured sky-or-ground about the horizon. Rotate a chord and it is still a chord: containment is a property of the geometry, not of a clip that does not work. Bar count scales with the dial (~2 px each), because a count that looks smooth at 116 px is visibly serrated at 300 — measured by drawing one of each.
+
+The containment check that pins this down is cheap because **a corner's distance from the centre of rotation does not depend on the rotation**, so `sqrt((w/2)² + (|d| + h/2)²) ≤ R` covers every bank angle at once. The same check is applied panel-wide to every needle.
+
+### Faces worth knowing about
+
+- **Airspeed** — 40…200 kt over 320°. Arcs entirely from `Cessna172.limits`: white *is* vs0…vfe, green *is* vs1…vno, yellow *is* vno…vne, redline *is* vne. A test asserts the scale reaches past Vne, or the redline would be off the dial through the whole overspeed it warns about.
+- **Altimeter** — 1,000 ft per revolution, two needles. The face wraps, so the closing tick is suppressed: 1,000 ft is drawn where 0 is, and without that the labels stack.
+- **VSI** — zero at nine o'clock, and **compressed above 1,000 fpm**: 80° for the first thousand, 50° for the second. That compression is the whole reason the framework takes a breakpoint table rather than a range.
+- **Turn coordinator** — the symbol banks with *rate of turn*, index marks at ±3°/s. No numbers, because the real face has none. Ball full scale 3.0 m/s².
+
+⚠️ **The VSI's lag is set to 2.0 s and a real one is slower** — six to nine seconds, because it measures the leak rate from a calibrated orifice. Two seconds is a deliberate playability compromise for a simulator where the pilot cannot feel the seat, and it is **the pilot's to overrule**.
+
+### Three bugs the suites caught, one of which was mine twice over
+
+1. **A needle inheriting the dial's face lost its own `period`.** The altimeter's hundreds needle reuses the 0…1,000 face but declares `period = 1000`; "inherit the face" threw that away and the needle clamped at 1,000 ft instead of wrapping. Inheritance is now per **field**. Code, not assertion.
+2. **Lag across a wrapping face sends the needle the long way round.** Rolling out from 359° to 001° would drive a lagged compass card 358° backwards. Wrapping faces are never lagged, and neither the DI nor the altimeter wanted lag anyway.
+3. **A clamp assertion read a position the code deliberately stops writing.** At the 60° pitch limit the horizon is 192 px from the centre of an 80 px dial, so it hides itself — the state that says "clamped" is `pitchValue`, not a position. **Seventh time the assertion was the wrong one.**
+
+### How to test it
+
+```lua
+require(game.Players.LocalPlayer.PlayerScripts.FlightSim.UI.Instruments.SixPack).runTests()
+require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controllers.UIController).runTests()  -- all three UI suites
+```
+
+**And look at it.** Twice now the arithmetic has been perfect while the picture was wrong. `SixPack.build(parent)` and `SixPack.render(built, telemetry)` are exported precisely so a panel can be driven with synthetic numbers and photographed without flying.
+
+Verified live rather than only in tests: seated in the aircraft on the apron, the panel reads **0 kt on the bottom peg, 5 ft, 000 on the DI, level horizon, zero VSI, ball centred** — every one of them from real telemetry.

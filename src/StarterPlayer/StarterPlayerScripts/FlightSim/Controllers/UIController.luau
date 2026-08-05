@@ -33,6 +33,10 @@ local DebugHud = require(Instruments:WaitForChild("DebugHud"))
 ]]
 local Instrument = require(Instruments:WaitForChild("Instrument"))
 
+-- The panel itself. Unlike the framework this one has a lifecycle, and this
+-- controller owns it for the reason the header gives.
+local SixPack = require(Instruments:WaitForChild("SixPack"))
+
 local UIController = {}
 
 local initialised = false
@@ -46,9 +50,17 @@ function UIController.Init()
 	-- DebugHud decides for itself whether to appear; it is gated on
 	-- Constants.DEBUG.SHOW_PHYSICS_OVERLAY rather than on anything here.
 	DebugHud.Init()
+
+	--[[
+		The six-pack is NOT gated on the debug flag. It is the instrument panel
+		the aircraft is meant to be flown on, so it appears whenever the pilot is
+		flying; the debug HUD is a diagnostic that happens to share the screen.
+	]]
+	SixPack.Init()
 end
 
 function UIController.Shutdown()
+	SixPack.Shutdown()
 	DebugHud.Shutdown()
 	initialised = false
 end
@@ -62,18 +74,18 @@ end
 	surface exactly one more problem.
 ]]
 function UIController.runTests(): (boolean, { any })
-	local hudOk, hudResults = DebugHud.runTests()
-	local instrumentOk, instrumentResults = Instrument.runTests()
-
 	local combined = {}
-	for _, r in hudResults do
-		table.insert(combined, r)
-	end
-	for _, r in instrumentResults do
-		table.insert(combined, r)
+	local allOk = true
+
+	for _, suite in { DebugHud, Instrument, SixPack } do
+		local ok, results = suite.runTests()
+		allOk = allOk and ok
+		for _, r in results do
+			table.insert(combined, r)
+		end
 	end
 
-	return hudOk and instrumentOk, combined
+	return allOk, combined
 end
 
 return UIController

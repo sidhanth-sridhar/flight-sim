@@ -272,6 +272,13 @@ function FlightModel.new(model: Model, definition: any)
 			pitchAttitude = 0,
 			bankAngle = 0,
 
+			-- For the direction indicator and the turn coordinator. Radians and
+			-- radians per second; the instruments convert, the physics does not.
+			heading = 0,
+			turnRate = 0,
+			-- The inclinometer ball, m/s^2, positive to the aircraft's right.
+			lateralAcceleration = 0,
+
 			--[[
 				The angle of attack at which the main wing stalls, in radians.
 
@@ -607,6 +614,53 @@ function FlightModel.computeForces(
 	]]
 	local upBody = cf:VectorToWorldSpace(Vector3.new(0, 1, 0))
 	telemetry.loadFactor = totalForce:Dot(upBody) / (mass * Constants.GRAVITY_MS2)
+
+	--[[
+		HEADING, for the direction indicator. Radians, 0 .. 2pi, increasing
+		clockwise from north as a compass does.
+
+		North is -Z, which is not a choice made here: AirportService already
+		defines runway 36 as the one you take off along -Z (see the handoff,
+		section 11), and there is no magnetic model, so a designator is simply
+		the world heading over ten. -Z must therefore be 000/360 or the runway
+		numbers painted on the ground would disagree with the instrument.
+	]]
+	local look = cf.LookVector
+	telemetry.heading = math.atan2(look.X, -look.Z) % (2 * math.pi)
+
+	--[[
+		RATE OF TURN, for the turn coordinator. Radians per second, positive to
+		the RIGHT so that it matches heading increasing clockwise.
+
+		It is the angular velocity about the WORLD vertical, not about the
+		aircraft's own yaw axis: those differ in a bank, and it is the former
+		that a turn coordinator is calibrated against - a standard rate turn is
+		3 degrees of HEADING per second regardless of how steeply banked the
+		aeroplane is to achieve it.
+
+		Negated because Roblox's angular velocity follows the right-hand rule,
+		so positive about +Y swings the nose to the LEFT.
+	]]
+	telemetry.turnRate = -kinematics.angularVelocity.Y
+
+	--[[
+		LATERAL ACCELERATION - the inclinometer ball, in m/s^2, positive when the
+		specific force is toward the aircraft's RIGHT.
+
+		This is the real quantity rather than sideslip angle, and the two are
+		genuinely different: beta says where the nose points relative to the
+		airflow, while the ball is a pendulum answering to the resultant of
+		gravity and every other force. In a correctly banked turn beta is near
+		zero AND the ball is centred, but in a forward slip - deliberate cross
+		control, flown and signed off in the Phase 1 gate - they part company,
+		and only the ball tells the pilot what their feet are doing.
+
+		Same construction as loadFactor one line above, and for the same reason:
+		gravity is never applied by this model, so totalForce is precisely the
+		non-gravitational force a real accelerometer senses.
+	]]
+	local rightBody = cf:VectorToWorldSpace(Vector3.new(1, 0, 0))
+	telemetry.lateralAcceleration = totalForce:Dot(rightBody) / mass
 
 	return totalForce, totalTorque
 end
@@ -1135,6 +1189,143 @@ function FlightModel.runTests(): (boolean, { any })
 		"Bank is positive rolling right",
 		state.telemetry.bankAngle > 0 and math.abs(math.deg(state.telemetry.bankAngle) - 30) < 0.5,
 		string.format("%.1f deg", math.deg(state.telemetry.bankAngle))
+	)
+
+	-- 10c. Heading, turn rate and the ball ------------------------------------
+	--[[
+		HEADING must agree with the runway numbers painted on the ground.
+
+		AirportService defines runway 36 as the one flown along -Z, so -Z has to
+		read 360 and not 180. Getting this backwards would be invisible in the
+		air and obvious on final, which is the worst way to find it.
+	]]
+	local function headingFacing(yawDeg: number): number
+		FlightModel.computeForces(state, {
+			cframe = CFrame.Angles(0, math.rad(yawDeg), 0),
+			velocity = Vector3.zero,
+			angularVelocity = Vector3.zero,
+			altitude = 500,
+		}, dt, controlsWith(), nil)
+		return math.deg(state.telemetry.heading)
+	end
+
+	local northHdg = headingFacing(0)
+	record(
+		"Facing -Z reads 360/000, so runway 36 is runway 36",
+		northHdg < 0.5 or northHdg > 359.5,
+		string.format("%.1f deg", northHdg)
+	)
+
+	--[[
+		A yaw to the right must INCREASE the heading, as a compass does. Roblox's
+		positive yaw is to the left, so the sign is the thing being checked here
+		and a missing negation would read east as west.
+	]]
+	local eastHdg = headingFacing(-90)
+	record(
+		"Yawing right increases heading: east reads 090",
+		math.abs(eastHdg - 90) < 0.5,
+		string.format("%.1f deg facing +X", eastHdg)
+	)
+	local southHdg, westHdg = headingFacing(180), headingFacing(90)
+	record(
+		"South reads 180 and west reads 270",
+		math.abs(southHdg - 180) < 0.5 and math.abs(westHdg - 270) < 0.5,
+		string.format("%.1f and %.1f deg", southHdg, westHdg)
+	)
+	record(
+		"Heading never leaves 0..360",
+		northHdg >= 0 and northHdg <= 360 and eastHdg >= 0 and westHdg <= 360,
+		"wrapped, so the card cannot run off its scale"
+	)
+
+	--[[
+		RATE OF TURN, positive to the right to match heading. A standard rate
+		turn is 3 deg/s, which is what the turn coordinator's index marks mean,
+		so the sign and the magnitude both have to be right for the instrument to
+		mean anything.
+	]]
+	FlightModel.computeForces(state, {
+		cframe = CFrame.identity,
+		velocity = Vector3.new(0, 0, -90 * KT),
+		angularVelocity = Vector3.new(0, -math.rad(3), 0), -- right-hand rule: nose right
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	local rightTurn = math.deg(state.telemetry.turnRate)
+	record(
+		"A standard rate turn to the right reads +3 deg/s",
+		math.abs(rightTurn - 3) < 0.01,
+		string.format("%+.2f deg/s", rightTurn)
+	)
+
+	FlightModel.computeForces(state, {
+		cframe = CFrame.identity,
+		velocity = Vector3.new(0, 0, -90 * KT),
+		angularVelocity = Vector3.new(0, math.rad(3), 0),
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	record(
+		"...and a left turn reads negative",
+		math.abs(math.deg(state.telemetry.turnRate) + 3) < 0.01,
+		string.format("%+.2f deg/s", math.deg(state.telemetry.turnRate))
+	)
+
+	--[[
+		THE BALL. Straight and level with the ball centred is the reading the
+		whole instrument is judged against - if wings-level flight showed a
+		deflection, every coordinated turn would look like a skid.
+	]]
+	FlightModel.computeForces(state, {
+		cframe = CFrame.identity,
+		velocity = Vector3.new(0, 0, -90 * KT),
+		angularVelocity = Vector3.zero,
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	local ballLevel = state.telemetry.lateralAcceleration
+	record(
+		"Wings level and in balance, the ball is centred",
+		math.abs(ballLevel) < 0.15,
+		string.format("%.3f m/s^2 lateral", ballLevel)
+	)
+
+	--[[
+		Rudder alone, wings level, is a skid - which is exactly the forward slip
+		the pilot flew in the Phase 1 gate, and the case beta cannot report on
+		its own. The side force must appear, and it must appear on the correct
+		side: right rudder yaws the nose right, which puts the relative wind on
+		the aircraft's left and the resulting side force to the... left. The sign
+		is asserted rather than assumed, because it is the one thing here that
+		cannot be reasoned to confidently.
+	]]
+	FlightModel.computeForces(state, {
+		cframe = CFrame.identity,
+		velocity = Vector3.new(0, 0, -90 * KT),
+		angularVelocity = Vector3.zero,
+		altitude = 500,
+	}, dt, controlsWith({ yaw = 1 }), nil)
+	local ballYaw = state.telemetry.lateralAcceleration
+	record(
+		"Rudder alone produces a real lateral acceleration",
+		math.abs(ballYaw) > 0.3 and math.abs(ballYaw) > math.abs(ballLevel) * 2,
+		string.format("%+.3f m/s^2 with full rudder vs %+.3f level", ballYaw, ballLevel)
+	)
+
+	--[[
+		Sideslip and the ball are DIFFERENT quantities, which is why the ball is
+		published as an acceleration rather than approximated with beta. Flying
+		with the nose off the airflow gives both, but they are not the same
+		number and neither can be derived from the other by a constant.
+	]]
+	FlightModel.computeForces(state, {
+		cframe = CFrame.identity,
+		velocity = Vector3.new(10, 0, -90 * KT), -- blown sideways: real sideslip
+		angularVelocity = Vector3.zero,
+		altitude = 500,
+	}, dt, controlsWith(), nil)
+	record(
+		"Sideslip shows on the ball, and is not merely beta rescaled",
+		math.abs(state.telemetry.beta) > math.rad(2) and math.abs(state.telemetry.lateralAcceleration) > 0.3,
+		string.format("beta %.1f deg, ball %+.2f m/s^2", math.deg(state.telemetry.beta), state.telemetry.lateralAcceleration)
 	)
 
 	--[[

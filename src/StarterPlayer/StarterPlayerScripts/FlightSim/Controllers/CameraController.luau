@@ -825,10 +825,27 @@ function CameraController.runTests(): (boolean, { any })
 		not hidesOuterWing,
 		"wings stay visible from the cockpit"
 	)
+	--[[
+		A PROPORTION, NOT A COUNT - and this is the fourth time an assertion
+		rather than the code has been the wrong one here.
+
+		It read `<= 3`, which was right when the aeroplane was fifteen boxes.
+		Phase 4's skin took it to 78 parts, and the eye is now legitimately
+		inside a structural box AND the skin panel drawn over it - Cabin with
+		Fuselage05, WingCenter with WingCentre - so the honest count doubled
+		without anything going wrong. Measured 6 of 78.
+
+		What this is actually protecting is that the cockpit view hides what
+		ENCLOSES the eye and not the aeroplane, which is a fraction of the
+		model rather than a fixed number of parts. The containment-versus-
+		proximity failure it guards against is caught by the outer-wing check
+		above, which is the one that must never go green by accident.
+	]]
+	local partCount = #built:GetChildren()
 	record(
 		"Only a few parts are hidden, not the aeroplane",
-		#occluders > 0 and #occluders <= 3,
-		string.format("%d of %d parts", #occluders, #built:GetChildren())
+		#occluders > 0 and #occluders <= math.max(4, partCount * 0.15),
+		string.format("%d of %d parts (%.0f%%)", #occluders, partCount, #occluders / partCount * 100)
 	)
 
 	-- The eye must be inside the aeroplane, not floating outside it.

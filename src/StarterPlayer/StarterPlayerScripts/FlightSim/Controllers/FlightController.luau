@@ -60,6 +60,7 @@ local Registry = require(FlightSim.Aircraft.Registry)
 local Engine = require(FlightSim.Physics.Engine)
 local FlightModel = require(FlightSim.Physics.FlightModel)
 local GroundHandling = require(FlightSim.Physics.GroundHandling)
+local SurfaceAnimation = require(FlightSim.Aircraft.SurfaceAnimation)
 
 -- Test-only. runTests() builds its own aircraft rather than asking the server
 -- for one, so that the sequencing can be verified without a live server.
@@ -225,6 +226,22 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 
 	-- 2. Input.
 	local controls, systems = InputController.update(r.input, dt, snapshot, flightState)
+
+	--[[
+		2b. Move the control surfaces to match.
+
+		Cosmetic, and placed here deliberately: it is downstream of the input
+		layer and upstream of nothing. It reads the controls and writes only
+		CFrames on massless parts, so it cannot affect anything below it, and
+		sitting before the pause check means the surfaces still follow the
+		yoke while paused rather than freezing mid-deflection.
+
+		Trim is passed separately because it is NOT one of the six fields in
+		the Controls contract, and widening that contract to make an animation
+		convenient is exactly what §6c says not to do. RPM is last frame's,
+		for the same reason the gain schedule's airspeed is.
+	]]
+	SurfaceAnimation.step(r.surfaces, dt, controls, r.input.trim, fm.engine.rpm)
 
 	--[[
 		Paused: stop integrating, but zero the constraints first.
@@ -1039,6 +1056,9 @@ local function adopt(model: Model)
 		flightModel = FlightModel.new(model, definition),
 		gear = GroundHandling.new(model, definition),
 		input = InputController.new(definition),
+		-- Cosmetic. Binds the hinged control surfaces so they follow the
+		-- controls; an aircraft whose definition has none binds nothing.
+		surfaces = SurfaceAnimation.new(model, definition),
 	}
 	seat = pilotSeat
 
@@ -1371,6 +1391,7 @@ function FlightController.runTests(): (boolean, { any })
 		flightModel = FlightModel.new(model, Cessna172),
 		gear = GroundHandling.new(model, Cessna172),
 		input = InputController.new(Cessna172),
+		surfaces = SurfaceAnimation.new(model, Cessna172),
 	}
 
 	local body = function()

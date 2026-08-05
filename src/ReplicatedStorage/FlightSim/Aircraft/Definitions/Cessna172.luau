@@ -461,11 +461,551 @@ Cessna172.limits = {
 	something correctly proportioned to act on; the shape gets replaced with
 	proper modelling later, and the aerodynamic offsets above will not need to
 	change when it does.
+
+	⚠️ PHASE 4 UPDATE: THE BOXES BELOW ARE STILL THE AIRCRAFT.
+
+	They are now INVISIBLE (hideStructuralParts) and a modelled skin is drawn
+	over them in `decorations`, but nothing about their role changed. They are
+	the mass budget, the centre of mass, the static margin and the inertia
+	tensor; §4's published figures are all measured against exactly these
+	numbers. The skin is massless by construction - AircraftBuilder forces
+	Massless on every decoration and measure() skips massless parts - so it
+	CANNOT move any of it.
+
+	If a box below is ever resized or moved, the definition is re-verified,
+	not assumed. Do not "tidy" a box to match the skin: the skin exists to
+	match the box.
 ]]
+
+-- =========================================================================
+-- THE MODELLED SKIN (Phase 4)
+-- =========================================================================
+
+--[[
+	The 172S's real shape, built from primitives rather than a mesh.
+
+	WHY PRIMITIVES IN CODE. The same reasoning as the airport in §11: a mesh
+	is an opaque binary that Rojo cannot diff, cannot be reviewed, and cannot
+	be adjusted without leaving the repository - and §3 makes files the source
+	of truth. Geometry in code is readable, reviewable and parametric, and the
+	airport proved the approach at a far larger scale.
+
+	EVERY PART HERE IS MASSLESS. AircraftBuilder forces Massless on every
+	decoration and measure() skips massless parts, so nothing in this section
+	can move the centre of mass, the static margin or the inertia tensor. That
+	is what makes it safe to model freely: the shape is not the physics.
+
+	Coordinates are the datum frame of §5 - -Z forward, +X right, +Y up - and
+	are chosen to clothe the structural boxes above rather than to be
+	independently "correct". Where a visual edge and a box edge disagree, the
+	box wins, because the box is what flies.
+]]
+
+local WHITE = Color3.fromRGB(240, 240, 243)
+local TRIM = Color3.fromRGB(38, 88, 168)
+local DARK = Color3.fromRGB(38, 38, 42)
+local GLASS = Color3.fromRGB(140, 170, 195)
+local METAL = Color3.fromRGB(165, 168, 175)
+local RUBBER = Color3.fromRGB(26, 26, 28)
+
+local SKIN: { any } = {}
+
+local function add(spec: any)
+	table.insert(SKIN, spec)
+end
+
+--[[
+	Add a part and its mirror image across the centreline.
+
+	A mirror negates X, and with it the Y and Z components of any rotation -
+	a strut leaning outboard to starboard must lean outboard to port, not
+	inboard. Rotation about X (sweep, rake) is unchanged by a left-right
+	mirror, which is why only two of the three flip.
+
+	`mirrorSign` on a hinge is for ANTISYMMETRIC surfaces. Flaps and elevators
+	move together; ailerons move opposite, so the aileron declares -1 and the
+	left copy inherits a negated sign.
+]]
+local function addPair(spec: any)
+	local right = table.clone(spec)
+	right.name = spec.name .. "Right"
+	add(right)
+
+	local left = table.clone(spec)
+	left.name = spec.name .. "Left"
+	left.position = Vector3.new(-spec.position.X, spec.position.Y, spec.position.Z)
+	if spec.rotation then
+		left.rotation = Vector3.new(spec.rotation.X, -spec.rotation.Y, -spec.rotation.Z)
+	end
+	if spec.hinge then
+		local hinge = table.clone(spec.hinge)
+		if hinge.offset then
+			hinge.offset = Vector3.new(-hinge.offset.X, hinge.offset.Y, hinge.offset.Z)
+		end
+		hinge.sign = (hinge.sign or 1) * (hinge.mirrorSign or 1)
+		left.hinge = hinge
+	end
+	add(left)
+end
+
+--[[
+	Loft a tapering body from a list of stations, front to back.
+
+	One box is emitted between each adjacent pair, sized to the mean of the
+	two. Enough stations and the steps disappear into a smooth taper - which
+	is how the tail cone narrows from a 1.16 m cabin to a 0.34 m tailpost
+	without a single hand-placed wedge.
+]]
+local function loft(prefix: string, color: Color3, stations: { any })
+	for i = 1, #stations - 1 do
+		local a, b = stations[i], stations[i + 1]
+		add({
+			name = string.format("%s%02d", prefix, i),
+			size = Vector3.new((a.w + b.w) / 2, (a.h + b.h) / 2, math.abs(b.z - a.z)),
+			position = Vector3.new(0, (a.y + b.y) / 2, (a.z + b.z) / 2),
+			color = color,
+		})
+	end
+end
+
+--[[
+	---- Fuselage ------------------------------------------------------------
+
+	The step between the fourth and fifth stations is the windscreen: the deck
+	rises from 0.55 to 0.84 in half a metre, which is what gives a high-wing
+	Cessna its distinctive shouldered profile. The glass that bridges it is
+	placed explicitly below, because a loft can only make steps, not slopes.
+]]
+loft("Fuselage", WHITE, {
+	{ z = -2.90, w = 0.72, h = 0.62, y = 0.12 },
+	{ z = -2.30, w = 0.92, h = 0.74, y = 0.12 },
+	{ z = -1.70, w = 1.00, h = 0.80, y = 0.12 },
+	{ z = -1.10, w = 1.06, h = 0.86, y = 0.12 },
+	{ z = -0.55, w = 1.14, h = 1.20, y = 0.24 },
+	{ z = 0.35, w = 1.16, h = 1.24, y = 0.22 },
+	{ z = 1.05, w = 1.06, h = 1.12, y = 0.26 },
+	{ z = 1.60, w = 0.92, h = 0.94, y = 0.32 },
+	{ z = 2.35, w = 0.74, h = 0.78, y = 0.36 },
+	{ z = 3.15, w = 0.58, h = 0.64, y = 0.40 },
+	{ z = 3.95, w = 0.44, h = 0.52, y = 0.44 },
+	{ z = 4.70, w = 0.34, h = 0.44, y = 0.48 },
+})
+
+-- ---- Glazing ------------------------------------------------------------
+-- The windscreen bridges the deck step at 27.8 degrees, computed from the
+-- stations either side of it rather than eyeballed.
+add({
+	name = "Windscreen",
+	size = Vector3.new(1.06, 0.05, 0.64),
+	position = Vector3.new(0, 0.695, -0.825),
+	rotation = Vector3.new(-27.8, 0, 0),
+	color = GLASS,
+	transparency = 0.55,
+	reflectance = 0.2,
+	material = Enum.Material.Glass,
+})
+addPair({
+	name = "WindowSide",
+	size = Vector3.new(0.03, 0.36, 1.30),
+	position = Vector3.new(0.585, 0.58, 0.05),
+	color = GLASS,
+	transparency = 0.55,
+	reflectance = 0.2,
+	material = Enum.Material.Glass,
+})
+addPair({
+	name = "WindowRear",
+	size = Vector3.new(0.03, 0.26, 0.52),
+	position = Vector3.new(0.535, 0.56, 1.02),
+	color = GLASS,
+	transparency = 0.55,
+	reflectance = 0.2,
+	material = Enum.Material.Glass,
+})
+
+-- The Cessna side stripe, and the door seams either side of it.
+addPair({
+	name = "Stripe",
+	size = Vector3.new(0.03, 0.10, 2.70),
+	position = Vector3.new(0.585, 0.02, 0.15),
+	color = TRIM,
+})
+addPair({
+	name = "DoorSeam",
+	size = Vector3.new(0.02, 0.62, 0.03),
+	position = Vector3.new(0.59, 0.22, -0.62),
+	color = Color3.fromRGB(205, 205, 208),
+})
+
+-- ---- Cowling and propeller ----------------------------------------------
+add({
+	name = "SpinnerCone",
+	size = Vector3.new(0.28, 0.36, 0.36),
+	position = Vector3.new(0, 0.12, -3.02),
+	rotation = Vector3.new(0, 90, 0),
+	shape = "Cylinder",
+	color = WHITE,
+})
+add({
+	name = "SpinnerBase",
+	size = Vector3.new(0.36, 0.36, 0.36),
+	position = Vector3.new(0, 0.12, -2.92),
+	shape = "Ball",
+	color = WHITE,
+})
+addPair({
+	name = "CowlIntake",
+	size = Vector3.new(0.20, 0.12, 0.12),
+	position = Vector3.new(0.22, 0.00, -2.86),
+	color = DARK,
+})
+add({
+	name = "Exhaust",
+	size = Vector3.new(0.08, 0.08, 0.22),
+	position = Vector3.new(-0.24, -0.20, -2.58),
+	color = DARK,
+})
+
+--[[
+	The propeller is hinged so it can spin, and is a single part rather than
+	two blades: a 172S has a two-blade fixed-pitch prop, so one part through
+	the hub IS both blades.
+
+	The disc behind it is the blur. A solid blade at 2,400 rpm strobes badly
+	against any frame rate, which is exactly what a real propeller does not
+	look like; the animation layer fades this in as the blade fades out.
+]]
+add({
+	name = "Propeller",
+	size = Vector3.new(0.20, 1.96, 0.06),
+	position = Vector3.new(0, 0.12, -3.10),
+	color = DARK,
+	hinge = { axis = "Z", channel = "propeller" },
+})
+add({
+	name = "PropellerDisc",
+	size = Vector3.new(0.02, 1.96, 1.96),
+	position = Vector3.new(0, 0.12, -3.08),
+	rotation = Vector3.new(0, 90, 0),
+	shape = "Cylinder",
+	color = DARK,
+	transparency = 1,
+	castShadow = false,
+	-- Paired to the propeller hinge: the blade fades out INTO this disc, so
+	-- dropping it with the rest of the shell would leave the blur half-done.
+	keepWithMesh = true,
+})
+
+--[[
+	---- Wing ---------------------------------------------------------------
+
+	Dihedral is 1.73 degrees (1 deg 44 min on the real aircraft), applied as a
+	rotation on each panel about its own centre. Over a 2 m panel that
+	displaces the ends by about 3 cm, which is below the thickness of the
+	skin - so the panels still meet without a visible break.
+]]
+local DIHEDRAL = 1.73
+
+add({
+	name = "WingCentre",
+	size = Vector3.new(1.55, 0.22, 1.58),
+	position = Vector3.new(0, 0.96, 0.11),
+	color = WHITE,
+})
+addPair({
+	name = "WingInner",
+	size = Vector3.new(2.35, 0.21, 1.58),
+	position = Vector3.new(1.94, 0.99, 0.11),
+	rotation = Vector3.new(0, 0, DIHEDRAL),
+	color = WHITE,
+})
+addPair({
+	name = "WingOuter",
+	size = Vector3.new(1.65, 0.18, 1.42),
+	position = Vector3.new(3.95, 1.05, 0.05),
+	rotation = Vector3.new(0, 0, DIHEDRAL),
+	color = WHITE,
+})
+addPair({
+	name = "WingTip",
+	size = Vector3.new(0.45, 0.14, 1.10),
+	position = Vector3.new(5.00, 1.09, -0.02),
+	rotation = Vector3.new(0, 0, DIHEDRAL),
+	color = WHITE,
+})
+
+-- Navigation lights: red to port, green to starboard, so the aircraft states
+-- its own heading at night the way a real one does. Added singly because the
+-- colours differ, which is the whole point of them.
+add({
+	name = "NavLightRight",
+	size = Vector3.new(0.10, 0.10, 0.14),
+	position = Vector3.new(5.20, 1.10, -0.10),
+	color = Color3.fromRGB(0, 220, 60),
+	material = Enum.Material.Neon,
+})
+add({
+	name = "NavLightLeft",
+	size = Vector3.new(0.10, 0.10, 0.14),
+	position = Vector3.new(-5.20, 1.10, -0.10),
+	color = Color3.fromRGB(230, 30, 30),
+	material = Enum.Material.Neon,
+})
+
+--[[
+	Flaps and ailerons. Both hinge about the datum's X axis, which is 1.73
+	degrees off the true hinge line because of the dihedral - far below what
+	is visible, and it keeps the animation layer talking about the aircraft's
+	axes rather than each surface's own.
+
+	Flaps deflect DOWN only, to 30 degrees, and both together. Ailerons
+	deflect 20 degrees and OPPOSE each other - hence mirrorSign.
+]]
+addPair({
+	name = "Flap",
+	size = Vector3.new(2.07, 0.10, 0.42),
+	position = Vector3.new(1.815, 0.97, 1.11),
+	rotation = Vector3.new(0, 0, DIHEDRAL),
+	color = WHITE,
+	hinge = { axis = "X", channel = "flaps", offset = Vector3.new(0, 0, -0.21), maxDeg = 30 },
+})
+addPair({
+	name = "Aileron",
+	size = Vector3.new(1.80, 0.09, 0.36),
+	position = Vector3.new(3.85, 1.04, 0.94),
+	rotation = Vector3.new(0, 0, DIHEDRAL),
+	color = WHITE,
+	hinge = {
+		axis = "X",
+		channel = "aileron",
+		offset = Vector3.new(0, 0, -0.18),
+		maxDeg = 20,
+		--[[
+			sign = -1 so a RIGHT roll command RAISES the right aileron.
+
+			Positive rotation about X carries a surface's trailing edge DOWN.
+			The first version left this at the default +1, which dropped the
+			right aileron on a right roll - adding lift to the wing that is
+			supposed to be dropping, so the visible ailerons contradicted the
+			roll the aeroplane was actually doing.
+		]]
+		sign = -1,
+		mirrorSign = -1,
+	},
+})
+
+--[[
+	Lift struts. The angle is computed from the two attachment points rather
+	than chosen: 61.5 degrees from vertical, running from the lower fuselage
+	longeron out to mid-semi-span. Getting this wrong is instantly visible,
+	because a strut that does not land on the wing looks like a mistake even
+	to someone who has never seen a Cessna.
+]]
+addPair({
+	name = "Strut",
+	size = Vector3.new(0.08, 2.39, 0.26),
+	position = Vector3.new(1.55, 0.29, 0.25),
+	rotation = Vector3.new(0, 0, -61.5),
+	color = WHITE,
+})
+
+-- ---- Tail ---------------------------------------------------------------
+-- Named "Tailplane" and not "Stabilizer" ON PURPOSE: a decoration sharing a
+-- structural part's name silently replaced it in the builder's lookup, so the
+-- real stabilizer was never welded on. See the duplicate-name check in
+-- AircraftBuilder.validate, which now refuses to build that.
+add({
+	name = "Tailplane",
+	size = Vector3.new(3.42, 0.15, 0.92),
+	position = Vector3.new(0, 0.36, 4.18),
+	color = WHITE,
+})
+addPair({
+	name = "Elevator",
+	size = Vector3.new(1.60, 0.10, 0.46),
+	position = Vector3.new(0.90, 0.36, 4.87),
+	color = WHITE,
+	hinge = {
+		axis = "X",
+		channel = "elevator",
+		offset = Vector3.new(0, 0, -0.23),
+		maxDeg = 22,
+		sign = -1, -- stick back is elevator UP
+	},
+})
+
+--[[
+	The trim tab is on the RIGHT elevator only, as on the real aircraft, so it
+	is added singly rather than as a pair. It moves OPPOSITE the elevator it
+	trims - that is how a trim tab works, and a tab that follows the elevator
+	would be modelling an anti-servo tab from a different aeroplane.
+]]
+add({
+	name = "TrimTab",
+	size = Vector3.new(0.50, 0.07, 0.20),
+	position = Vector3.new(0.72, 0.36, 5.06),
+	color = WHITE,
+	hinge = {
+		axis = "X",
+		channel = "trim",
+		offset = Vector3.new(0, 0, -0.10),
+		maxDeg = 15,
+		sign = 1,
+	},
+})
+
+add({
+	name = "FinMain",
+	size = Vector3.new(0.13, 1.05, 0.80),
+	position = Vector3.new(0, 1.02, 4.48),
+	color = TRIM,
+})
+-- The swept leading edge, raked 30 degrees so it runs up and aft.
+add({
+	name = "FinLeadingEdge",
+	size = Vector3.new(0.12, 1.20, 0.22),
+	position = Vector3.new(0, 1.00, 4.02),
+	rotation = Vector3.new(30, 0, 0),
+	color = TRIM,
+})
+add({
+	name = "FinTip",
+	size = Vector3.new(0.13, 0.18, 0.58),
+	position = Vector3.new(0, 1.58, 4.60),
+	color = TRIM,
+})
+-- The dorsal fillet ahead of the fin, which a 172 has and which reads
+-- immediately as "Cessna" from the side.
+add({
+	name = "DorsalFin",
+	size = Vector3.new(0.10, 0.26, 0.90),
+	position = Vector3.new(0, 0.66, 3.55),
+	color = TRIM,
+})
+add({
+	name = "Beacon",
+	size = Vector3.new(0.09, 0.10, 0.09),
+	position = Vector3.new(0, 1.72, 4.60),
+	color = Color3.fromRGB(230, 30, 30),
+	material = Enum.Material.Neon,
+})
+
+add({
+	name = "Rudder",
+	size = Vector3.new(0.11, 1.10, 0.48),
+	position = Vector3.new(0, 1.05, 5.05),
+	color = TRIM,
+	hinge = {
+		axis = "Y",
+		channel = "rudder",
+		offset = Vector3.new(0, 0, -0.24),
+		maxDeg = 22,
+	},
+})
+
+--[[
+	---- Landing gear -------------------------------------------------------
+
+	The wheels sit exactly where the structural wheel boxes are, at the same
+	size, because those are the parts that actually touch the runway. What is
+	new is the legs holding them up - the spring-steel main legs at 55 degrees
+	and the nose oleo - which the crude model simply did not have.
+]]
+addPair({
+	name = "GearLeg",
+	size = Vector3.new(0.09, 1.01, 0.16),
+	position = Vector3.new(0.835, -0.61, 0.40),
+	rotation = Vector3.new(0, 0, 55),
+	color = METAL,
+})
+addPair({
+	name = "WheelMain",
+	size = Vector3.new(0.16, 0.40, 0.40),
+	position = Vector3.new(1.25, -0.95, 0.40),
+	shape = "Cylinder",
+	color = RUBBER,
+})
+addPair({
+	name = "HubMain",
+	size = Vector3.new(0.17, 0.18, 0.18),
+	position = Vector3.new(1.25, -0.95, 0.40),
+	shape = "Cylinder",
+	color = METAL,
+})
+add({
+	name = "NoseStrut",
+	size = Vector3.new(0.12, 0.64, 0.16),
+	position = Vector3.new(0, -0.62, -1.40),
+	color = METAL,
+})
+add({
+	name = "WheelNoseSkin",
+	size = Vector3.new(0.16, 0.40, 0.40),
+	position = Vector3.new(0, -0.95, -1.40),
+	shape = "Cylinder",
+	color = RUBBER,
+})
+add({
+	name = "HubNose",
+	size = Vector3.new(0.17, 0.18, 0.18),
+	position = Vector3.new(0, -0.95, -1.40),
+	shape = "Cylinder",
+	color = METAL,
+})
+addPair({
+	name = "Step",
+	size = Vector3.new(0.22, 0.04, 0.28),
+	position = Vector3.new(0.60, -0.46, 0.52),
+	color = METAL,
+})
+
+-- ---- Small details ------------------------------------------------------
+add({
+	name = "AntennaVHF",
+	size = Vector3.new(0.03, 0.22, 0.10),
+	position = Vector3.new(0, 0.92, 0.55),
+	color = DARK,
+})
+add({
+	name = "Pitot",
+	size = Vector3.new(0.05, 0.06, 0.24),
+	position = Vector3.new(-1.90, 0.83, -0.30),
+	color = METAL,
+})
+add({
+	name = "LandingLight",
+	size = Vector3.new(0.18, 0.10, 0.06),
+	position = Vector3.new(-1.20, 0.94, -0.70),
+	color = Color3.fromRGB(255, 250, 220),
+	material = Enum.Material.Neon,
+})
 
 Cessna172.model = {
 	-- Everything is welded to this part, and it defines the body axes.
 	rootPart = "Cabin",
+
+	--[[
+		The structural boxes are the physics and are not meant to be looked
+		at. Phase 4 draws the real shape over them in `decorations`, so they
+		are hidden rather than deleted - deleting one would delete the mass
+		and the aerodynamic reference point with it.
+	]]
+	hideStructuralParts = true,
+
+	--[[
+		Flip to true when the imported Cessna mesh lands (CREDITS.md).
+
+		It drops the primitive shell below and keeps the hinged control
+		surfaces, so the mesh becomes the exterior without the two fighting.
+		Nothing physical moves either way - the structural boxes are the
+		aircraft and both exteriors are massless decoration over them.
+
+		The primitive shell stays in the file rather than being deleted: it is
+		what the aeroplane looks like until the mesh arrives, it is the
+		fallback if the import is rejected, and it costs one boolean to have
+		both.
+	]]
+	exteriorFromMesh = false,
 
 	parts = {
 		-- Density 87. Engine, mount, propeller and cowling - the heaviest
@@ -614,27 +1154,8 @@ Cessna172.model = {
 		},
 	},
 
-	-- Purely visual, no mass of their own worth modelling.
-	decorations = {
-		{
-			name = "Propeller",
-			size = Vector3.new(0.10, 1.93, 0.14),
-			position = Vector3.new(0, 0.05, -2.62),
-			color = Color3.fromRGB(45, 45, 48),
-		},
-		{
-			name = "StrutLeft",
-			size = Vector3.new(0.10, 1.05, 0.22),
-			position = Vector3.new(-1.55, 0.42, 0.30),
-			color = Color3.fromRGB(210, 210, 215),
-		},
-		{
-			name = "StrutRight",
-			size = Vector3.new(0.10, 1.05, 0.22),
-			position = Vector3.new(1.55, 0.42, 0.30),
-			color = Color3.fromRGB(210, 210, 215),
-		},
-	},
+	-- The modelled skin. Built just below, and massless by construction.
+	decorations = SKIN,
 }
 
 -- =========================================================================

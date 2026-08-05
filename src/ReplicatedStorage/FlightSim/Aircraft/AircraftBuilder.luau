@@ -104,6 +104,24 @@ function AircraftBuilder.validate(definition: any): (boolean, { string })
 			))
 		end
 
+		--[[
+			ROTATION IS FOR COSMETIC PARTS ONLY.
+
+			Roblox reports an assembly's inertia in world axes, so tipping a
+			mass-bearing box rewrites the inertia tensor without changing a
+			single mass number - the budget still totals 1,111 kg, the centre
+			of mass barely moves, and nothing in the definition looks wrong.
+			§4's published figures and §29's measured pitch inertia are both
+			taken against the current layout, so this fails the build rather
+			than letting Phase 4's modelling quietly move the physics.
+		]]
+		if spec.rotation then
+			table.insert(problems, string.format(
+				"part '%s' has a rotation. Structural parts must stay axis-aligned because rotating one rewrites the inertia tensor; put the shaped geometry in model.decorations.",
+				tostring(spec.name)
+			))
+		end
+
 		totalMass += spec.mass
 		if spec.name == model.rootPart then
 			foundRoot = true
@@ -112,6 +130,40 @@ function AircraftBuilder.validate(definition: any): (boolean, { string })
 
 	if not foundRoot then
 		table.insert(problems, string.format("rootPart '%s' is not in the parts list", tostring(model.rootPart)))
+	end
+
+	--[[
+		EVERY NAME MUST BE UNIQUE, ACROSS PARTS AND DECORATIONS BOTH.
+
+		build() keys one table by name to weld from, so a decoration sharing a
+		structural part's name REPLACES it there - and the structural part is
+		then never welded on. It stays in the model, still visible, still
+		carrying its mass, but as a second assembly the aeroplane is not
+		attached to.
+
+		This is not hypothetical. Phase 4's skin named a part "Stabilizer",
+		which is also a structural part, and the aircraft silently lost 20 kg
+		and its tailplane: measured 1,091 kg against 1,111, two assemblies
+		instead of one, and a centre of mass 82 mm forward of prediction. Every
+		number in the definition was still correct. Only the build was wrong,
+		and nothing said so.
+	]]
+	local seen: { [string]: string } = {}
+	local function claim(name: string, kind: string)
+		local previous = seen[name]
+		if previous then
+			table.insert(problems, string.format(
+				"duplicate part name '%s' (%s and %s). Names must be unique across parts AND decorations, or the second silently replaces the first and the first is never welded on.",
+				name, previous, kind
+			))
+		end
+		seen[name] = kind
+	end
+	for _, spec in model.parts do
+		claim(tostring(spec.name), "structural")
+	end
+	for _, spec in model.decorations or {} do
+		claim(tostring(spec.name), "decoration")
 	end
 
 	if definition.mass and definition.mass.maxTakeoff and totalMass > definition.mass.maxTakeoff then
@@ -128,24 +180,48 @@ end
 -- PART CREATION
 -- =========================================================================
 
+--[[
+	The rotation a spec asks for, as a CFrame. Degrees about the datum axes,
+	applied X then Y then Z.
+
+	Structural parts may not use it - see validate(). Roblox reports an
+	assembly's inertia in world axes, so rotating a mass-bearing box silently
+	rewrites the inertia tensor, and §4's published figures are all measured
+	against the current layout. Cosmetic parts carry no mass and cannot.
+]]
+local function specRotation(spec: any): CFrame
+	local r = spec.rotation
+	if not r then
+		return CFrame.identity
+	end
+	return CFrame.Angles(math.rad(r.X), math.rad(r.Y), math.rad(r.Z))
+end
+
 local function createPart(spec: any, baseCFrame: CFrame): BasePart
 	local className = spec.className or "Part"
 	local part = Instance.new(className) :: any
 
 	part.Name = spec.name
 	part.Size = spec.size
-	part.CFrame = baseCFrame * CFrame.new(spec.position)
+	part.CFrame = baseCFrame * CFrame.new(spec.position) * specRotation(spec)
 	part.Anchored = false
 	part.CanCollide = spec.collide == true
 	part.Color = spec.color or Color3.fromRGB(200, 200, 200)
 	part.Material = spec.material or Enum.Material.SmoothPlastic
+	part.Transparency = spec.transparency or 0
+	part.Reflectance = spec.reflectance or 0
+	part.CastShadow = spec.castShadow ~= false
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
 
 	-- A Roblox cylinder's axis runs along its X size, which is why the wheel
 	-- specs put the thin dimension first - it makes a disc standing upright.
-	if spec.shape == "Cylinder" and className == "Part" then
-		part.Shape = Enum.PartType.Cylinder
+	-- Ball and Cylinder both need SHAPE_VOLUME_FACTOR to keep mass honest.
+	if spec.shape and className == "Part" then
+		local shape = (Enum.PartType :: any)[spec.shape]
+		if shape then
+			part.Shape = shape
+		end
 	end
 
 	--[[
@@ -206,10 +282,23 @@ function AircraftBuilder.build(definition: any, cframe: CFrame?, parent: Instanc
 	local model = Instance.new("Model")
 	model.Name = definition.id or "Aircraft"
 
-	-- ---- Structural parts ------------------------------------------------
+	--[[
+		---- Structural parts -------------------------------------------------
+
+		hideStructuralParts makes the mass-bearing boxes invisible so a modelled
+		skin can be drawn over them. They are still built, still welded, still
+		collidable where they say so, and still exactly the mass and balance the
+		definition declares - only the appearance changes. Deleting one would
+		delete the mass and the aerodynamic reference point with it.
+	]]
+	local hideStructure = spec.hideStructuralParts == true
 	local parts: { [string]: BasePart } = {}
 	for _, partSpec in spec.parts do
 		local part = createPart(partSpec, base)
+		if hideStructure and partSpec.transparency == nil then
+			part.Transparency = 1
+			part.CastShadow = false
+		end
 		part.Parent = model
 		parts[partSpec.name] = part
 	end
@@ -220,25 +309,95 @@ function AircraftBuilder.build(definition: any, cframe: CFrame?, parent: Instanc
 	-- ---- Decoration ------------------------------------------------------
 	-- Cosmetic only: massless, so they cannot disturb the weight and balance
 	-- the definition was carefully built around.
+	--[[
+		`exteriorFromMesh` is the switch for the imported visual shell.
+
+		The primitive skin and an imported mesh are both EXTERIORS, and running
+		both gives an aeroplane wearing two skins. Setting this flag drops the
+		static shell so the mesh can be parented over the same physics
+		assembly, and keeps everything the mesh cannot do for itself:
+
+		  - HINGED SURFACES. A single imported mesh cannot deflect its own
+		    ailerons. The control surfaces stay ours whatever the exterior is,
+		    which is exactly why scope item 2 was built mesh-independent.
+		  - Anything marked `keepWithMesh`, for parts paired to a hinge (the
+		    propeller's blur disc) that would otherwise be orphaned.
+
+		The structural boxes are untouched either way. They are the physics and
+		they collide; both exteriors are massless decoration over the top.
+	]]
+	local useMesh = spec.exteriorFromMesh == true
+	local hingedSpecs: { [string]: any } = {}
 	if spec.decorations then
 		for _, decoSpec in spec.decorations do
+			local isShell = not decoSpec.hinge and not decoSpec.keepWithMesh
+			if useMesh and isShell then
+				continue
+			end
 			local deco = createPart(decoSpec, base)
 			deco.Massless = true
 			deco.CanCollide = false
 			deco.Parent = model
 			parts[decoSpec.name] = deco
+			if decoSpec.hinge then
+				hingedSpecs[decoSpec.name] = decoSpec
+			end
 		end
 	end
 
 	-- ---- Weld into one rigid body ---------------------------------------
+	-- Hinged surfaces are skipped: they get a Motor6D below instead, and a
+	-- part carrying both a weld and a motor cannot move.
 	for name, part in parts do
-		if part ~= root then
+		if part ~= root and not hingedSpecs[name] then
 			local weld = Instance.new("WeldConstraint")
 			weld.Name = "Weld_" .. name
 			weld.Part0 = root
 			weld.Part1 = part
 			weld.Parent = root
 		end
+	end
+
+	--[[
+		---- Hinged control surfaces ------------------------------------------
+
+		A Motor6D places Part1 at:
+
+			Part0.CFrame * C0 * Transform * C1:Inverse()
+
+		C0 is built with the HINGE POINT as its origin and NO rotation of its
+		own, so it is expressed in the datum's axes. That is what makes the
+		animation layer able to say "rotate about X" and mean the aircraft's
+		lateral axis, whatever angle the surface itself is mounted at - the
+		swept fin and the dihedral wings are mounted rotated, and their
+		surfaces must still hinge about a sensible axis.
+
+		C1 folds that mounting rotation back out, so at rest the motor
+		reproduces exactly the CFrame createPart would have given the part:
+
+			root * C0 * C1:Inverse()
+			  = base * rootPos * (p + h - rootPos) * (-h) * R
+			  = base * p * R                                    ✓
+
+		The surfaces stay massless, so driving them changes nothing physical -
+		the flight model reads the pilot's controls, never these parts.
+	]]
+	local rootSpecPosition = Vector3.zero
+	for _, partSpec in spec.parts do
+		if partSpec.name == spec.rootPart then
+			rootSpecPosition = partSpec.position
+		end
+	end
+
+	for name, decoSpec in hingedSpecs do
+		local hingeOffset = decoSpec.hinge.offset or Vector3.zero
+		local motor = Instance.new("Motor6D")
+		motor.Name = "Hinge_" .. name
+		motor.Part0 = root
+		motor.Part1 = parts[name]
+		motor.C0 = CFrame.new(decoSpec.position + hingeOffset - rootSpecPosition)
+		motor.C1 = specRotation(decoSpec):Inverse() * CFrame.new(hingeOffset)
+		motor.Parent = root
 	end
 
 	-- ---- Seat ------------------------------------------------------------

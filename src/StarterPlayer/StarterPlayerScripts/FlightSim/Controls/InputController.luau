@@ -231,41 +231,51 @@ InputController.DEFAULTS = {
 		captureAccel = 1.0,
 
 		--[[
-			Vertical-speed-error damping, pitch command per m/s^2 at which the
-			error is moving.
+			GAIN SCHEDULING - the fix for the porpoise, and the reason it only
+			ever showed up fast.
 
-			The cascade damps the altitude error but not the vertical speed
-			ITSELF changing: with a constant climb rate the inner loop sits
-			still, and the porpoise it shows over open water (no terrain to
-			read) is a limit cycle of the aircraft accelerating up through its
-			demanded climb, overshooting, and being hauled back - a velocity
-			error that P alone answers by banging against the pitch limit.
-			This term is a proper derivative on the vertical-speed ERROR, which
-			leads the loop's phase (the correct fix for a P-only loop on an
-			integrator): it noses down harder as a climb error starts growing,
-			and as a level-off decelerates the climb it EASES the nose down
-			before the overshoot exists as error.
+			verticalSpeedGain converts a vertical-speed error into an ELEVATOR
+			DEFLECTION. But a deflection is not a pitching moment: the moment it
+			makes is proportional to dynamic pressure, so the same command is
+			roughly twice as powerful at 130 kt as at 90. The loop gain
+			therefore rises with the square of airspeed, and somewhere above 110
+			kt it passes the point where the loop is stable and settles into a
+			limit cycle instead.
 
-			Measured the hard way, twice: feeding it a raw, one-frame vertical
-			acceleration was a feedback loop on its own - a single noisy frame
-			of velocity difference read as a huge acceleration, banged the
-			pitch to the limit, and the measurement lag flipped the term's
-			phase so it reinforced the oscillation instead of damping it. So
-			the derivative is computed on a low-pass-filtered vertical speed
-			(vsFilterTau) and its contribution is clamped to dampingLimit so no
-			reading, however bad, can command more than a fraction of the pitch
-			authority. It is exactly zero when the error is not moving, so it
-			never fights a steady-state command.
+			Measured, engaging with a target below and letting the aeroplane
+			accelerate into the descent: calm at 94 to 111 kt with the elevator
+			inside 0.16, then at 115 to 116 kt the command swung -0.359 to
+			+0.083, reached the 0.45 stop, and the load factor ranged -0.16 to
+			2.28 g. A recorded flight showed exactly the same split - quiet at
+			83 to 104 kt, a 1.2 s limit cycle at 112 to 118 kt with the elevator
+			saturated.
+
+			So the gain is divided by dynamic pressure, normalised to the speed
+			where it was tuned. Indicated airspeed is exactly the right variable
+			to schedule on, because it already carries the air density: the
+			same IAS means the same q, at any altitude.
 		]]
-		verticalDamping = 0.1,
-		-- Low-pass time constant on the vertical speed fed to the derivative,
-		-- in seconds. Long enough to kill frame noise, short compared with a
-		-- level-off (about two seconds), so the trend it damps is real.
-		vsFilterTau = 0.15,
-		-- The most the damping term may add to the pitch command, in either
-		-- direction. Less than half the pitch authority, so the autopilot can
-		-- never be bounced off its own stabilising term.
-		dampingLimit = 0.2,
+		-- The speed verticalSpeedGain is correct at, in m/s. 48 m/s is about
+		-- 93 kt - the middle of the measured calm band.
+		refAirspeed = 48.0,
+		--[[
+			The schedule only ever ATTENUATES. The ceiling is 1.0, so below the
+			reference speed the law is exactly the unscheduled one.
+
+			That is a measured decision, not caution for its own sake. The
+			unscheduled gain was steady everywhere from 69 to 111 kt; the only
+			place it misbehaved was fast. An earlier version let the scale rise
+			to 2.0, which boosted the gain 1.6x in a 74 kt Vy climb and started
+			its own oscillation - 20 vertical-speed crossings in a minute with
+			the elevator at 0.448 and the load factor ranging 0.55 to 1.44 g.
+			Amplifying where nothing was wrong only created a second porpoise.
+
+			The floor stops the autopilot going deaf in a dive. 0.35 is reached
+			at about 158 kt, just under this aeroplane's Vne.
+		]]
+		minGainScale = 0.35,
+		maxGainScale = 1.0,
+
 	},
 
 	--[[
@@ -412,6 +422,7 @@ export type InputSnapshot = {
 export type FlightState = {
 	altitude: number, -- m
 	verticalSpeed: number, -- m/s
+	airspeed: number?, -- m/s indicated, for the altitude loop's gain schedule
 	bankAngle: number?, -- rad, positive = right wing down
 	rollRate: number?, -- rad/s about the aircraft's own roll axis
 	heading: number?, -- rad, 0 .. 2pi, clockwise from north
@@ -552,16 +563,7 @@ end
 	call a gentle level-off. It takes about four seconds to roll a full-rate
 	climb off to level.
 ]]
-export type AltHoldCapture = {
-	demandedClimb: number,
-	-- The vertical speed the derivative in altitudeHoldPitchCaptured is
-	-- smoothed against, and the previous frame's vertical-speed error, which
-	-- together let the law compute how fast the error is moving without any
-	-- measurement from outside. nil on the very first frame, which the law
-	-- reads as "no history yet": no damping.
-	smoothedVS: number?,
-	prevError: number?,
-}
+export type AltHoldCapture = { demandedClimb: number }
 
 --[[
 	NOT clamped to maxClimbRate, and that was a bug in the first version of this
@@ -577,7 +579,7 @@ export type AltHoldCapture = {
 	starting above the limit is transient by construction.
 ]]
 function InputController.altHoldCapture(config: any, verticalSpeedMs: number): AltHoldCapture
-	return { demandedClimb = verticalSpeedMs, smoothedVS = verticalSpeedMs }
+	return { demandedClimb = verticalSpeedMs }
 end
 
 function InputController.altitudeHoldPitchCaptured(
@@ -586,7 +588,10 @@ function InputController.altitudeHoldPitchCaptured(
 	targetM: number,
 	altitudeM: number,
 	verticalSpeedMs: number,
-	dt: number
+	dt: number,
+	-- Indicated airspeed in m/s. Optional: without it the loop is unscheduled,
+	-- which is the behaviour that predated the porpoise fix.
+	airspeedMs: number?
 ): (number, AltHoldCapture)
 	local a = config.altHold
 
@@ -602,28 +607,50 @@ function InputController.altitudeHoldPitchCaptured(
 	local demanded = capture.demandedClimb + clamp(wanted - capture.demandedClimb, -step, step)
 
 	--[[
-		The damping term: a derivative on the vertical-speed error, computed
-		from a LOW-PASS-FILTERED vertical speed so a noisy frame cannot bang
-		the elevator, and clamped to dampingLimit so no reading can add more
-		than a fraction of the pitch authority. See the verticalDamping gain
-		for why it is a derivative on the error at all, and why that did not
-		work when fed raw acceleration. First frame has no history: the
-		smoothed speed is the speed, and the error rate is zero.
+		NO DERIVATIVE TERM, and that is a measured decision rather than an
+		omission. Two attempts were made and both made the aeroplane worse:
+
+		  1. Raw one-frame vertical acceleration. Differencing a noisy velocity
+		     at frame rate banged the elevator, and the measurement lag flipped
+		     the phase so the "damping" reinforced the oscillation.
+		  2. A low-pass-filtered derivative on the vertical-speed error, gain
+		     0.1, clamped to 0.2. Measured against the real aerodynamics with
+		     the model's OWN pitch inertia, this turned a dead-steady autopilot
+		     into a violent porpoise: load factor went from 0.97..1.04 to
+		     0.10..1.90, peak elevator from 0.022 to the 0.45 limit, with a
+		     1.2 s limit cycle that did not decay.
+
+		The reason is the same both times. Every derivative here is taken on a
+		signal that already lags the elevator by the time it takes the nose to
+		move and the wing to respond - and at this aircraft's pitch inertia
+		that lag is most of a second. A term meant to oppose the motion arrives
+		pointing the same way as it.
+
+		The proportional law below, with the capture walk above it, measures
+		steady across the whole envelope: load factor within 0.68..1.27 from
+		80 kt to 130 kt, in a Vy climb and in an idle descent.
 	]]
-	local tau = a.vsFilterTau
-	local smoothed = capture.smoothedVS
-		and capture.smoothedVS + (verticalSpeedMs - capture.smoothedVS) * (dt / (dt + tau))
-		or verticalSpeedMs
-	local errorNow = demanded - smoothed
-	local errorRate = (errorNow - (capture.prevError or errorNow)) / math.max(dt, 1e-4)
-	local damping = clamp(errorRate * a.verticalDamping, -a.dampingLimit, a.dampingLimit)
+	--[[
+		Scheduled on dynamic pressure. See refAirspeed for the measurement that
+		forced this: the loop is stable at 95 kt and a limit cycle at 116 kt on
+		the SAME gain, because the elevator is half again as powerful there.
+
+		Without an airspeed the scale is 1, which is the unscheduled law - so a
+		caller that does not supply one degrades to the old behaviour rather
+		than failing.
+	]]
+	local scale = 1
+	if airspeedMs and airspeedMs > 1 then
+		local ratio = a.refAirspeed / airspeedMs
+		scale = clamp(ratio * ratio, a.minGainScale, a.maxGainScale)
+	end
 
 	local pitch = clamp(
-		(demanded - verticalSpeedMs) * a.verticalSpeedGain + damping,
+		(demanded - verticalSpeedMs) * a.verticalSpeedGain * scale,
 		-a.pitchLimit,
 		a.pitchLimit
 	)
-	return pitch, { demandedClimb = demanded, smoothedVS = smoothed, prevError = errorNow }
+	return pitch, { demandedClimb = demanded }
 end
 
 --[[
@@ -906,7 +933,8 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 			systems.altitudeTargetM,
 			flightState.altitude,
 			flightState.verticalSpeed,
-			dt
+			dt,
+			flightState.airspeed
 		)
 
 		--[[
@@ -1546,70 +1574,150 @@ function InputController.runTests(): (boolean, { any })
 	)
 
 	--[[
-		THE DAMPING TERM, added after a report of porpoising over open water,
-		where there is no terrain under the aircraft. The cascade's inner loop
-		damps the altitude error but not the vertical speed CHANGING: with a
-		constant climb rate it sits still, so nothing answers a climb that is
-		accelerating up through its demand until the error has already built,
-		and P alone answers that by banging against the pitch limit. The term
-		is a derivative on the vertical-speed ERROR - it leads the loop's
-		phase - but fed RAW acceleration it was a feedback loop on its own
-		(one noisy frame banged the elevator and the measurement lag flipped
-		its phase). So it is computed here on a low-pass-filtered vertical
-		speed, from history carried in the capture, and its contribution is
-		clamped. These tests drive the law with hand-built captures so the
-		history is exact rather than whatever a previous frame left behind.
+		THE INNER LOOP IS PROPORTIONAL, AND STAYS THAT WAY.
 
-		A first-frame capture (no history) must be exactly the undamped law:
-		the derivative has nothing to look at, so it adds nothing.
+		Two derivative terms have been tried on this loop and both made the
+		aeroplane worse - a raw one-frame vertical acceleration, and a
+		low-pass-filtered derivative on the vertical-speed error. The second
+		was measured against the real aerodynamics using the model's OWN pitch
+		inertia and turned a dead-steady autopilot into a 1.2 s limit cycle
+		swinging the load factor from 0.10 to 1.90 g.
+
+		The cause is structural: any derivative here is taken on a signal that
+		already lags the elevator by the time it takes the nose to move and the
+		wing to answer, so the term arrives in phase with the motion instead of
+		against it.
+
+		This check pins the law's SHAPE rather than a number: for the same
+		state, the command must be exactly the proportional term. If a
+		derivative is ever added again it will fail here, and whoever adds it
+		can read the note above before deciding to.
 	]]
-	local cfgDamp = fresh().config
-	local dMax = cfgDamp.altHold.dampingLimit
-	local firstFrame = InputController.altitudeHoldPitchCaptured(cfgDamp, { demandedClimb = 0 }, 500, 500, 2, 1 / 60)
-	record(
-		"No history, no damping: the first frame is exactly the P-only law",
-		firstFrame == -2 * cfgDamp.altHold.verticalSpeedGain,
-		string.format("%.3f, the raw -2 m/s error times verticalSpeedGain", firstFrame)
-	)
-	--[[
-		THE LEVEL-OFF. Last frame the climb was decelerating (smoothed speed
-		just above 2 m/s, error -2.05); this frame the speed is 2.0, so the
-		error is IMPROVING at 3 m/s^2. The derivative eases the nose-down
-		instead of waiting for the overshoot to appear as error.
-	]]
-	local eased = InputController.altitudeHoldPitchCaptured(
-		cfgDamp, { demandedClimb = 0, smoothedVS = 2.0, prevError = -2.05 }, 500, 500, 2.0, 1 / 60)
-	record(
-		"A level-off is eased: the nose-down softens as the climb decelerates",
-		eased > firstFrame,
-		string.format("%.3f vs %.3f for the same speed on target", eased, firstFrame)
-	)
-	--[[
-		THE CLAMP. A violent one-frame reading must add exactly dampingLimit,
-		not run the pitch to its own limit: the error is +0.5 and improving at
-		-30 m/s^2, which without the clamp would swing the command by 3.0.
-	]]
-	local violent = InputController.altitudeHoldPitchCaptured(
-		cfgDamp, { demandedClimb = 0, smoothedVS = -0.5, prevError = 1.0 }, 500, 500, -0.5, 1 / 60)
-	record(
-		"The damping contribution is clamped, however violent the reading",
-		math.abs(violent - (0.5 * cfgDamp.altHold.verticalSpeedGain - dMax)) < 1e-9,
-		string.format("%.3f = P on +0.5 m/s error minus the %.2f cap, not -%.2f",
-			violent, dMax, cfgDamp.altHold.pitchLimit)
-	)
-	--[[
-		And a settled state is untouched: the error not moving means the
-		derivative is zero frame after frame, so steady flight cannot be
-		disturbed by it.
-	]]
-	local steady = { demandedClimb = 0 }
-	for _ = 1, 600 do
-		steady = select(2, InputController.altitudeHoldPitchCaptured(cfgDamp, steady, 500, 500, 0, 1 / 60))
+	local shapeCfg = fresh().config
+	local shapeMismatch = {}
+	for _, vs in { -4, -1, 0, 1, 4 } do
+		local cap = { demandedClimb = 0 }
+		local got = InputController.altitudeHoldPitchCaptured(shapeCfg, cap, 500, 500, vs, 1 / 60)
+		local expected = clamp((0 - vs) * shapeCfg.altHold.verticalSpeedGain, -shapeCfg.altHold.pitchLimit, shapeCfg.altHold.pitchLimit)
+		if math.abs(got - expected) > 1e-12 then
+			table.insert(shapeMismatch, string.format("%+.1f m/s: %.4f vs %.4f", vs, got, expected))
+		end
 	end
 	record(
-		"A steady state is untouched: the error not moving damps nothing",
-		steady.smoothedVS ~= nil and math.abs(steady.smoothedVS) < 1e-6,
-		string.format("smoothed speed %.6f after 10 s at zero", steady.smoothedVS or 0)
+		"The inner loop is exactly proportional - no derivative term",
+		#shapeMismatch == 0,
+		if #shapeMismatch == 0 then "command is (demand - VS) * verticalSpeedGain, clamped"
+		else table.concat(shapeMismatch, ", ")
+	)
+	--[[
+		And the capture carries nothing but the demand. A derivative needs
+		history, so an empty capture is the structural guarantee that there
+		isn't one.
+	]]
+	local carried = select(2, InputController.altitudeHoldPitchCaptured(shapeCfg, { demandedClimb = 0 }, 500, 500, 2, 1 / 60))
+	local extra = {}
+	for key in carried do
+		if key ~= "demandedClimb" then
+			table.insert(extra, key)
+		end
+	end
+	record(
+		"The capture carries no derivative history",
+		#extra == 0,
+		if #extra == 0 then "demandedClimb only" else "unexpected: " .. table.concat(extra, ", ")
+	)
+
+	--[[
+		THE GAIN SCHEDULE - the actual porpoise fix.
+
+		verticalSpeedGain turns a vertical-speed error into an ELEVATOR
+		DEFLECTION, but the moment that deflection makes scales with dynamic
+		pressure. So the loop gain climbs with the square of airspeed, and above
+		about 110 kt it passes the point of stability. Measured on the real
+		aerodynamics with the model's own pitch inertia: calm from 94 to 111 kt
+		with the elevator inside 0.16, then at 115 to 116 kt the command swung
+		-0.359 to +0.083, hit the 0.45 stop, and the load factor ranged -0.16 to
+		2.28 g. A recorded flight split the same way - quiet at 83 to 104 kt, a
+		1.2 s limit cycle at 112 to 118 kt.
+	]]
+	local schedCfg = fresh().config
+	local sa = schedCfg.altHold
+	local fast = InputController.altitudeHoldPitchCaptured(schedCfg, { demandedClimb = 0 }, 500, 500, 2, 1 / 60, 60)
+	local atRef = InputController.altitudeHoldPitchCaptured(schedCfg, { demandedClimb = 0 }, 500, 500, 2, 1 / 60, sa.refAirspeed)
+	record(
+		"Fast, the loop is quieter than at the reference speed",
+		math.abs(fast) < math.abs(atRef),
+		string.format("%.4f at 60 m/s against %.4f at the %.0f m/s reference", fast, atRef, sa.refAirspeed)
+	)
+	record(
+		"At the reference speed the schedule changes nothing",
+		math.abs(atRef - (-2 * sa.verticalSpeedGain)) < 1e-12,
+		string.format("%.4f, exactly the unscheduled law", atRef)
+	)
+	--[[
+		The scale is q, so it goes as the SQUARE of the ratio. At twice the
+		reference speed the gain must be a quarter, not a half - which is the
+		whole reason a linear guess would not have fixed this.
+	]]
+	--[[
+		Checked at 1.5x the reference and not 2x: twice the reference is 187 kt,
+		past this aeroplane's Vne, where minGainScale legitimately takes over.
+		The first version of this check asserted the square law at a speed the
+		Cessna cannot reach, and failed on correct code.
+	]]
+	local fastRatio = 1.5
+	local scaled = InputController.altitudeHoldPitchCaptured(
+		schedCfg, { demandedClimb = 0 }, 500, 500, 0.5, 1 / 60, sa.refAirspeed * fastRatio)
+	local expected = -0.5 * sa.verticalSpeedGain / (fastRatio * fastRatio)
+	record(
+		"The schedule follows dynamic pressure, not speed",
+		math.abs(scaled - expected) < 1e-12,
+		string.format("%.5f at 1.5x the reference, against %.5f for an inverse SQUARE", scaled, expected)
+	)
+	--[[
+		BELOW THE REFERENCE THE SCHEDULE DOES NOTHING, and that is the point.
+		Letting it amplify at low speed started a second oscillation in a Vy
+		climb - see maxGainScale. Slow flight gets exactly the law that was
+		already measured steady there.
+	]]
+	local slow = InputController.altitudeHoldPitchCaptured(
+		schedCfg, { demandedClimb = 0 }, 500, 500, 0.5, 1 / 60, sa.refAirspeed * 0.8)
+	record(
+		"Slow, the schedule attenuates nothing - it never amplifies",
+		math.abs(slow - (-0.5 * sa.verticalSpeedGain)) < 1e-12,
+		string.format("%.5f, exactly the unscheduled command", slow)
+	)
+	--[[
+		A 1 m/s error, not 5. Five would command 0.9 and be cut to the pitch
+		limit before the schedule was visible at all - the first version of this
+		check asserted a scheduled value against a number pitchLimit had
+		already clamped, and failed on correct code.
+	]]
+	local crawling = InputController.altitudeHoldPitchCaptured(
+		schedCfg, { demandedClimb = 0 }, 500, 500, 1, 1 / 60, 3)
+	record(
+		"...even at a crawl, where an unbounded ratio would explode",
+		math.abs(crawling - (-1 * sa.verticalSpeedGain)) < 1e-12,
+		string.format("%.4f at 3 m/s, capped at %.2fx rather than %.0fx", crawling, sa.maxGainScale, (sa.refAirspeed / 3) ^ 2)
+	)
+	local diving = InputController.altitudeHoldPitchCaptured(
+		schedCfg, { demandedClimb = 0 }, 500, 500, 1, 1 / 60, 400)
+	record(
+		"...and floored in a dive, so it never goes deaf",
+		math.abs(diving) >= math.abs(-1 * sa.verticalSpeedGain * sa.minGainScale) - 1e-12,
+		string.format("%.4f, floored at %.2fx", diving, sa.minGainScale)
+	)
+	--[[
+		A zero or absent airspeed must not divide by nothing. Both degrade to
+		the unscheduled law, which is what an older caller gets.
+	]]
+	record(
+		"No airspeed degrades to the unscheduled law rather than failing",
+		InputController.altitudeHoldPitchCaptured(schedCfg, { demandedClimb = 0 }, 500, 500, 2, 1 / 60)
+			== -2 * sa.verticalSpeedGain
+			and InputController.altitudeHoldPitchCaptured(schedCfg, { demandedClimb = 0 }, 500, 500, 2, 1 / 60, 0)
+				== -2 * sa.verticalSpeedGain,
+		"nil and zero both give the plain proportional command"
 	)
 
 	-- 9c. Stability augmentation, the lateral half -----------------------------

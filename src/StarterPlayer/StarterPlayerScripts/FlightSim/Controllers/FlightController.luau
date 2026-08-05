@@ -156,6 +156,9 @@ local flightState = {
 	bankAngle = 0,
 	rollRate = 0,
 	heading = 0,
+	-- Indicated airspeed, m/s. The altitude loop schedules its gain on this;
+	-- see InputController's altHold.refAirspeed.
+	airspeed = 0,
 }
 
 local function log(message: string, ...)
@@ -211,6 +214,14 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 	flightState.bankAngle = -atan2(cf.RightVector.Y, cf.UpVector.Y)
 	flightState.heading = atan2(cf.LookVector.X, -cf.LookVector.Z) % TAU
 	flightState.rollRate = k.angularVelocity:Dot(cf.LookVector)
+	--[[
+		One frame old, deliberately. Telemetry is written by computeForces,
+		which has not run yet this frame, so this is last frame's IAS. That is
+		the right trade: it is the SAME number the pilot's ASI shows, and a
+		gain schedule reading an airspeed 16 ms late cannot matter when the
+		speed it is tracking takes tens of seconds to change.
+	]]
+	flightState.airspeed = fm.telemetry.airspeedIndicated
 
 	-- 2. Input.
 	local controls, systems = InputController.update(r.input, dt, snapshot, flightState)
@@ -334,6 +345,17 @@ function FlightController.recordingMetrics(rows: { any }): any
 	local vsMin, vsMax = first.vs, first.vs
 	local pitchMax = 0
 	local crossings = 0
+	--[[
+		The period is measured BETWEEN CROSSINGS, not across the whole window.
+
+		Dividing the full duration by the crossing count mixes a clean integer
+		(how many half-cycles) with a ragged one (a window that starts and ends
+		mid-cycle), and the leftovers at each end bias the answer: a known 2.0 s
+		sine sampled over 4 s reported 2.66 s. Between the first and last
+		crossing the half-cycle count is exact, so the estimate is too.
+	]]
+	local firstCrossing: number? = nil
+	local lastCrossing: number? = nil
 	local prevSign = if first.vs >= 0 then 1 else -1
 	for i = 2, #rows do
 		local r = rows[i]
@@ -346,10 +368,15 @@ function FlightController.recordingMetrics(rows: { any }): any
 		local sign = if r.vs >= 0 then 1 else -1
 		if sign ~= prevSign then
 			crossings += 1
+			if firstCrossing == nil then
+				firstCrossing = r.t
+			end
+			lastCrossing = r.t
 			prevSign = sign
 		end
 	end
 	local duration = last.t - first.t
+	local spanned = if firstCrossing and lastCrossing then lastCrossing - firstCrossing else 0
 	return {
 		altMin = altMin,
 		altMax = altMax,
@@ -358,7 +385,9 @@ function FlightController.recordingMetrics(rows: { any }): any
 		pitchMax = pitchMax,
 		crossings = crossings,
 		duration = duration,
-		period = if crossings >= 2 then 2 * duration / crossings else nil,
+		-- Two crossings bound one half-cycle, so (crossings - 1) half-cycles
+		-- span `spanned` seconds and a full period is twice that.
+		period = if crossings >= 2 and spanned > 0 then 2 * spanned / (crossings - 1) else nil,
 	}
 end
 
@@ -497,6 +526,39 @@ function FlightController.setCharacterNeutralised(character: Model?, neutralised
 end
 
 local setCharacterNeutralised = FlightController.setCharacterNeutralised
+
+--[[
+	Human proportions, for the pilot character only.
+
+	The world is 1 stud = 1 m and the aircraft are real scale, but a default
+	Roblox avatar is ~5.7 studs tall - roughly 3x a real human - so it towers
+	over a parked Cessna. ScaleTo() brings it down toward ~1.75 m. The engine's
+	floor is 0.4, so at 0.4 a default R15 measures ~2.3 m: closer, but not
+	exact, and that is the closest reachable.
+
+	COSMETIC AND LOCAL, and deliberately so. The seated pilot is already
+	invisible, massless and non-collidable (setCharacterNeutralised above), so
+	scaling cannot disturb the aircraft's mass budget; the cockpit eye is
+	anchored to the PilotSeat, not the head (CameraController.EYE_OFFSET), so
+	the view does not move; and property/scale changes from the client do not
+	replicate, so other players are unaffected. Nothing here touches the
+	physics, the world scale, or the unit conversions.
+]]
+local HUMAN_SCALE = 0.4
+
+function FlightController.scaleForHumanProportions(character: Model?)
+	if not character then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return
+	end
+	-- ScaleTo can throw if the rig is not loaded yet; harmless to skip.
+	pcall(function()
+		humanoid:ScaleTo(HUMAN_SCALE)
+	end)
+end
 
 --[[
 	Where the yoke is, in screen pixels, and the screen it is measured against.
@@ -989,6 +1051,8 @@ function FlightController.Init()
 		end
 		local humanoid = character:WaitForChild("Humanoid", 10)
 		if humanoid and humanoid:IsA("Humanoid") then
+			-- A fresh character after respawn starts at full size; scale every one.
+			FlightController.scaleForHumanProportions(character)
 			diedConnection = humanoid.Died:Connect(function()
 				FlightController.requestAircraft()
 			end)
@@ -1315,6 +1379,19 @@ function FlightController.runTests(): (boolean, { any })
 		"A nil character is a no-op, not an error",
 		pcall(FlightController.setCharacterNeutralised, nil, true),
 		"returned without erroring"
+	)
+
+	-- 4c. Scaling the pilot to human proportions is a guarded no-op when the
+	-- rig is not there to scale.
+	record(
+		"A nil character scales as a no-op, not an error",
+		pcall(FlightController.scaleForHumanProportions, nil),
+		"returned without erroring"
+	)
+	record(
+		"A character with no Humanoid scales as a no-op",
+		pcall(FlightController.scaleForHumanProportions, fakeCharacter),
+		string.format("Humanoid found: %s", tostring(fakeCharacter:FindFirstChildOfClass("Humanoid")))
 	)
 
 	fakeCharacter:Destroy()

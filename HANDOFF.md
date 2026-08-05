@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-04
 
-**All 679 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 690 checks green across 17 suites.** Fourteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
 
 🌍 **PHASE 3 HAS STARTED. The world is real terrain now, and the airport sits on it at 250 m (§20).** The baseplate is retired at run time, and the y = 0 assumption §14 called the largest known trap in Phase 3 is gone: `AirportService` declares an elevation and terrain is fitted to it. The height field blends **multiple** pads by weight and is built in 16 m blocks — both forced by measurement, because nearest-pad blending measured a **45.8 m cliff** and 64 m blocks a **21.5 m staircase** between airports at different elevations.
 
@@ -178,8 +178,8 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 102/102 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 35/35 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 38/38 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
@@ -664,6 +664,10 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **A suite that depends on another service having run is flaky, not passing.** `TerrainService`'s pavement check read the terrain height and failed because it assumed `AirportService.Init()` had already built a runway — so it passed or failed depending on how far through booting the server was. Build what you need, as every other suite here does.
 - **Rojo can hold a connect-time snapshot of ONE instance while syncing everything else.** `init.server.luau` stayed stale through a file edit, a case-rename and a full `rojo serve` restart, while every other file in the project updated normally and `rojo build` contained the change. When exactly one file will not move, it is the plugin, not the server: **reconnect the plugin**. Diagnose with `rojo build` and grep for a string unique to that file — grepping for a symbol that also appears in other files will tell you the build is fine when it is not the question you asked.
 - **`Workspace.Gravity` does the weight.** Never add a gravity force in the flight model — `AeroForce` carries aerodynamic and propulsive force only. This is also why `telemetry.loadFactor` reads 1 g in level flight without any special-casing: it is exactly what a real accelerometer measures.
+- **A Play restart DOES load edited modules — the "you must restart Studio" claim is a myth.** Entering Play creates a fresh DataModel with a clean module cache. Verified directly (§29) after the belief had already cost real time. What *is* cached separately is the **Command Bar**: `require()` there returns a **second copy** of a module, so a controller's `rig` is `nil` and `getSystems()`/`isFlying()` tell you nothing about the running aircraft. Observe the real one through side effects — GUI `Enabled` state, console output.
+- **The test harness has been wrong more often than the code — five times in three sessions.** Terrain written outside `Terrain.MaxExtents`; `Engine.start()` never called; throttle left at 0.000 because `IC.update()` derives it from held keys; pitch inertia *guessed* at 1825 kg·m² when the model has **4922**; and airspeed force-held in a way that broke the energy balance and produced +50 m/s of climb. **Print the entry condition** — speed, vertical speed, throttle, thrust, attitude — and read it before believing anything downstream of it.
+- **Assert inside the range the law is defined for.** Three assertions have now failed on *correct* code because the input was outside it: a heading error of exactly 180° (where the shortest turn is genuinely ambiguous), a gain-schedule check at 187 kt (past Vne, where the floor legitimately takes over), and a clamp check whose command `pitchLimit` had already cut. Say in the test why the range was chosen.
+- **Every derivative term tried on the altitude loop has made it worse — three so far (§29).** Any derivative here is taken on a signal that already lags the elevator by the time the nose moves and the wing answers, which at this model's pitch inertia is most of a second, so it arrives *in phase* with the motion instead of against it. A regression test pins the loop's shape; if you are about to add a fourth, read §29 first.
 
 ---
 
@@ -1800,3 +1804,126 @@ Both are gone: `rawPitch` and `rawRoll` are forced to 0 while `systems.altitudeH
 **Tests**: the five disconnect/reference tests are replaced by four that assert the opposite behaviour end to end — a cursor slammed into the corner while engaged changes pitch and roll by nothing and the mode stays engaged; R disengages; and after disengagement the same cursor commands the aircraft again. InputController 102 → 101 checks.
 
 ⚠️ **Not yet flown, and not yet re-run in Studio.** These are unit-level assertions; run `InputController.runTests()` and fly it — engage level (should hold without hunting), engage mid-climb (should level off without banging), and jam the cursor around while engaged (must do nothing).
+
+---
+
+## 29. The porpoise was a gain-schedule bug (2026-08-05)
+
+**690/690 across 17 suites**; `InputController` → 110, `FlightController` → 38.
+
+The reported symptom, across several sessions: altitude hold **porpoises** — pure pitch, load factor swinging roughly 0 to 2.5 g, no roll or yaw, and (as it seemed) only over open water.
+
+### The cause: loop gain rises with the SQUARE of airspeed
+
+`verticalSpeedGain` converts a vertical-speed error into an **elevator deflection**. But a deflection is not a pitching moment — the moment it makes is proportional to **dynamic pressure**. So the loop gain climbs with V², and somewhere above about 110 kt it crosses the stability boundary and settles into a limit cycle instead of damping out.
+
+**The pilot's own flight recording proved it.** Two dumps, one session, same code, same aeroplane:
+
+| recording | IAS | pitch command | behaviour |
+|---|---|---|---|
+| first | 83–104 kt | max \|0.127\| | calm |
+| second | **112–118 kt** | **\|0.450\| — SATURATING** | 1.2 s limit cycle, ±5° attitude |
+
+Bank held +0.40° and heading 344.9° in both — **pure pitch**, exactly as reported. Reproduced in the harness by engaging with a target below and letting the aeroplane accelerate into the descent: calm at 94–111 kt with the elevator inside 0.16, then at 115–116 kt the command swung −0.359 → +0.083, reached the stop, and the load factor ranged **−0.16 to 2.28 g**.
+
+**The "only over water" correlation was incidental.** Ground effect is inert above ~11 m and the porpoise happens at altitude. What actually correlated was **speed** — the open-water legs were the fast ones.
+
+### The fix: schedule the gain on dynamic pressure
+
+`altitudeHoldPitchCaptured` now takes an optional `airspeedMs` and divides the gain by q, normalised to `refAirspeed`. **Indicated** airspeed is exactly the right variable: it already carries air density, so the schedule is altitude-correct for free.
+
+```lua
+refAirspeed  = 48.0,  -- m/s, about 93 kt: the middle of the measured calm band
+minGainScale = 0.35,  -- reached near 158 kt, just under Vne; stops it going deaf in a dive
+maxGainScale = 1.0,   -- ATTENUATE ONLY
+```
+
+⚠️ **`maxGainScale` is 1.0 on purpose — the schedule must never amplify.** The first version allowed 2.0, which raised the gain 1.6× in a 74 kt Vy climb and started a **second** oscillation: 20 vertical-speed crossings in a minute, elevator at 0.448, load factor 0.55–1.44 g. The unscheduled gain was already steady everywhere from 69 to 111 kt; amplifying where nothing was wrong only created a new porpoise. Below `refAirspeed` the law is now *exactly* the unscheduled one.
+
+| case (60 s each) | G swing before | after | crossings | max pitch |
+|---|---|---|---|---|
+| capture 40 m down | **−0.18 … +2.33** | **+0.81 … +1.08** | 60 → 2 | 0.450 → 0.184 |
+| capture 40 m up | −0.10 … +2.23 | +0.81 … +1.10 | 18 → **0** | 0.450 → 0.157 |
+| Vy climb | 0.60 … 1.10 | 0.60 … 1.10 | 2 → 2 | 0.254 → 0.254 |
+| 100 kt level | 1.00 … 1.01 | 1.00 … 1.01 | 1 → 1 | 0.009 → 0.009 |
+
+The Vy and level rows are **identical** before and after — that is the attenuate-only rule working.
+
+`FlightState` gained `airspeed`; `FlightController` fills it from `telemetry.airspeedIndicated`, deliberately one frame old (telemetry is written by `computeForces`, which has not run yet). That is the right trade: it is the same number the ASI shows, and a schedule reading IAS 16 ms late cannot matter when the speed takes tens of seconds to move.
+
+### ⚠️ OUTSTANDING: it holds level, but ~29 m LOW
+
+Measured over 180 s: vertical speed 0.003 m/s, load factor 1.00, dead level — and **29 m below target, not closing**.
+
+That is **proportional droop**. With no integrator, the loop needs a standing vertical-speed error to hold the elevator where level flight requires it, and the altitude error is what produces it. It existed before (~18 m); attenuating the gain widens it to ~29 m at 120 kt.
+
+Removing it needs an **integrator on altitude error**, deliberately NOT added here — an integrator is the same class of term that caused the regression below, and it must be measured against the full speed sweep before it ships.
+
+### The damping term from `40c197c` was reverted — it caused a porpoise of its own
+
+`40c197c` added a low-pass-filtered derivative on the vertical-speed error (`verticalDamping` 0.1, `vsFilterTau` 0.15, `dampingLimit` 0.2). Measured against the real aerodynamics with the model's **own** pitch inertia, it turned a dead-steady autopilot into a violent limit cycle:
+
+| | G swing | period | max pitch | error |
+|---|---|---|---|---|
+| damping OFF | **0.97…1.04** | — | **0.022** | **0.2 m** |
+| damping 0.1 (shipped) | **0.10…1.90** | 1.2 s | 0.450 | 1.5 m |
+| damping 0.3 | 0.03…1.94 | 1.1 s | 0.450 | 3.4 m |
+
+**That is the third derivative term to fail on this loop** (after raw vertical acceleration, §26 notes). The reason is structural and worth writing down once: *any* derivative here is taken on a signal that already lags the elevator by the time it takes the nose to move and the wing to answer — at this aircraft's pitch inertia, most of a second. A term meant to oppose the motion arrives pointing the same way as it.
+
+**A regression test now pins the loop's SHAPE**, not a number: the command must equal `(demand − VS) × verticalSpeedGain × scale`, and the capture must carry no history. A fourth attempt at a derivative will fail there and send whoever tries it to this section.
+
+### ⚠️ The modelled aircraft has 2.7× the pitch inertia of a real 172
+
+Measured from the built model (exact box tensors plus parallel axis):
+
+| | model | real C172 |
+|---|---|---|
+| Ixx roll | 2951 | ~1285 |
+| **Iyy pitch** | **4922** | **~1825** |
+| Izz yaw | 2535 | ~2667 |
+
+This is a genuine fidelity gap from the crude box layout, and it **predisposes any pitch loop to lag-driven oscillation** — it is why derivative terms keep failing here. Fixing it is Phase 4 work (remodelling), not something to patch in the autopilot. **Record it rather than rediscovering it.**
+
+### The flight recorder (kept from `40c197c`)
+
+`FlightController.recordFlightStep` records while altitude hold is engaged, gated on `Constants.DEBUG.ENABLED`.
+
+- Press **R** → `[FlightRec] recording altitude hold...` prints immediately. **If that line does not appear, the recorder is not live** — check you are seated (the loop only runs in the aircraft) and that the Output window's filter is not hiding Print/Client messages.
+- Live summaries every 5 s; press **R** again to dump the full CSV: `t,pitch,att_deg,bank_deg,hdg_deg,alt_m,vs_mps,ias_kt`.
+- The `PITCH` summary line flags `SATURATING` at ≥ 0.44.
+
+Its period estimator was wrong and is fixed: dividing the whole window by the crossing count mixed a clean integer (half-cycles) with a ragged one (a window starting and ending mid-cycle), and reported **2.66 s for a known 2.0 s sine**. It now measures between the first and last crossing, where the half-cycle count is exact.
+
+### ❌ MYTH, CORRECTED: a Play restart DOES load new code
+
+Earlier notes claimed only a full Studio-application restart picks up edited modules. **That is wrong and cost real time.** Verified directly: entering Play creates a fresh DataModel with a clean module cache, and `require` returns the new source. Stop and start Play — that is enough.
+
+What *is* true (§7): **the Command Bar has its own cache**. `require(FlightController)` there returns a **second copy** with `rig = nil`, so `getSystems()` and `isFlying()` report nothing about the running aircraft. Observe the real controller through side effects instead — the HUD's `Enabled` state, or its console output.
+
+### Three more harness faults — that is five in three sessions
+
+1. **Throttle at 0.000.** `IC.update()` derives throttle from held keys and none were held, so the aeroplane glided at idle and every trace showed a sink that was pure artefact.
+2. **Guessed pitch inertia.** The harness assumed 1825 kg·m² from published C172 data when the model actually has 4922 — so it flew an aeroplane 2.7× crisper than the real one and **could not reproduce the bug at all**.
+3. **Forcing airspeed.** A hack that re-injected horizontal velocity each frame to hold a test speed broke the energy balance and produced a vertical speed of +50 m/s.
+
+**Check the harness before believing the result** (§7). The standing fix: **print the entry condition** — speed, vertical speed, throttle, thrust, attitude — and read it, rather than assuming the setup did what it was told.
+
+### And three more wrong assertions
+
+All three failed on *correct* code because the test input was outside the range being asserted:
+- a heading error of **exactly 180°**, where the shortest way round is genuinely ambiguous and `angleDelta` returns −π as legitimately as +π;
+- the square law checked at **2× the reference speed** — 187 kt, past Vne, where `minGainScale` correctly takes over;
+- the low-speed cap checked with a **5 m/s** error, whose command (0.9) `pitchLimit` had already clamped before the schedule could show.
+
+**Assert inside the range the law is defined for**, and say in the test why that range was chosen.
+
+### How to test it
+
+```lua
+require(game.Players.LocalPlayer.PlayerScripts.FlightSim.Controls.InputController).runTests()  -- Client
+```
+
+In the air, and **fast** — this bug only shows above ~110 kt: get to 115–120 kt, press **R**, and it must hold steady instead of hunting. Then engage level, engage mid-climb, and kick the rudder while engaged (it must yaw, and hold the new heading on release). Expect it to settle **low** — see the droop above.
+
+⚠️ **Not yet flown.** Every number here is closed-loop against the real aerodynamics with the engine running, the throttle commanded and the model's measured inertia — but a pilot has not pressed R in the air since the change.

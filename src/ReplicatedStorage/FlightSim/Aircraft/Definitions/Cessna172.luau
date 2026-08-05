@@ -503,6 +503,15 @@ Cessna172.limits = {
 
 local WHITE = Color3.fromRGB(240, 240, 243)
 local TRIM = Color3.fromRGB(38, 88, 168)
+--[[
+	The imported shell's own colour, measured off the MeshPart.
+
+	The OBJ export carried no textures, so the mesh arrives as flat grey. A
+	white flap and a blue rudder on a grey aeroplane read as slabs bolted on
+	rather than as control surfaces, so the mesh poses below repaint them to
+	match. When textures arrive this is the one constant to revisit.
+]]
+local MESH_GREY = Color3.fromRGB(163, 162, 165)
 local DARK = Color3.fromRGB(38, 38, 42)
 local GLASS = Color3.fromRGB(140, 170, 195)
 local METAL = Color3.fromRGB(165, 168, 175)
@@ -544,6 +553,17 @@ local function addPair(spec: any)
 		end
 		hinge.sign = (hinge.sign or 1) * (hinge.mirrorSign or 1)
 		left.hinge = hinge
+	end
+	-- The mesh-shell pose mirrors the same way the base pose does.
+	if spec.meshPose then
+		local pose = table.clone(spec.meshPose)
+		if pose.position then
+			pose.position = Vector3.new(-pose.position.X, pose.position.Y, pose.position.Z)
+		end
+		if pose.rotation then
+			pose.rotation = Vector3.new(pose.rotation.X, -pose.rotation.Y, -pose.rotation.Z)
+		end
+		left.meshPose = pose
 	end
 	add(left)
 end
@@ -681,6 +701,9 @@ add({
 	position = Vector3.new(0, 0.12, -3.10),
 	color = DARK,
 	hinge = { axis = "Z", channel = "propeller" },
+	-- The mesh's spinner tip is a single vertex on the centreline at
+	-- z = -3.066, y = 0.231; the blade sits just ahead of it.
+	meshPose = { position = Vector3.new(0, 0.231, -3.09) },
 })
 add({
 	name = "PropellerDisc",
@@ -694,6 +717,7 @@ add({
 	-- Paired to the propeller hinge: the blade fades out INTO this disc, so
 	-- dropping it with the rest of the shell would leave the blur half-done.
 	keepWithMesh = true,
+	meshPose = { position = Vector3.new(0, 0.231, -3.07) },
 })
 
 --[[
@@ -761,6 +785,20 @@ add({
 	Flaps deflect DOWN only, to 30 degrees, and both together. Ailerons
 	deflect 20 degrees and OPPOSE each other - hence mirrorSign.
 ]]
+--[[
+	`meshPose` on each surface below is where it sits on the IMPORTED exterior,
+	measured off the mesh's own vertices rather than estimated:
+
+	  wing trailing edge   z 0.608 at |x| 2.8, z 0.236 at |x| 5.2 (2.46 dihedral)
+	  tailplane            z 3.587..4.378 at y -0.115, halfspan 1.746
+	  rudder trailing edge z 5.196
+	  spinner tip          z -3.066 at y 0.231
+
+	SIZES ARE DELIBERATELY UNCHANGED. Each hinge's offset is half its own
+	chord, so resizing a surface here would silently move its hinge line off
+	the leading edge and make it rotate about the wrong axis. Only position and
+	rotation move.
+]]
 addPair({
 	name = "Flap",
 	size = Vector3.new(2.07, 0.10, 0.42),
@@ -768,6 +806,11 @@ addPair({
 	rotation = Vector3.new(0, 0, DIHEDRAL),
 	color = WHITE,
 	hinge = { axis = "X", channel = "flaps", offset = Vector3.new(0, 0, -0.21), maxDeg = 30 },
+	meshPose = {
+		position = Vector3.new(1.65, 0.700, 0.490),
+		rotation = Vector3.new(0, 0, 2.46),
+		color = MESH_GREY,
+	},
 })
 addPair({
 	name = "Aileron",
@@ -791,6 +834,11 @@ addPair({
 		]]
 		sign = -1,
 		mirrorSign = -1,
+	},
+	meshPose = {
+		position = Vector3.new(4.15, 0.780, 0.219),
+		rotation = Vector3.new(0, 0, 2.46),
+		color = MESH_GREY,
 	},
 })
 
@@ -832,6 +880,7 @@ addPair({
 		maxDeg = 22,
 		sign = -1, -- stick back is elevator UP
 	},
+	meshPose = { position = Vector3.new(0.95, -0.115, 4.148), color = MESH_GREY },
 })
 
 --[[
@@ -852,6 +901,7 @@ add({
 		maxDeg = 15,
 		sign = 1,
 	},
+	meshPose = { position = Vector3.new(0.62, -0.115, 4.278), color = MESH_GREY },
 })
 
 add({
@@ -901,6 +951,7 @@ add({
 		offset = Vector3.new(0, 0, -0.24),
 		maxDeg = 22,
 	},
+	meshPose = { position = Vector3.new(0, 0.78, 4.956), color = MESH_GREY },
 })
 
 --[[
@@ -1005,7 +1056,42 @@ Cessna172.model = {
 		fallback if the import is rejected, and it costs one boolean to have
 		both.
 	]]
-	exteriorFromMesh = false,
+	exteriorFromMesh = true,
+
+	--[[
+		The imported Cessna 172, as a visual shell only (CREDITS.md).
+
+		⚠️ COSMETIC. Massless, collides with nothing, welded to the structural
+		root. The invisible boxes above are still the aeroplane: they carry
+		every kilogram, every aerodynamic reference point and all the
+		collision. AircraftBuilder.measure() skips massless parts, so the suite
+		proves the mass budget is untouched rather than trusting it.
+
+		assetId is the MODEL asset, which is what InsertService:LoadAsset
+		takes. The MeshId inside it is a different id (77050671277064) and is
+		NOT interchangeable - CreateMeshPartAsync rejects the model id and
+		MeshId is not scriptable at all.
+
+		THE SCALE IS FITTED, NOT STATED. The builder measures the mesh and fits
+		length and span together, so re-exporting at a different scale corrects
+		itself. As imported the mesh is 12.598 x 2.962 x 9.443 studs against a
+		real 8.28 x 11.00 x 2.72 m aeroplane - about 14% oversized.
+	]]
+	meshShell = {
+		name = "MeshShell",
+		assetId = 114080937764105,
+		-- Published 172S dimensions. Length and span only: height is left to
+		-- fall where the uniform scale puts it rather than being stretched.
+		targetLengthM = 8.28,
+		targetSpanM = 11.00,
+		-- The wheel contact plane, in datum coordinates: the structural wheels
+		-- are centred at y = -0.95 with a 0.40 m diameter, so they touch at
+		-- -1.15. The shell's underside is put exactly there.
+		wheelBottomY = -1.15,
+		-- Matches the primitive skin's own bounding-box centre, which is
+		-- already aligned to the structure.
+		centreZ = 1.065,
+	},
 
 	parts = {
 		-- Density 87. Engine, mount, propeller and cowling - the heaviest

@@ -2,7 +2,10 @@
 --[[
 	CameraController
 	----------------
-	Three views of the aeroplane, cycled with V and held with C.
+	Three views of the aeroplane, cycled with V and held with C. On the ground
+	it does NOT take the camera - it only sizes the zoom range to the
+	scaled-down pilot and leaves Roblox driving, so orbiting and zoom keep
+	working on foot (see the ground framing block).
 
 	It consumes two fields that InputController has been producing since Phase 1
 	with nothing on the other end: `systems.viewIndex` and `systems.cameraHold`.
@@ -134,6 +137,33 @@ local REACQUIRE_TIME = 0.28
 local FREE_MIN_ZOOM = 8
 local FREE_MAX_ZOOM = 400
 
+--[[
+	Ground framing, done with ZOOM DISTANCE rather than a scripted camera.
+
+	The problem is real: the pilot is person-sized at 1.75 m (0.339x the stock
+	rig) and Roblox's default camera does not scale its framing with the
+	character, so a scaled pilot stands tiny in frame.
+
+	⚠️ THE FIRST FIX FOR THIS DROVE THE CAMERA DIRECTLY, AND COST THE MOUSE.
+	Writing camera.CFrame every frame requires CameraType = Scriptable, and a
+	Scriptable camera is not Roblox's camera - so right-drag orbiting and
+	scroll zoom both stop existing the moment you step out of the aeroplane.
+	That was reported as "there is no mouse orbiting", and it is inherent to
+	the approach rather than a detail that could be patched.
+
+	So the camera stays Roblox's on the ground and the FRAMING is fixed
+	instead. Every zoom distance is multiplied by the character's own model
+	scale, which is exactly the factor the rig was shrunk by - so a 0.339x
+	pilot is framed identically to an unscaled one, and orbiting, zooming and
+	first person all still work because Roblox is still driving.
+
+	This does not contradict the yoke rule above. That rule is about the camera
+	never reading the mouse WHILE FLYING, where the cursor is the control
+	column. On foot there is no yoke to fight over.
+]]
+local GROUND_DEFAULT_ZOOM = 12.5 -- Roblox's own starting third-person distance
+local GROUND_ZOOM_SETTLE = 0.15 -- seconds to hold the pinch that sets the zoom
+
 -- =========================================================================
 -- STATE
 -- =========================================================================
@@ -156,6 +186,14 @@ local savedMaxZoom: number? = nil
 
 -- Chase carries its position between frames; that is what the smoothing is.
 local chasePosition: Vector3? = nil
+
+-- The zoom range the place was configured with, captured before anything
+-- scales it, so the scaling is always applied to the original rather than
+-- compounding on a value this module already wrote.
+local baseMinZoom: number? = nil
+local baseMaxZoom: number? = nil
+-- The character whose scale the current zoom range was computed from.
+local groundSubject: Model? = nil
 
 -- Camera hold (C). While held, the camera keeps the world orientation and the
 -- world-space offset it had when C went down.
@@ -218,6 +256,75 @@ function CameraController.chaseTarget(aircraftCFrame: CFrame): (Vector3, CFrame)
 	end
 
 	return cameraPosition, CFrame.lookAt(cameraPosition, focus, up)
+end
+
+--[[
+	The zoom range for a pilot at `modelScale`, as (min, max, default).
+
+	Pure, so the proportionality can be asserted without a character. Scaling
+	all three by the same factor is what makes a shrunken pilot fill the frame
+	exactly as a stock one does, at every zoom level rather than only at the
+	default.
+
+	`base` values are the place's own configured limits, so a game that has
+	already restricted zoom keeps its restriction, scaled.
+]]
+function CameraController.groundZoomRange(
+	modelScale: number,
+	baseMin: number,
+	baseMax: number
+): (number, number, number)
+	local scale = math.clamp(modelScale, 0.01, 1)
+	return baseMin * scale, baseMax * scale, GROUND_DEFAULT_ZOOM * scale
+end
+
+--[[
+	Size the on-foot zoom range to the pilot. Roblox keeps the camera.
+
+	⚠️ THE ZOOM IS SET WITH A PINCH, because Roblox exposes no way to write the
+	camera's current zoom distance. Dropping the MAXIMUM below the current zoom
+	forces the camera in; raising it again a moment later leaves it where it
+	was pushed while giving the player back the freedom to zoom out. That is
+	the only scriptable route to it, and it is what GROUND_ZOOM_SETTLE is for.
+
+	Re-applied whenever the character's SCALE changes, not just when the
+	character does. The avatar converges on 1.75 m over about a second after
+	spawning (§30), so a single application at spawn would size the zoom for an
+	unscaled rig and leave the pilot tiny anyway.
+]]
+local groundScale: number? = nil
+
+local function frameGroundPilot(character: Model?)
+	if not character or baseMinZoom == nil or baseMaxZoom == nil then
+		return
+	end
+
+	local scale = 1
+	local ok, result = pcall(function()
+		return character:GetScale()
+	end)
+	if ok and type(result) == "number" and result > 0 then
+		scale = result
+	end
+
+	if groundSubject == character and groundScale and math.abs(scale - groundScale) < 1e-3 then
+		return
+	end
+	groundSubject = character
+	groundScale = scale
+
+	local minZoom, maxZoom, defaultZoom =
+		CameraController.groundZoomRange(scale, baseMinZoom, baseMaxZoom)
+	player.CameraMinZoomDistance = minZoom
+	player.CameraMaxZoomDistance = defaultZoom
+
+	task.delay(GROUND_ZOOM_SETTLE, function()
+		-- Free view owns the zoom limits while it is active (see enterFreeView),
+		-- and a later re-apply supersedes this one.
+		if not freeViewActive and groundSubject == character and groundScale == scale then
+			player.CameraMaxZoomDistance = maxZoom
+		end
+	end)
 end
 
 --[[
@@ -366,6 +473,8 @@ local function release()
 
 	attachedModel = nil
 	chasePosition = nil
+	groundSubject = nil
+	groundScale = nil
 	holding = false
 	heldRotation, heldOffset = nil, nil
 	reacquire = 1
@@ -464,15 +573,31 @@ local function onRenderStep(dt: number)
 	local systems = FlightController.getSystems()
 
 	--[[
-		Only while the pilot is actually flying it. Standing on the apron
-		looking at the aeroplane is the character's business, not ours - and
-		this is also what guarantees a destroyed aircraft cannot be held onto,
-		because the answer becomes nil the frame it goes away.
+		Only while the pilot is actually flying it. On the ground, the camera
+		still belongs here - the scale-aware ground camera frames the scaled
+		pilot at a natural distance (see the ground tuning block). Either way,
+		this branch is what guarantees a destroyed aircraft cannot be held
+		onto, because the answer becomes nil the frame it goes away.
 	]]
 	if not (model and model.Parent and systems and FlightController.isFlying()) then
 		if attachedModel then
 			release()
 		end
+		--[[
+			On foot the camera belongs to ROBLOX, which is what keeps
+			right-drag orbiting and scroll zoom alive. All this branch does is
+			size the zoom range to the pilot, and hand the camera back if
+			anything has left it Scriptable.
+		]]
+		if camera.CameraType == Enum.CameraType.Scriptable then
+			camera.CameraType = Enum.CameraType.Custom
+			local character = player.Character
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				camera.CameraSubject = humanoid
+			end
+		end
+		frameGroundPilot(player.Character)
 		return
 	end
 
@@ -527,6 +652,17 @@ function CameraController.Init()
 		return
 	end
 	initialised = true
+
+	--[[
+		The place's own zoom limits, captured BEFORE anything scales them.
+
+		frameGroundPilot multiplies these by the pilot's model scale, so it has
+		to read the original rather than whatever it last wrote - otherwise
+		every re-apply would scale an already-scaled value and the camera would
+		walk in toward the pilot's face.
+	]]
+	baseMinZoom = player.CameraMinZoomDistance
+	baseMaxZoom = player.CameraMaxZoomDistance
 
 	if #CameraController.VIEWS ~= InputController.DEFAULTS.viewCount then
 		warn(string.format(
@@ -859,6 +995,57 @@ function CameraController.runTests(): (boolean, { any })
 		string.format("eye %.2f m above the aircraft origin", eyeWorld.Y - built:GetPivot().Position.Y)
 	)
 
+	-- 8. Ground framing ----------------------------------------------------------
+	--[[
+		THE test that pins why this is a zoom range and not a scripted camera.
+
+		A scripted ground camera needs CameraType = Scriptable, which is not
+		Roblox's camera - so right-drag orbiting and scroll zoom stop existing
+		the moment the pilot steps out. That was shipped once and reported as
+		"there is no mouse orbiting". Framing by zoom distance leaves Roblox
+		driving, so the mouse keeps working.
+	]]
+	local BASE_MIN, BASE_MAX = 0.5, 128
+	local sMin, sMax, sDefault = CameraController.groundZoomRange(0.339, BASE_MIN, BASE_MAX)
+	record(
+		"A scaled pilot is framed closer, proportionally",
+		math.abs(sDefault - 12.5 * 0.339) < 1e-9 and sDefault < 12.5,
+		string.format("0.339x pilot framed at %.2f studs against a stock 12.50", sDefault)
+	)
+	record(
+		"The whole zoom range scales, not just the default",
+		math.abs(sMin - BASE_MIN * 0.339) < 1e-9 and math.abs(sMax - BASE_MAX * 0.339) < 1e-9,
+		string.format("min %.3f, max %.2f for a 0.339x pilot", sMin, sMax)
+	)
+	--[[
+		An unscaled pilot must be left exactly as Roblox would have it, or this
+		would quietly re-frame every game that never scales its avatar.
+	]]
+	local uMin, uMax, uDefault = CameraController.groundZoomRange(1, BASE_MIN, BASE_MAX)
+	record(
+		"An unscaled pilot keeps the place's own zoom range",
+		uMin == BASE_MIN and uMax == BASE_MAX and uDefault == 12.5,
+		string.format("min %.2f, max %.2f, default %.2f unchanged", uMin, uMax, uDefault)
+	)
+	record(
+		"The framing is proportional at any scale",
+		math.abs(
+			select(3, CameraController.groundZoomRange(0.5, BASE_MIN, BASE_MAX))
+			- 2 * select(3, CameraController.groundZoomRange(0.25, BASE_MIN, BASE_MAX))
+		) < 1e-9,
+		"halving the pilot halves every distance"
+	)
+	--[[
+		A nonsense scale must not produce a zero or negative zoom range, which
+		Roblox rejects outright and which would leave the camera stuck.
+	]]
+	local zMin, zMax = CameraController.groundZoomRange(0, BASE_MIN, BASE_MAX)
+	record(
+		"A zero scale cannot produce a zero zoom range",
+		zMin > 0 and zMax > 0,
+		string.format("clamped to min %.4f, max %.3f", zMin, zMax)
+	)
+
 	end
 
 	local ok, err = pcall(body)
@@ -869,6 +1056,8 @@ function CameraController.runTests(): (boolean, { any })
 	-- The suite drives the module's own smoothing state; reset it so a test run
 	-- cannot leave a live camera lerping from a synthetic position.
 	chasePosition = nil
+	groundSubject = nil
+	groundScale = nil
 	holding = false
 	heldRotation, heldOffset = nil, nil
 	reacquire = 1

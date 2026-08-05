@@ -32,15 +32,33 @@ NEXT TASK — PHASE 4: MAKE THE CESSNA LOOK LIKE A CESSNA (§14 Phase 4 + §19).
 ============================================================================
 THIS PHASE IS MODELLING, NOT PHYSICS. The aero offsets, mass layout, CoM and static margin MUST NOT move — §4's published figures are all measured against the current budget, FlightModel caches geometry at spawn, and if the model is redrawn the definition is re-verified, not assumed. The modelled aircraft uses exactly the current mass budget. Anything that would move mass or aero is a decision point, not an assumption — raise it with the pilot first.
 
-MESH STATUS (2026-08-05): the pilot is importing a detailed Cessna 172 model
-from Sketchfab (by KOG_THORNS, CC BY 4.0 — credited in CREDITS.md). It is
-311k triangles, so it is being decimated in Blender to ~50–100k before import
-(Roblox rejects/decimates >20k on upload), and it has NOT landed in Studio yet.
-Do NOT block on it. The plan when it arrives: import as a MeshPart/Model with
-its own asset ID, parent it to the existing physics assembly as a VISUAL SHELL,
-textures applied, collision OFF (the invisible physics parts keep the current
-layout and do all colliding/mass — see "Physics-first, cosmetic-second" below).
-Nothing about the physics definition changes.
+MESH STATUS (2026-08-05): the pilot has imported the detailed Cessna 172
+model into Studio. It is the Sketchfab model by KOG_THORNS (CC BY 4.0,
+credited in CREDITS.md). Details you asked for:
+- Asset ID: rbxassetid://114080937764105 (imported in Studio via Asset Manager).
+- It is a SINGLE LUMP — the pilot joined all ~58 objects in Blender and
+  decimated (68,008 faces → Roblox auto-decimated on import), so the ailerons/
+  elevator/rudder are NOT separate meshes. Use the "lump" path you proposed:
+  the mesh is the static shell, and our existing primitive control surfaces
+  keep moving over it. Do not try to hinge the mesh's surfaces.
+- Facing/scale: imported with World Forward = front, World Up = up, so it
+  already faces −Z forward, +X right, +Y up. BUT it is oversized: measures
+  12.60 (X/span) × 2.96 (Y/tall) × 9.44 (Z/length) studs. The 172S should be
+  ~11.0 × 2.7 × 8.3 m (1 stud = 1 m). Rescale the shell to match — anchor the
+  scale on the 8.3 m fuselage length (factor ~0.879) and check the span lands
+  near 11 m; if proportions are slightly off, prefer matching the fuselage and
+  span, and tell the pilot the discrepancy rather than silently choosing.
+- MeshPart triangle cap: Roblox auto-decimated the import to ≤21k, so the cap
+  is already satisfied — verify the actual count in Studio (do not assume) and
+  report it. Do NOT re-import a >21k split unless the visual loss is obvious.
+
+PLAN WHEN WIRING IT IN: parent the mesh to the existing physics assembly as a
+VISUAL SHELL — unanchor it, weld it to the unanchored physics root part,
+Massless + CanCollide off, textures applied if present (they were stripped in
+the OBJ export, so expect a clean grey shell; applying textures is optional
+follow-up). Keep the invisible physics box parts doing all colliding/mass.
+flip exteriorFromMesh = true and re-measure that mass is unchanged. Nothing
+about the physics definition changes.
 
 Physics-first, cosmetic-second (the pilot's rule from §30's ScaleTo lesson):
 build and verify every behaviour against the existing crude box model FIRST,

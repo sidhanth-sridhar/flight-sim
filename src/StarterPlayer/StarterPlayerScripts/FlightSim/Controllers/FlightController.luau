@@ -625,6 +625,18 @@ function FlightController.rigHeightStuds(character: Model?): number?
 end
 
 --[[
+	The pilot's target height, in studs (1 stud = 1 m).
+
+	scaleForHumanProportions converges on this, so it is the number the ground
+	camera uses to frame a scaled pilot. A pilot who was left full-size for
+	any reason measures something else, and rigHeightStuds reports that - which
+	is what the camera prefers, when it exists.
+]]
+function FlightController.getPilotHeight(): number
+	return PILOT_HEIGHT_M
+end
+
+--[[
 	The Model scale that puts a rig of `measuredHeight` at PILOT_HEIGHT_M.
 
 	Model:ScaleTo takes an ABSOLUTE scale relative to the rig as it was built,

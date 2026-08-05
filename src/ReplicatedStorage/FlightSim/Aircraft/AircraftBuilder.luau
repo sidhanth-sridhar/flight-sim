@@ -253,6 +253,82 @@ local function createPart(spec: any, baseCFrame: CFrame): BasePart
 end
 
 -- =========================================================================
+-- MESH SHELL
+-- =========================================================================
+
+--[[
+	The imported Cessna as a VISUAL SHELL over the physics assembly.
+
+	⚠️ IT IS COSMETIC AND IT COLLIDES WITH NOTHING. Massless, CanCollide off,
+	welded to the structural root. The invisible boxes remain the aircraft -
+	they carry every kilogram, every aerodynamic reference point and all the
+	collision. Nothing here can move the mass budget, and measure() skips
+	massless parts so the suite proves it rather than trusting it.
+
+	MeshId IS NOT SCRIPTABLE ("the current thread cannot write 'MeshId',
+	lacking capability NotAccessible"), and CreateMeshPartAsync rejects a MODEL
+	asset id. So the shell arrives through InsertService:LoadAsset, which is
+	SERVER-ONLY - and that is fine, because AircraftService builds aircraft on
+	the server (§6e) and the result replicates.
+
+	It is loaded ONCE and cloned per aircraft. A failure is not fatal: the
+	function returns nil, the aeroplane is built without a shell, and the
+	primitive skin is still there if exteriorFromMesh has not been set. A
+	cosmetic asset must never be able to stop an aeroplane existing.
+]]
+local meshTemplate: MeshPart? = nil
+local meshLoadAttempted = false
+local meshLoadProblem: string? = nil
+
+function AircraftBuilder.loadMeshShell(shellSpec: any): MeshPart?
+	if not meshLoadAttempted then
+		meshLoadAttempted = true
+		local ok, result = pcall(function()
+			return game:GetService("InsertService"):LoadAsset(shellSpec.assetId)
+		end)
+		if not ok then
+			-- Expected on the client, where LoadAsset is not permitted.
+			meshLoadProblem = tostring(result)
+		elseif result then
+			local found = result:FindFirstChildWhichIsA("MeshPart", true)
+			if found then
+				meshTemplate = found:Clone()
+			else
+				meshLoadProblem = "asset contained no MeshPart"
+			end
+			result:Destroy()
+		end
+	end
+	if not meshTemplate then
+		return nil
+	end
+	return meshTemplate:Clone()
+end
+
+function AircraftBuilder.meshShellProblem(): string?
+	return meshLoadProblem
+end
+
+--[[
+	The uniform scale that fits the imported mesh to the real aircraft.
+
+	MEASURED FROM THE MESH RATHER THAN HARD-CODED, so re-exporting the model at
+	a different scale corrects itself instead of silently shipping a 14%
+	oversized aeroplane.
+
+	Length and span are fitted TOGETHER, by geometric mean. They disagree by
+	only 0.4% on this mesh, so one factor satisfies both to about 0.2% - but
+	HEIGHT wants a 4.7% larger factor and is deliberately left short rather
+	than stretched, because distorting the model to hit a bounding box is worse
+	than a fin a few centimetres low. See §33 for the measured numbers.
+]]
+function AircraftBuilder.meshShellScale(rawSize: Vector3, shellSpec: any): number
+	local byLength = shellSpec.targetLengthM / rawSize.Z
+	local bySpan = shellSpec.targetSpanM / rawSize.X
+	return math.sqrt(byLength * bySpan)
+end
+
+-- =========================================================================
 -- BUILD
 -- =========================================================================
 
@@ -326,10 +402,35 @@ function AircraftBuilder.build(definition: any, cframe: CFrame?, parent: Instanc
 		The structural boxes are untouched either way. They are the physics and
 		they collide; both exteriors are massless decoration over the top.
 	]]
+	--[[
+		`meshPose` moves a hinged surface onto the IMPORTED exterior.
+
+		The control surfaces were positioned against the primitive skin, and
+		the mesh is not the same aeroplane: its tailplane sits at y = -0.115
+		where ours was at +0.36, and its wing trailing edge is a third of a
+		metre further forward. Left alone the elevators hang in the air behind
+		a tail they no longer belong to.
+
+		They are cosmetic - massless decorations - so following the visible
+		exterior is exactly what they should do. The physics never reads them.
+	]]
 	local useMesh = spec.exteriorFromMesh == true
+	local function posed(decoSpec: any): any
+		if not useMesh or not decoSpec.meshPose then
+			return decoSpec
+		end
+		local merged = table.clone(decoSpec)
+		for key, value in decoSpec.meshPose do
+			merged[key] = value
+		end
+		merged.meshPose = nil
+		return merged
+	end
+
 	local hingedSpecs: { [string]: any } = {}
 	if spec.decorations then
-		for _, decoSpec in spec.decorations do
+		for _, rawSpec in spec.decorations do
+			local decoSpec = posed(rawSpec)
 			local isShell = not decoSpec.hinge and not decoSpec.keepWithMesh
 			if useMesh and isShell then
 				continue
@@ -342,6 +443,47 @@ function AircraftBuilder.build(definition: any, cframe: CFrame?, parent: Instanc
 			if decoSpec.hinge then
 				hingedSpecs[decoSpec.name] = decoSpec
 			end
+		end
+	end
+
+	--[[
+		---- The imported visual shell ----------------------------------------
+
+		Built BEFORE the weld loop on purpose, so it is swept up by it. Added
+		afterwards it would be an unwelded, unanchored part that simply falls
+		off the aeroplane on the first frame.
+
+		Positioned by its BOUNDING BOX, because a single joined lump offers
+		nothing else to align to - the export has no named sub-objects left.
+
+		Vertically it is anchored on the WHEEL CONTACT PLANE rather than on its
+		own centre: the thing that must be right is that the visible wheels
+		touch the runway exactly where the collidable ones do, or the aeroplane
+		hovers or sinks into the tarmac. Deriving the centre from that plane
+		keeps it correct whatever the fitted scale turns out to be.
+	]]
+	if spec.meshShell then
+		local shell = AircraftBuilder.loadMeshShell(spec.meshShell)
+		if shell then
+			local shellSpec = spec.meshShell
+			local scale = AircraftBuilder.meshShellScale(shell.Size, shellSpec)
+			local scaled = shell.Size * scale
+
+			shell.Name = shellSpec.name or "MeshShell"
+			shell.Size = scaled
+			shell.Massless = true
+			shell.CanCollide = false
+			shell.CanTouch = false
+			shell.CanQuery = false
+			shell.Anchored = false
+			shell.CFrame = base
+				* CFrame.new(
+					shellSpec.offsetX or 0,
+					shellSpec.wheelBottomY + scaled.Y / 2,
+					shellSpec.centreZ
+				)
+			shell.Parent = model
+			parts[shell.Name] = shell
 		end
 	end
 

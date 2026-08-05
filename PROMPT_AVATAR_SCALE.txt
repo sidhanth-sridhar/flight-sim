@@ -1,0 +1,38 @@
+CONTINUATION PROMPT — scale the pilot avatar to near-human proportions.
+
+You are working on a Roblox flight sim in C:\Users\sidha\OneDrive\Documentos\MyRobloxGame.
+Read HANDOFF.md first — it is the source of truth. Commit style: short imperative messages; the commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user asks. Prompt files in the repo root are untracked scratch.
+
+THE PROBLEM
+The world is locked at 1 stud = 1 m (§2) and the Cessna 172 is full real scale (11 m span, ~8.3 m long, ~3 m tall). Default Roblox avatars are ~5.7 studs tall (~5.7 m) — about 3x a real human (~1.75 m) — so next to a walking player the aircraft looks tiny and comically wrong.
+
+WHAT THE FIX IS NOT (do not do any of these)
+- Do NOT change Constants.STUDS_PER_METER or any conversion in Shared/Units.luau. The code routes through SCALE so world-scale changes are possible, but 1 stud = 1 m is a locked architecture decision (§2) and rescaling would invalidate every published figure in §4, re-verify the aircraft mass budget (mass is volumetric via CustomPhysicalProperties), and silently change the real size of the runway, the Ridge strip, terrain fit, spawns, flight plans and camera offsets.
+- Do NOT scale the aircraft up, move the airports, or touch FlightModel/GroundHandling/Aerodynamics/terrain.
+- Do NOT "fix" the cockpit camera: CameraController.EYE_OFFSET is anchored to the PilotSeat, not the head (CameraController.luau:94), precisely so it survives anything done to the character. Scaling the avatar must not move the eye; leave the camera alone.
+
+WHAT THE FIX IS
+A cosmetic, per-player, client-side scale-down of the character toward human proportions using Humanoid:ScaleTo(). Roblox's floor is about 0.4x (roughly 2.3 m for a default R15), so exact 1.75 m is NOT reachable — pick the closest acceptable scale (likely 0.4) and document the resulting height in a comment. Confirm the actual accepted minimum for ScaleTo in engine 0.732 and clamp to it; verify the result by measuring the character (e.g. HumanoidRootPart.Size.Y) rather than trusting the scale number.
+
+WHERE TO PUT IT
+- FlightController.luau. The character lifecycle is `watchCharacter` (FlightController.luau:1015), connected to player.CharacterAdded at line 1027 with the initial character spawned at 1028-1030. Apply the scale there on EVERY character spawn — a fresh character after respawn starts at full size and must be re-scaled.
+- This is a client controller (player = Players.LocalPlayer, FlightController.luau:116); apply the scale locally, client-side, and do not add server involvement.
+- Build it as a small exported helper (e.g. FlightController.scaleForHumanScale(character)) so it is testable and reusable.
+
+INTERACTIONS THAT MATTER
+- The seated pilot is already invisible, massless and non-collidable via setCharacterNeutralised (FlightController.luau:505); scaling must not change that and cannot affect the aircraft's 1,111 kg mass budget. Verify a scaled, seated pilot is still invisible/massless.
+- runTests() builds a fake character (FlightController.luau:1251) and drives setCharacterNeutralised on it. The scaling helper must not error on a character without a real Humanoid — guard existence and use pcall, and WaitForChild("Humanoid", 10) (the pattern already used at line 1019). Add a test: a fake character scaled then neutralised stays massless and invisible; a character with no Humanoid does not throw.
+- ScaleTo can throw if the Humanoid is not ready; guard it. Scale does not persist across respawns — the CharacterAdded path covers that.
+- Verify live in Studio Play: walking player is noticeably near human scale next to the parked aircraft; cockpit camera view is unchanged; boarding, taxi, flight and the invisible-pilot behaviour all still work.
+
+CONSTRAINTS
+- Edit only files under src/; Rojo syncs one-way files -> Studio (never edit scripts inside Studio). If a Play session keeps showing old behaviour, it is a require cache: fully restart Studio (not just Play) and re-click the Rojo plugin (Plugins tab -> Rojo), which does not auto-reconnect.
+- Tests run in Studio Play mode, Client datamodel (no Luau CLI installed; do not invent one). runTests() per module prints PASS/FAIL.
+- Do not add comments beyond the one documenting the chosen scale and resulting height.
+- Commit only when the user asks; no Co-Authored-By trailer.
+
+DEFINITION OF DONE
+1. Walking player is close to human scale next to the aircraft (measured height recorded in a comment).
+2. Cockpit camera and seated behaviour unchanged; invisible/massless pilot still works.
+3. New helper has a passing test; all suites green in a fresh Play session.
+4. Nothing in the physics, world scale, aircraft, or unit conversions was touched.

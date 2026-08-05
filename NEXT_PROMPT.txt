@@ -1,0 +1,61 @@
+CONTINUATION PROMPT — two open items: (A) does the altitude-hold porpoise fix actually hold in the air, and (B) why does the scaled pilot still look full size.
+
+You are continuing work on a Roblox flight sim in C:\Users\sidha\OneDrive\Documentos\MyRobloxGame.
+Read HANDOFF.md first — it is the source of truth. Commit style: short imperative messages; the commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user asks. NEXT_PROMPT.txt is untracked scratch.
+
+CURRENT STATE (all committed and pushed to origin/main, HEAD d19d805):
+- 55815d7 "Schedule the altitude-hold gain on airspeed to stop the porpoise" — Claude's fix from a prior session; NOT yet verified in the air by the pilot.
+- d19d805 "Scale the pilot to human proportions via R15 scale values" — the avatar-scaling work below.
+- Below those: 40c197c (D-on-error + debug flight recorder), c8b3222 (cursor override), 96869a8 (stability mode), a661693 (capture walk). Tree clean except untracked NEXT_PROMPT.txt / PROMPT_AVATAR_SCALE.txt.
+
+============================================================================
+ITEM A — ALTITUDE HOLD (R) PORPOISE: verify Claude's 55815d7 in the air.
+============================================================================
+History (do NOT repeat):
+- a661693 capture walk fixed the slam-on-engage. Keep.
+- Raw one-frame vertical-acceleration feedback was REJECTED (feedback loop even on terrain). Removed; no residual plumbing.
+- 40c197c added smoothed D-on-error (verticalDamping=0.1, vsFilterTau=0.15, dampingLimit=0.2) + a DEBUG-only flight recorder in FlightController.
+- 55815d7 (Claude) scheduled the altitude-hold gain on airspeed. Read it before flying; know exactly what it changed.
+
+Flight recorder (still in place, gated on Constants.DEBUG.ENABLED): press R → prints "[FlightRec] recording altitude hold..."; live summary every 5 s; press R again → "--- FLIGHT RECORDING (altitude hold, N frames) ---" + summary + full CSV (t,pitch,att_deg,bank_deg,hdg_deg,alt_m,vs_mps,ias_kt). Summary flags "- SATURATING" when pitchMax >= 0.44 (pitchLimit 0.45). recordingMetrics/summarizeRecording/formatRecording are exported and tested.
+
+VERIFY WHICH CODE IS LOADED first (require caches per Studio session; only a FULL Studio restart clears it — Play restart is NOT enough). Studio Command Bar:
+    print(require(game.StarterPlayer.StarterPlayerScripts.FlightSim.Controllers.FlightController).recordingMetrics)
+- "function: ..." = new code loaded; "nil" = stale — File → Close whole Studio, reopen, re-click Plugins → Rojo, then Play.
+
+Then fly over the void/no-terrain area, press R ~10-15 s, press R again, paste the whole FLIGHT RECORDING block. Analyze: period, VS/ALT swing, SATURATING flag, and pitch-vs-attitude-vs-VS phase. If the porpoise is gone, capture one more CSV over terrain to confirm; then the pilot can decide the Phase 3 sign-off (no gate exists in §14 — nothing to fly formally).
+
+============================================================================
+ITEM B — AVATAR SCALING: marker fires but pilot still looks full size.
+============================================================================
+THE GOAL (pilot's requirement): the pilot should be a ~1.75 m real human
+standing next to the real-scale aircraft (Cessna 8.3 m long, 3 m tall). At the
+world's 1 stud = 1 m, that is a ~1.75-stud pilot. This is BELOW the character-
+scaling API floor of 0.4x (~2.3 m for a default R15), so the API alone can
+never reach it — the fix WILL require manually rescaling the rig parts. The
+user has explicitly accepted the rig risk of manual rescaling over keeping a
+2.3 m pilot. Make the pilot ~1.75 m; do not stop at 0.4x and call it done.
+
+What works so far: the helper FlightController.scaleForHumanProportions(character) is called from watchCharacter on every spawn (CharacterAdded + initial). It sets the R15 scale NumberValues (BodyHeightScale, BodyWidthScale, BodyDepthScale, HeadScale) on the Humanoid with AutomaticScalingEnabled = true, at HUMAN_SCALE = 0.4 (the engine floor). Retries 40x. Diagnostic markers: "[Avatar] scaled to 0.40x (root part X.XX studs)" on success, "[Avatar] FAILED to scale after 40 attempts" on failure.
+
+Crucial learning: Humanoid:ScaleTo() does NOT exist in this engine ("ScaleTo is not a valid member of Humanoid") and SetScale() does not exist either — the NumberValue route is the correct one. The Roblox in-built AI tried SetScale and failed; do not let it touch this code.
+
+Do NOT treat 0.4 as the answer — the pilot's requirement is ~1.75 m. Roadmap to get there:
+  1. FIRST run the below-floor experiment (before ANY manual surgery — the 0.4 "floor" is unverified; web docs are inconclusive). In the Studio Command Bar with the character spawned, measure then try 0.25:
+       local p=game.Players.LocalPlayer; local c=p.Character; local h=c:FindFirstChildOfClass("Humanoid")
+       local v=h:FindFirstChild("BodyHeightScale"); print("scale val:", v and v.Value or "NONE")
+       local hrp=c:FindFirstChild("HumanoidRootPart"); local head=c:FindFirstChild("Head")
+       if hrp and head then print("torso+head dist:",(head.Position-hrp.Position).Magnitude, "studs") end
+       -- then: set all four scale NumberValues to 0.25 and visually confirm shrink
+     - If 0.25 shrinks the character: NO rig surgery needed — lower HUMAN_SCALE in the helper and re-apply after avatar resets; done.
+     - If it clamps back to 0.4: manual part rescaling is confirmed necessary; proceed to step 2.
+  2. Then finish the diagnosis anyway: a fresh session printed "[Avatar] scaled to 0.40x (root part 1.92 studs)" so the marker fired and the HRP shrank — yet the pilot LOOKS full size. Check in order:
+     a. Something re-applies the HumanoidDescription (respawn, LoadCharacter, server-side avatar refresh) after our values are set, undoing the scale. Consider wiring onto the Humanoid's HumanoidDescriptionChanged / DescendantsAdded, or re-applying after a short delay.
+     b. The user manually shrank their OWN avatar in the Avatar Editor ("i scaled my character down manually") — so 0.4 on top of an already-short rig may be misleading; measure the actual in-game height against the aircraft, not the marker.
+  3. IF manual rescaling is required, get below 0.4 by scaling every BasePart's Size and CFrame (about the HumanoidRootPart origin) by the factor needed to reach ~1.75 m, then rewrite the Motor6D joints so the rig still animates. A factor of ~0.3 (1.75 / ~5.7) is the target for a default R15. Watch for: accessories/hair not scaling, neck/limb gaps at joints, and the Humanoid dying if the Head detaches from Torso/UpperTorso. Verify the character still walks and sits (Sit weld) and that the seated pilot stays invisible/massless.
+  4. Keep the NumberValue path as the baseline only if manual rescaling proves too fragile; if you must fall back to it, tell the user 2.3 m is the API limit and get their sign-off first.
+
+Do NOT touch the world scale, Units.luau, or the aircraft (1 stud = 1 m is locked, §2).
+
+============================================================================
+PROJECT TRAPS TO RESPECT: HANDOFF.md = truth; edit only files under src/ (Rojo syncs one-way files→Studio); runTests() suites run in Studio, not headless (no Luau CLI installed; do not invent one); require caches per Studio session; Rojo plugin reconnects manually; the Controls contract (six fields) must not change; do not add Co-Authored-By (hook strips it).

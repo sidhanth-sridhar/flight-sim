@@ -229,6 +229,43 @@ InputController.DEFAULTS = {
 			altitudeHoldPitchCaptured for what it fixes.
 		]]
 		captureAccel = 1.0,
+
+		--[[
+			Vertical-speed-error damping, pitch command per m/s^2 at which the
+			error is moving.
+
+			The cascade damps the altitude error but not the vertical speed
+			ITSELF changing: with a constant climb rate the inner loop sits
+			still, and the porpoise it shows over open water (no terrain to
+			read) is a limit cycle of the aircraft accelerating up through its
+			demanded climb, overshooting, and being hauled back - a velocity
+			error that P alone answers by banging against the pitch limit.
+			This term is a proper derivative on the vertical-speed ERROR, which
+			leads the loop's phase (the correct fix for a P-only loop on an
+			integrator): it noses down harder as a climb error starts growing,
+			and as a level-off decelerates the climb it EASES the nose down
+			before the overshoot exists as error.
+
+			Measured the hard way, twice: feeding it a raw, one-frame vertical
+			acceleration was a feedback loop on its own - a single noisy frame
+			of velocity difference read as a huge acceleration, banged the
+			pitch to the limit, and the measurement lag flipped the term's
+			phase so it reinforced the oscillation instead of damping it. So
+			the derivative is computed on a low-pass-filtered vertical speed
+			(vsFilterTau) and its contribution is clamped to dampingLimit so no
+			reading, however bad, can command more than a fraction of the pitch
+			authority. It is exactly zero when the error is not moving, so it
+			never fights a steady-state command.
+		]]
+		verticalDamping = 0.1,
+		-- Low-pass time constant on the vertical speed fed to the derivative,
+		-- in seconds. Long enough to kill frame noise, short compared with a
+		-- level-off (about two seconds), so the trend it damps is real.
+		vsFilterTau = 0.15,
+		-- The most the damping term may add to the pitch command, in either
+		-- direction. Less than half the pitch authority, so the autopilot can
+		-- never be bounced off its own stabilising term.
+		dampingLimit = 0.2,
 	},
 
 	--[[
@@ -515,7 +552,16 @@ end
 	call a gentle level-off. It takes about four seconds to roll a full-rate
 	climb off to level.
 ]]
-export type AltHoldCapture = { demandedClimb: number }
+export type AltHoldCapture = {
+	demandedClimb: number,
+	-- The vertical speed the derivative in altitudeHoldPitchCaptured is
+	-- smoothed against, and the previous frame's vertical-speed error, which
+	-- together let the law compute how fast the error is moving without any
+	-- measurement from outside. nil on the very first frame, which the law
+	-- reads as "no history yet": no damping.
+	smoothedVS: number?,
+	prevError: number?,
+}
 
 --[[
 	NOT clamped to maxClimbRate, and that was a bug in the first version of this
@@ -531,7 +577,7 @@ export type AltHoldCapture = { demandedClimb: number }
 	starting above the limit is transient by construction.
 ]]
 function InputController.altHoldCapture(config: any, verticalSpeedMs: number): AltHoldCapture
-	return { demandedClimb = verticalSpeedMs }
+	return { demandedClimb = verticalSpeedMs, smoothedVS = verticalSpeedMs }
 end
 
 function InputController.altitudeHoldPitchCaptured(
@@ -555,8 +601,29 @@ function InputController.altitudeHoldPitchCaptured(
 	local step = a.captureAccel * math.max(dt, 0)
 	local demanded = capture.demandedClimb + clamp(wanted - capture.demandedClimb, -step, step)
 
-	local pitch = clamp((demanded - verticalSpeedMs) * a.verticalSpeedGain, -a.pitchLimit, a.pitchLimit)
-	return pitch, { demandedClimb = demanded }
+	--[[
+		The damping term: a derivative on the vertical-speed error, computed
+		from a LOW-PASS-FILTERED vertical speed so a noisy frame cannot bang
+		the elevator, and clamped to dampingLimit so no reading can add more
+		than a fraction of the pitch authority. See the verticalDamping gain
+		for why it is a derivative on the error at all, and why that did not
+		work when fed raw acceleration. First frame has no history: the
+		smoothed speed is the speed, and the error rate is zero.
+	]]
+	local tau = a.vsFilterTau
+	local smoothed = capture.smoothedVS
+		and capture.smoothedVS + (verticalSpeedMs - capture.smoothedVS) * (dt / (dt + tau))
+		or verticalSpeedMs
+	local errorNow = demanded - smoothed
+	local errorRate = (errorNow - (capture.prevError or errorNow)) / math.max(dt, 1e-4)
+	local damping = clamp(errorRate * a.verticalDamping, -a.dampingLimit, a.dampingLimit)
+
+	local pitch = clamp(
+		(demanded - verticalSpeedMs) * a.verticalSpeedGain + damping,
+		-a.pitchLimit,
+		a.pitchLimit
+	)
+	return pitch, { demandedClimb = demanded, smoothedVS = smoothed, prevError = errorNow }
 end
 
 --[[
@@ -1476,6 +1543,73 @@ function InputController.runTests(): (boolean, { any })
 		"A settled capture still commands full authority when far off",
 		strong >= cfgCap.altHold.pitchLimit - 1e-9,
 		string.format("%.3f, 5000 m below target", strong)
+	)
+
+	--[[
+		THE DAMPING TERM, added after a report of porpoising over open water,
+		where there is no terrain under the aircraft. The cascade's inner loop
+		damps the altitude error but not the vertical speed CHANGING: with a
+		constant climb rate it sits still, so nothing answers a climb that is
+		accelerating up through its demand until the error has already built,
+		and P alone answers that by banging against the pitch limit. The term
+		is a derivative on the vertical-speed ERROR - it leads the loop's
+		phase - but fed RAW acceleration it was a feedback loop on its own
+		(one noisy frame banged the elevator and the measurement lag flipped
+		its phase). So it is computed here on a low-pass-filtered vertical
+		speed, from history carried in the capture, and its contribution is
+		clamped. These tests drive the law with hand-built captures so the
+		history is exact rather than whatever a previous frame left behind.
+
+		A first-frame capture (no history) must be exactly the undamped law:
+		the derivative has nothing to look at, so it adds nothing.
+	]]
+	local cfgDamp = fresh().config
+	local dMax = cfgDamp.altHold.dampingLimit
+	local firstFrame = InputController.altitudeHoldPitchCaptured(cfgDamp, { demandedClimb = 0 }, 500, 500, 2, 1 / 60)
+	record(
+		"No history, no damping: the first frame is exactly the P-only law",
+		firstFrame == -2 * cfgDamp.altHold.verticalSpeedGain,
+		string.format("%.3f, the raw -2 m/s error times verticalSpeedGain", firstFrame)
+	)
+	--[[
+		THE LEVEL-OFF. Last frame the climb was decelerating (smoothed speed
+		just above 2 m/s, error -2.05); this frame the speed is 2.0, so the
+		error is IMPROVING at 3 m/s^2. The derivative eases the nose-down
+		instead of waiting for the overshoot to appear as error.
+	]]
+	local eased = InputController.altitudeHoldPitchCaptured(
+		cfgDamp, { demandedClimb = 0, smoothedVS = 2.0, prevError = -2.05 }, 500, 500, 2.0, 1 / 60)
+	record(
+		"A level-off is eased: the nose-down softens as the climb decelerates",
+		eased > firstFrame,
+		string.format("%.3f vs %.3f for the same speed on target", eased, firstFrame)
+	)
+	--[[
+		THE CLAMP. A violent one-frame reading must add exactly dampingLimit,
+		not run the pitch to its own limit: the error is +0.5 and improving at
+		-30 m/s^2, which without the clamp would swing the command by 3.0.
+	]]
+	local violent = InputController.altitudeHoldPitchCaptured(
+		cfgDamp, { demandedClimb = 0, smoothedVS = -0.5, prevError = 1.0 }, 500, 500, -0.5, 1 / 60)
+	record(
+		"The damping contribution is clamped, however violent the reading",
+		math.abs(violent - (0.5 * cfgDamp.altHold.verticalSpeedGain - dMax)) < 1e-9,
+		string.format("%.3f = P on +0.5 m/s error minus the %.2f cap, not -%.2f",
+			violent, dMax, cfgDamp.altHold.pitchLimit)
+	)
+	--[[
+		And a settled state is untouched: the error not moving means the
+		derivative is zero frame after frame, so steady flight cannot be
+		disturbed by it.
+	]]
+	local steady = { demandedClimb = 0 }
+	for _ = 1, 600 do
+		steady = select(2, InputController.altitudeHoldPitchCaptured(cfgDamp, steady, 500, 500, 0, 1 / 60))
+	end
+	record(
+		"A steady state is untouched: the error not moving damps nothing",
+		steady.smoothedVS ~= nil and math.abs(steady.smoothedVS) < 1e-6,
+		string.format("smoothed speed %.6f after 10 s at zero", steady.smoothedVS or 0)
 	)
 
 	-- 9c. Stability augmentation, the lateral half -----------------------------

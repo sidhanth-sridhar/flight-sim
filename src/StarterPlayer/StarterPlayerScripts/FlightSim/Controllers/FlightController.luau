@@ -65,6 +65,7 @@ local GroundHandling = require(FlightSim.Physics.GroundHandling)
 -- for one, so that the sequencing can be verified without a live server.
 local AircraftBuilder = require(FlightSim.Aircraft.AircraftBuilder)
 local Cessna172 = require(FlightSim.Aircraft.Definitions.Cessna172)
+local Units = require(FlightSim.Shared.Units)
 
 --[[
 	InputController lives under Controls/, not Controllers/. It is not a
@@ -250,6 +251,145 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 	FlightModel.applyForces(fm, totalForce, totalTorque)
 
 	return totalForce, totalTorque
+end
+
+-- =========================================================================
+-- FLIGHT RECORDER (DEBUG-ONLY)
+-- =========================================================================
+
+--[[
+	Captures one row per frame while altitude hold is engaged and prints a
+	CSV of the last few seconds when it is disengaged. Built to diagnose the
+	reported altitude-hold oscillation with numbers instead of feel: the rows
+	show whether the elevator is following the law, whether the nose is
+	following the elevator, and which variable is actually oscillating.
+
+	Free when disabled: gated on Constants.DEBUG.ENABLED, and the cap holds at
+	most a couple of seconds of memory even in the worst case. The formatting
+	and summary are pure and exported so runTests() can pin them down with
+	synthetic rows.
+]]
+local recording: { any } = nil
+local recordingTime = 0
+local RECORDING_CAP = 900 -- ~15 s at 60 Hz
+local lastLiveSummary = 0
+local LIVE_SUMMARY_PERIOD = 5
+
+function FlightController.recordFlightStep(rig: any, dt: number)
+	if not Constants.DEBUG.ENABLED then
+		return
+	end
+
+	local engaged = rig.input.systems.altitudeHold
+	if engaged then
+		if not recording then
+			recording = {}
+			recordingTime = 0
+			lastLiveSummary = 0
+			-- The marker the pilot can check for: if this does not appear when R
+			-- is pressed, this module is not the one the session loaded.
+			print("[FlightRec] recording altitude hold...")
+		end
+		recordingTime += dt
+		local tel = rig.flightModel.telemetry
+		table.insert(recording, {
+			t = recordingTime,
+			pitch = rig.input.controls.pitch,
+			att = math.deg(tel.pitchAttitude),
+			bank = math.deg(tel.bankAngle),
+			hdg = math.deg(tel.heading),
+			alt = tel.altitude,
+			vs = tel.verticalSpeed,
+			ias = Units.msToKnots(tel.airspeedIndicated),
+		})
+		if #recording > RECORDING_CAP then
+			table.remove(recording, 1)
+		end
+		if recordingTime - lastLiveSummary >= LIVE_SUMMARY_PERIOD then
+			lastLiveSummary = recordingTime
+			for _, line in FlightController.summarizeRecording(recording) do
+				print("[FlightRec] " .. line)
+			end
+		end
+	elseif recording then
+		FlightController.dumpRecording(recording)
+		recording = nil
+		recordingTime = 0
+		lastLiveSummary = 0
+	end
+end
+
+--[[
+	The raw numbers the summary is built from, as data so the tests can assert
+	on them without string-matching the printed report. period is nil when
+	there are fewer than two zero crossings to estimate it from.
+]]
+function FlightController.recordingMetrics(rows: { any }): any
+	if #rows == 0 then
+		return { altMin = 0, altMax = 0, vsMin = 0, vsMax = 0, pitchMax = 0, crossings = 0, duration = 0, period = nil }
+	end
+	local first = rows[1]
+	local last = rows[#rows]
+	local altMin, altMax = first.alt, first.alt
+	local vsMin, vsMax = first.vs, first.vs
+	local pitchMax = 0
+	local crossings = 0
+	local prevSign = if first.vs >= 0 then 1 else -1
+	for i = 2, #rows do
+		local r = rows[i]
+		if r.alt < altMin then altMin = r.alt end
+		if r.alt > altMax then altMax = r.alt end
+		if r.vs < vsMin then vsMin = r.vs end
+		if r.vs > vsMax then vsMax = r.vs end
+		local p = math.abs(r.pitch)
+		if p > pitchMax then pitchMax = p end
+		local sign = if r.vs >= 0 then 1 else -1
+		if sign ~= prevSign then
+			crossings += 1
+			prevSign = sign
+		end
+	end
+	local duration = last.t - first.t
+	return {
+		altMin = altMin,
+		altMax = altMax,
+		vsMin = vsMin,
+		vsMax = vsMax,
+		pitchMax = pitchMax,
+		crossings = crossings,
+		duration = duration,
+		period = if crossings >= 2 then 2 * duration / crossings else nil,
+	}
+end
+
+function FlightController.summarizeRecording(rows: { any }): { string }
+	local m = FlightController.recordingMetrics(rows)
+	return {
+		string.format("ALT %10.2f .. %10.2f m (swing %6.2f m)", m.altMin, m.altMax, m.altMax - m.altMin),
+		string.format("VS  %+7.2f .. %+7.2f m/s (swing %5.2f m/s)", m.vsMin, m.vsMax, m.vsMax - m.vsMin),
+		string.format("PITCH max |%.3f|%s", m.pitchMax, if m.pitchMax >= 0.44 then " - SATURATING" else ""),
+		string.format("VS zero crossings %d in %.1f s => period ~%.1f s", m.crossings, m.duration, m.period or 0),
+	}
+end
+
+function FlightController.formatRecording(rows: { any }): { string }
+	local out = { "t,pitch,att_deg,bank_deg,hdg_deg,alt_m,vs_mps,ias_kt" }
+	for _, r in rows do
+		table.insert(out, string.format(
+			"%7.3f,%+.3f,%+7.2f,%+7.2f,%+7.2f,%10.2f,%+7.3f,%7.2f",
+			r.t, r.pitch, r.att, r.bank, r.hdg, r.alt, r.vs, r.ias))
+	end
+	return out
+end
+
+function FlightController.dumpRecording(rows: { any })
+	print("--- FLIGHT RECORDING (altitude hold, " .. #rows .. " frames) ---")
+	for _, line in FlightController.summarizeRecording(rows) do
+		print("  " .. line)
+	end
+	for _, line in FlightController.formatRecording(rows) do
+		print(line)
+	end
 end
 
 -- =========================================================================
@@ -516,6 +656,7 @@ local function startLoop()
 		end
 
 		FlightController.stepFrame(rig, deltaTime, snapshot)
+		FlightController.recordFlightStep(rig, deltaTime)
 	end)
 
 	log("Flight loop started")
@@ -556,6 +697,10 @@ local function releaseRig()
 	table.clear(rigConnections)
 	rig = nil
 	seat = nil
+	-- An engagement that outlived the aircraft must not dump into the next one.
+	recording = nil
+	recordingTime = 0
+	lastLiveSummary = 0
 end
 
 local function teardown()
@@ -1387,6 +1532,40 @@ function FlightController.runTests(): (boolean, { any })
 		"A cursor on the view is passed through untouched",
 		insideOk and inside == Vector2.new(100, 200),
 		"passed through"
+	)
+
+	--[[
+		THE FLIGHT RECORDER, built to diagnose a reported altitude-hold
+		oscillation with numbers. Its formatting and summary are pinned down
+		with a synthetic recording: a 3 m/s-amplitude, 2 s-period sine in
+		vertical speed, which must read back as a ~2 s period and the ~1.9 m
+		altitude swing that sine integrates to, and a CSV of exactly the
+		frames recorded.
+	]]
+	local sine = {}
+	local st = 0
+	local salt = 100
+	for i = 1, 240 do
+		st += 1 / 60
+		local svs = 3 * math.sin(math.pi * st)
+		salt += svs / 60
+		table.insert(sine, { t = st, pitch = 0.3 * math.cos(math.pi * st), att = 0, bank = 0, hdg = 0, alt = salt, vs = svs, ias = 60 })
+	end
+	local m = FlightController.recordingMetrics(sine)
+	record(
+		"Recorder metrics see the synthetic VS sine",
+		math.abs(m.period - 2) < 0.1 and m.vsMax > 2.98 and m.vsMin < -2.98,
+		string.format("period %.2f s, VS %+.2f .. %+.2f m/s", m.period or 0, m.vsMin, m.vsMax)
+	)
+	record(
+		"...and the altitude swing it integrates to",
+		m.altMax - m.altMin > 1.5 and m.altMax - m.altMin < 2.3,
+		string.format("%.2f m peak to peak", m.altMax - m.altMin)
+	)
+	record(
+		"The recorder formats exactly the frames it was given",
+		#FlightController.formatRecording(sine) == #sine + 1,
+		string.format("%d data rows + header", #sine)
 	)
 	end
 

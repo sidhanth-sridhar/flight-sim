@@ -1,106 +1,77 @@
-CONTINUATION PROMPT — the two open items are both closed (altitude hold flown & confirmed, pilot is 1.75 m). Next task: Phase 4 — model the Cessna like a Cessna.
+CONTINUATION PROMPT — fix the four post-flight bugs first, then build Phase 4 items 4 and 5.
 
 You are continuing work on a Roblox flight sim in C:\Users\sidha\OneDrive\Documentos\MyRobloxGame.
-Read HANDOFF.md first — it is the source of truth. Commit style: short imperative messages; the commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user asks. NEXT_PROMPT.txt is untracked scratch.
+Read HANDOFF.md first — it is the source of truth. Commit style: short imperative messages; the
+commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user
+asks. Keep this file LEAN — do not re-add sections for work already recorded in HANDOFF.
 
-CURRENT STATE (working tree is DIRTY with the work below, HEAD 913cf0a):
-- 913cf0a "Add handoff prompt and avatar-scaling scratch notes" (committed).
-- UNCOMMITTED in the working tree: HANDOFF.md (§29 + §30 recorded), NEXT_PROMPT.txt, src/.../FlightController.luau (Model:ScaleTo avatar fix), src/.../AirportService.luau. The avatar fix and airport change are the §29/§30 work and are NOT yet committed. Confirm the tree state with git status before you start, and do not treat 913cf0a as including them.
-- Below: d19d805 (the inert R15-NumberValue scaling attempt — superseded), 55815d7 (airspeed-scheduled altitude-hold gain), 40c197c (D-on-error + flight recorder), c8b3222 (cursor override), 96869a8 (stability mode), a661693 (capture walk).
+CURRENT STATE: 776/776 across 20 suites. The mesh is purged, the Cessna measures the published
+8.28 x 11.00 x 2.72 m, the pilot is a classic R6 built in code by PlayerService, and the four
+bugs from the first flight of the resized aeroplane are FIXED (HANDOFF §33, §34, §35 — all DONE).
+⚠️ Constants.luau carries the pilot's own tuning: WALK_SPEED = 20.0, JUMP_HEIGHT = 1. Leave it.
 
-============================================================================
-DONE — ITEM A (ALTITUDE HOLD): FLOWN, CONFIRMED, PILOT SIGNED OFF (§29).
-============================================================================
-The porpoise is gone. Recorded at 125.1 kt (above the old 112–118 kt limit-cycle band): 0 VS zero crossings in 15 s, peak pitch command 0.219 against the old saturated 0.450, no oscillation. Flight recorder (press R, gated on Constants.DEBUG.ENABLED) is still in place and tested; it is a diagnostic tool, keep it.
+➡️ THE PILOT RE-FLIES IT BEFORE THE INTERIOR WORK STARTS. That is the project rule, and nothing
+below begins until that report comes back.
 
-- KNOWN BEHAVIOR — this is the intended realism, NOT a bug: altitude hold does not hold true altitude. While engaged there is always a slight steady increase or slight steady decrease in altitude (a slow proportional-droop climb or descent whose sign depends on energy state at engagement). Do not "fix" this to a dead-flat hold; the pilot has accepted it as realistic. The loop had not fully settled in the 15 s window (VS decaying +2.68 → ~+1.0 m/s), and §29 notes it was autopilot-holding ~−0.19 command while climbing (i.e. losing).
-- STILL UNFLOWN from the test list (non-blocking, pilot may skip): engage while level, engage mid-climb, and kick the rudder while engaged (must yaw and hold the new heading on release).
-- CSV NOTE: in the recorder's CSV, `pitch` is a normalised elevator command running to pitchLimit 0.45, NOT an angle; attitude is the separate att_deg column. It was misread once as "−0.19 rad ≈ −11°".
+====================================================================
+OPEN DECISION — THE SEAT IS TOO HIGH FOR A REALISTIC EYE HEIGHT
+====================================================================
+A 1.75 m person's eye sits about 0.78 m above the seat pan. This airframe can only give 0.55 m:
+the pan is 1.40 m above the wheels where a real 172's is about 0.95 m, so the seat is roughly
+0.4 m too high in a cabin that is otherwise correctly sized. The eye is already near the top of
+the 0.155 m slot between the glareshield (y 0.695) and the wing underside (y 0.850).
 
-============================================================================
-DONE — ITEM B (AVATAR SCALING): PILOT IS 1.75 m VIA Model:ScaleTo() (§30).
-============================================================================
-The fix is `character:ScaleTo(scale)` — Humanoid has no ScaleTo/SetScale (confirmed: "ScaleTo is not a valid member of Humanoid"), and a character is a Model, which does. THE R15 SCALE NumberValues DO NOTHING in this engine (measured: rig moved 0.00 studs, GetAppliedDescription still reported 0.96); do not touch them. There is NO 0.4 floor and NO Motor6D joints on this rig — it is a constraint rig (AnimationConstraint/BallSocketConstraint/Attachments), so no manual part-rescaling was ever needed.
+Closing it means moving PilotSeat, which is STRUCTURAL (§31) — 1 kg of 1,111, so the CoM shift is
+sub-millimetre, but it is still the pilot's call and not an assumption. Raise it before acting.
+Measured numbers are in §35.
 
-- FlightController.scaleForHumanProportions → pilotScaleFor: measures the rig, converges idempotently on PILOT_HEIGHT_M = 1.75 m. Marker: "[Avatar] pilot is 1.75 m (model scale 0.339x)".
-- ⚠️ Leave AutomaticScalingEnabled TRUE. Setting it false moves the camera focus +1.296 studs above the head (measured). The engine does NOT re-apply the description over ScaleTo.
-- Measure height with the rig STANDING STILL — the Animate script eases limbs for ~1 s after spawn; two readings agreeing within 0.005 studs = settled. Mid-pose measurements (4.22/5.06 studs) scaled the pilot to 1.41/1.69 m instead of 1.75.
-- Nothing physical changed: boarding still moves the aircraft 0.000 m, scale survives the Sit weld, WalkSpeed untouched (2.4 m/s), cockpit eye anchored to PilotSeat not head.
+====================================================================
+NEXT TASK 2 — PHASE 4 ITEMS 4 AND 5, THEN 4b, THEN 5
+====================================================================
+Physics-first, cosmetic-second: verify each feature on the shell model before anything prettier.
 
-============================================================================
-NEXT TASK — PHASE 4: MAKE THE CESSNA LOOK LIKE A CESSNA (§14 Phase 4 + §19).
-============================================================================
-THIS PHASE IS MODELLING, NOT PHYSICS. The aero offsets, mass layout, CoM and static margin MUST NOT move — §4's published figures are all measured against the current budget, FlightModel caches geometry at spawn, and if the model is redrawn the definition is re-verified, not assumed. The modelled aircraft uses exactly the current mass budget. Anything that would move mass or aero is a decision point, not an assumption — raise it with the pilot first.
+4. Cockpit interior per the published 172S layout: panel, seats, yokes, rudder pedals, trim wheel,
+   throttle, circuit breakers. The gauges drop in almost unchanged — SixPack.buildPanel() builds
+   into any parent and Instrument.luau is rendering-agnostic (§19's roadmap, waiting since Phase
+   2). A test already drives buildPanel() through a real SurfaceGui; extend it into the actual 3D
+   panel once the interior exists. §32's wet-compass turning-error model is written and tested and
+   is waiting for the compass this item mounts on the windscreen frame. Reference already
+   gathered: published 172S panel guides (flightnerdairforce, pilotmall, cessna172sim).
 
-MESH STATUS (2026-08-05): the pilot has imported the detailed Cessna 172
-model into Studio. It is the Sketchfab model by KOG_THORNS (CC BY 4.0,
-credited in CREDITS.md). Details you asked for:
-- Asset ID: rbxassetid://114080937764105 (imported in Studio via Asset Manager).
-- It is a SINGLE LUMP — the pilot joined all ~58 objects in Blender and
-  decimated (68,008 faces → Roblox auto-decimated on import), so the ailerons/
-  elevator/rudder are NOT separate meshes. Use the "lump" path you proposed:
-  the mesh is the static shell, and our existing primitive control surfaces
-  keep moving over it. Do not try to hinge the mesh's surfaces.
-- Facing/scale: imported with World Forward = front, World Up = up, so it
-  already faces −Z forward, +X right, +Y up. BUT it is oversized: measures
-  12.60 (X/span) × 2.96 (Y/tall) × 9.44 (Z/length) studs. The 172S should be
-  ~11.0 × 2.7 × 8.3 m (1 stud = 1 m). Rescale the shell to match — anchor the
-  scale on the 8.3 m fuselage length (factor ~0.879) and check the span lands
-  near 11 m; if proportions are slightly off, prefer matching the fuselage and
-  span, and tell the pilot the discrepancy rather than silently choosing.
-- MeshPart triangle cap: Roblox auto-decimated the import to ≤21k, so the cap
-  is already satisfied — verify the actual count in Studio (do not assume) and
-  report it. Do NOT re-import a >21k split unless the visual loss is obvious.
+5. Controls and switches as 3D parts, visual only, inert and non-interactive. ⚠️ Interactive
+   switches are a DECISION, deferred: the cursor-is-the-yoke rule (§6g, §7) means a clickable
+   switch mid-flight IS the flight controls by construction. When that day comes it needs a modal
+   state that releases the yoke, or ground-only use. Do not build interactivity now.
 
-PLAN WHEN WIRING IT IN: parent the mesh to the existing physics assembly as a
-VISUAL SHELL — unanchor it, weld it to the unanchored physics root part,
-Massless + CanCollide off, textures applied if present (they were stripped in
-the OBJ export, so expect a clean grey shell; applying textures is optional
-follow-up). Keep the invisible physics box parts doing all colliding/mass.
-flip exteriorFromMesh = true and re-measure that mass is unchanged. Nothing
-about the physics definition changes.
+Phase 4b (flight tablet) is NEXT after the interior — blocked on it for a reason.
+Phase 5 (weather) after that: it is what makes §32's instrument realism visible (QNH, density,
+thermals, hot pockets) and where the parked altitude-hold work is scheduled (§29: slow droop is
+WANTED, ~29 m droop revisit, NO integrator).
 
-Physics-first, cosmetic-second (the pilot's rule from §30's ScaleTo lesson):
-build and verify every behaviour against the existing crude box model FIRST,
-then let the mesh shell replace the visuals afterwards. Do not couple new work
-to the mesh being present.
+PITCH-INERTIA DECISION POINT (still open, §29/§31): the model has 2.7x a real 172's Iyy. Closing
+it means moving mass — a decision point for the pilot, not an assumption. Raise it before acting.
 
-Scope, refined for realism at the pilot's request (2026-08-04):
-1. Exterior. The mesh shell above is the exterior — the box parts stay as the
-   invisible physics/collision body. Until the mesh lands, the boxes remain the
-   visible model; keep working on the items below that do not need the mesh.
-2. Control surfaces move with the controls. Ailerons, elevators, rudder, flaps
-   and the trim tab visibly deflect with real inputs; the prop spins with RPM.
-   Purely visual, driven by the same signals the physics already reads — flight
-   model untouched by definition. This is the mesh-independent visual work and
-   can start immediately.
-3. The instruments read like a real 172, not like the physics. Real ASI
-   static-source position error; magnetic compass (not true) that lags in turns;
-   altimeter reading what its baro setting says (Atmosphere.getPressureAltitude
-   already feeds QNH). These are DISPLAY errors, injected in the instrument
-   layer, never in the physics — the training value of the phase.
-4. Cockpit interior per the published 172S layout: panel, seats, yokes, rudder
-   pedals, trim wheel, throttle, circuit breakers. The gauges drop in almost
-   unchanged: SixPack.buildPanel() builds into any parent, Instrument.luau is
-   rendering-agnostic (§19 roadmap has been waiting on this since Phase 2).
-   Reference already gathered: published 172S panel guides (flightnerdairforce,
-   pilotmall, cessna172sim). The imported mesh includes a cockpit interior — the
-   visual interior may come from it, but the interactive/panel work is ours.
-5. Controls and switches as 3D parts, visual only, inert and non-interactive.
-   ⚠️ Interactive switches are a DECISION, deferred: the cursor-is-the-yoke rule
-   (§6g, §7) means a clickable switch mid-flight is the flight controls by
-   construction — when that day comes it needs a modal state that releases the
-   yoke or ground-only use. Do not build interactivity now.
+====================================================================
+PROJECT TRAPS TO RESPECT
+====================================================================
+HANDOFF.md = truth. Edit only files under src/ (Rojo syncs one-way files->Studio). runTests()
+suites run in Studio Play mode (Client datamodel; server suites in Server datamodel), not headless
+— no Luau CLI installed, do not invent one. ⚠️ Give the services a few seconds to start before
+believing a server-suite failure: AircraftService reports 33/35 if run the instant Play starts and
+35/35 otherwise (§33). require caches per Studio session — full Studio restart, not Play restart,
+to clear; Edit's cache is the one that lies, Play gets a clean one. The Rojo plugin reconnects
+manually after a rojo serve restart. The Controls contract (six fields) must not change. Do not
+add Co-Authored-By (hook strips it). Structural boxes are the physics and the skin exists to match
+the box — never the reverse (§31), and §33's dimension fix touched decorations ONLY.
 
-Suggested next steps (mesh-independent, in order):
-  a. Wire the control-surface deflection (item 2) against the existing box model
-     — surfaces, trim tab, prop spin from rpm. Verify in Play.
-  b. Add the instrument display errors (item 3) — ASI/compass/altimeter only.
-  c. Build the cockpit interior + 3D panel placement (item 4) on the box model.
-When the mesh lands, drop it over the box shell (visual-only) and re-verify
-nothing physical moved.
+⚠️ SET Studio -> Game Settings -> Avatar -> Rig Type = R6 if it is not already. PlayerService
+makes R6 true from code, but the Studio setting is the belt to its braces and lives outside the
+repo.
 
-Phase 4b (flight tablet) is NEXT after this — do not build it now; it is blocked on the interior for a reason.
+⚠️ UNCOMMITTED AND NOT MINE: src/ReplicatedStorage/FlightSim/Config/Constants.luau (the pilot's
+WALK_SPEED/JUMP_HEIGHT tuning), progress_journal.txt, opencode.json, and the new PlayerService
+module. Do not sweep them into a commit as though they were part of the aircraft work.
 
-============================================================================
-PROJECT TRAPS TO RESPECT: HANDOFF.md = truth; edit only files under src/ (Rojo syncs one-way files→Studio); runTests() suites run in Studio, not headless (no Luau CLI installed; do not invent one); require caches per Studio session — full Studio restart, not Play restart, to clear; Rojo plugin reconnects manually; the Controls contract (six fields) must not change; do not add Co-Authored-By (hook strips it); check the tree is clean/dirty first (see CURRENT STATE above).
+CREDITS.md still attributes the Sketchfab mesh that was purged. Left in place deliberately rather
+than deleted — removing an attribution is the pilot's call, and the mesh is deferred, not
+abandoned. Delete it if the mesh is not coming back.

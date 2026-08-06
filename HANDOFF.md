@@ -4,13 +4,29 @@
 
 ---
 
-## 0. Resume here — state at 2026-08-05
+## 0. Resume here — state at 2026-08-06
 
-**All 743 checks green across 19 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService` and `AircraftService` run in the **Server** datamodel (see §4).
+**All 776 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+
+🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. The camera centred on the middle of the skull; `Humanoid.CameraOffset` now puts it on the eyes **while seated**, derived from the head because `ScaleTo` does not rescale it either — and is left **stock on foot**, because moving it there was rejected as "really funky". The name tag is **off entirely**, by the pilot's call.
+
+🐛 **THE "VESTIGIAL PIECE ON THE TAIL" WAS THE FUSELAGE, AND §33 EXPOSED IT (§35).** The loft's last station ended at z = 4.70, so the tail cone stopped in mid-air just short of the fin's trailing edge — a square-ended block sticking out the back. Moving the vertical tail 0.106 m forward for §33's length fix pulled the fin off the end of the cone that used to hide it. It now dies at **z = 4.35**, inside the fin and tailplane. **Envelope, mass and part count unchanged.** ⚠️ **Do not fix a loft like this by deleting its last station** — that leaves a bigger blunt face further forward, where nothing covers it.
+
+➡️ **NEXT: the pilot re-flies it before the interior work starts** (the project rule). ⚠️ **Still open, and a decision rather than a task: a realistic seated eye height does not fit this airframe.** The seat pan is 1.40 m above the wheels where a real 172's is about 0.95 m, so the eye is 0.55 m above the pan instead of 0.78 m. Fixing it means moving the **structural** `PilotSeat` (§31). See §35.
+
+🧱 **THE PILOT IS A CLASSIC R6 NOW, BUILT IN CODE (§34).** ⚠️ **R6 is not a property Rojo can write** — `StarterPlayer`, `Workspace` and `Players` were all probed and none has one, so the new `PlayerService` builds every character with `Players:CreateHumanoidModelFromDescription(desc, R6)` and `CharacterAutoLoads = false`. It runs **last** in `SERVICE_ORDER` because it stands the pilot on the `SpawnLocation` that AirportService moves. Settled: **1.741 m tall, feet on the apron, scale 0.3500** — and `FlightController`'s scaling needed no change, because it measures the rig rather than assuming R15. 🐛 **A "sinking pilot" cost a fix that had to be thrown away: `Model:ScaleTo` does not replicate, so the SERVER's copy of a scaled character is not evidence — measure it on the CLIENT.**
+
+🗑️ **THE IMPORTED MESH IS GONE, ON THE PILOT'S CALL (§33).** It sat wrong on the aeroplane and its fitted scale was abnormal, so it was **removed rather than patched** — deferred, not abandoned. The exterior is the pre-mesh primitive Cessna of §31 again: 78 parts, 1,111 kg, one assembly, all six surfaces still deflecting. The diff is **100% deletions** bar one identifier rename. `exteriorFromMesh` and `keepWithMesh` went with it, one step past "restore the flag to false", because deleting `useMesh` left nothing reading either.
+
+📏 **THE AEROPLANE IS NOW THE SIZE OF THE PUBLISHED AEROPLANE — 11.000 × 2.720 × 8.280 m (§33).** It measured 10.500 × 2.920 × 8.450: **three errors in three different directions**, which is why there was no scale factor to fix and why each axis was corrected in the part layout. ⚠️ **Not one structural box moved** — every change is massless decoration, and the original 29 `Cessna172` checks including static margin pass untouched. Four new checks pin the dimensions against the definition. **The whole-model envelope still reads 2.85 m and that is correct**: the invisible structural fin box tops out 0.13 m above the visible fin, and shrinking it would move mass to improve something nobody can see.
+
+🧍 **THE PILOT IS EXACTLY 1.75 m AND CANNOT ALSO BE 0.50 m WIDE (§33).** Measured settled at **1.7502 studs** with **0.547 m** shoulders. The R15 rig is built **9.4% too broad for its height** (ratio 0.3125 against a human's 0.2857) and a uniform `ScaleTo` carries that ratio whatever value it takes — scale for width instead and the pilot is 1.60 m tall. The two mechanisms that could narrow it are the ones §30 measured as inert (`BodyWidthScale`) or destructive (hand-resizing a constraint rig with 15 `WrapTarget`s of layered clothing).
+
+The pilot's answer was to change the rig instead — **classic R6, now done in §34**. Note that R6 is **broader still** — a 2-stud torso on a 5-stud rig is a 0.40 ratio — so it was a choice of *look*, not a fix for the width.
 
 🎛️ **THE INSTRUMENTS NOW READ LIKE INSTRUMENTS (§32).** The ASI carries the POH's static-source position error (48 kt calibrated indicates **40**), the DI reads **magnetic** rather than true, and the altimeter reads what its baro setting says. **Display errors only** — injected in `SixPack.samplers`, never in the physics. A wet-compass turning-error model is written and tested for the compass scope item 4 will mount; it is **not** on the DI, because a gyro is steady in a turn by design.
 
-✈️ **PHASE 4 HAS STARTED — THE CESSNA LOOKS LIKE A CESSNA (§31).** The exterior is modelled (78 parts, lofted fuselage, dihedral wing, struts, swept fin, gear legs) and **the control surfaces move with the controls** — ailerons, elevators, rudder, flaps, trim tab and a spinning prop, all on `Motor6D` hinges. **The physics did not move**: the structural boxes are unchanged and merely hidden, and `Cessna172` is still 29/29 at 1,111 kg with the CoM where it predicts. Two real bugs were caught doing it — a duplicate part name that **silently detached the tailplane and lost 20 kg**, and **ailerons that deflected backwards** past a test asserting the wrong sign. Scope items 3–5 (instrument realism, cockpit interior, 3D controls) are **not started**.
+✈️ **PHASE 4 — THE CESSNA LOOKS LIKE A CESSNA (§31).** The exterior is modelled (78 parts, lofted fuselage, dihedral wing, struts, swept fin, gear legs) and **the control surfaces move with the controls** — ailerons, elevators, rudder, flaps, trim tab and a spinning prop, all on `Motor6D` hinges. **The physics did not move**: the structural boxes are unchanged and merely hidden, and `Cessna172` is still 29/29 at 1,111 kg with the CoM where it predicts. Two real bugs were caught doing it — a duplicate part name that **silently detached the tailplane and lost 20 kg**, and **ailerons that deflected backwards** past a test asserting the wrong sign. Scope items 3–5 (instrument realism, cockpit interior, 3D controls) are **not started**.
 
 🧍 **THE PILOT IS 1.75 m, AND THE PREVIOUS ATTEMPT AT IT DID NOTHING AT ALL (§30).** `d19d805` set the R15 scale `NumberValue`s and printed a success line while moving the rig **0.00 studs** — the marker reported the scale it *asked for* beside an unrelated `HumanoidRootPart` number, so it could not tell success from doing nothing. The answer is **`Model:ScaleTo()`** — `Humanoid` has no `ScaleTo`, but a character is a `Model` and that one exists. **There is no 0.4 floor** (it was inferred from a mechanism that was never working) and **no `Motor6D` joints on this rig to rewrite** — it is a constraint rig. The planned manual part-rescaling was never needed. ⚠️ **Leave `AutomaticScalingEnabled` TRUE**: setting it false moves the camera focus onto an unscaled 2-stud constant, putting it 1.30 studs above a shrunken pilot's head. Boarding still moves the aircraft **0.000 m**.
 
@@ -173,7 +189,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (585 checks total)
+### Verified green (776 checks total)
 
 ⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 
@@ -182,14 +198,14 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 | Client |
 | `Aerodynamics` | `Physics/Aerodynamics.luau` | 37/37 | Client |
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
-| `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 29/29 | Client |
+| `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 33/33 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
 | `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 21/21 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 46/46 | Client |
-| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 24/24 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 52/52 | Client |
+| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 33/33 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
@@ -198,6 +214,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 98/98 | **Server** |
+| `PlayerService` | `ServerScriptService/FlightSim/Services/PlayerService.luau` | 14/14 | **Server** |
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -1048,9 +1065,57 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 
 **Gate:** fly a full session with weather, land hard enough to bend something, reload, and find the aeroplane where you left it — damaged, with the hours to prove it.
 
-### Beyond Phase 6 — deliberately not planned yet
+### Beyond Phase 6 — where the game goes after the flight model is finished
 
-Phase 7 (multiplayer sky) and Phase 8 (career — the tablet's destinations as goals) stay as headings only. They are where the architecture already points — server-authority since Phase 1, the tablet's destination picker since Phase 4b — but planning them now would be guessing about a game that has not yet been flown end to end.
+**Phase 5 is NOT the finish line.** It is the end of the *current flight-physics scope*; the pilot has confirmed the game continues after it. The roadmap below is deliberately lighter than Phases 2–6 — written as goals rather than gates, because these phases are about *world*, not *physics*, and they are the reason meshing is the very last thing on the list. The primitive shell (§31) carries the game through every phase up to it.
+
+**Phase 7 — The world grows: more airports and what they sit in**
+
+- **More airports.** `AirportService.AIRPORTS` is already a registry keyed by airport id, each declaring its own elevation and grass type (§23, §24). Ridge Strip proved the pattern generalises; the next aerodromes are mostly *content* — new registry entries, runway geometry on a new heading, elevation and surface — plus whatever `getRunway()` needs to stay scoped per field. The "second full-size airport does not fit beside the first" constraint (§37) still shapes how far apart they go.
+- **Buildings and scenery.** Hangars, terminal, fuel pumps, windsock, ground clutter — static, massless, welded, and most importantly **collidable where they need to be** (a pilot should be able to clip a wing, not fly through a hangar). The structural-box rule does not apply here: these are world objects, not part of the aircraft, so they get ordinary `CanCollide`. Painted cheap — see the mesh note below.
+- **Runway and apron detail.** Approach lighting, PAPI/VASI, taxiway signage, holding points, tie-downs — the depth cues §11 proved a landing gate needs, extended to the whole field.
+
+**Phase 8 — UI depth, inside and out**
+
+- **Interface and menus.** Main menu, pause, settings (controls remap, audio, weather preset selection from Phase 5), flight log. The cursor-is-the-yoke rule (§6g, §7) already dictates the hard part — anything clickable needs the same modal-state-or-ground-only decision the tablet (§4b) and switches (§14 Phase 4 item 4) already settled.
+- **The interactive map.** The tablet's Phase 4b destination picker grows into a real moving map — airports, runways, your own position/heading, distance and bearing, later course lines — built on the same `AirportService` registry and navigation data it already reads. This is the natural home for it: the map is interface, not physics, and by Phase 8 every aerodrome it draws actually exists.
+- **Cockpit indicators.** Beyond the six-pack: the wet compass on the windscreen frame (§32's turning-error model is already written and waiting), trim indicator, flap position, gear, circuit breakers that actually pop, the G-meter the damage phase hints at. Instrument.luau is rendering-agnostic and `SixPack.buildPanel()` builds into any parent, so new instruments are spec data, not new gauge code.
+- **HUD polish.** The debug HUD becomes a *pilot's* HUD — airspeed, altitude, heading, glideslope on approach, trimmed, toggled on H as today.
+
+**Phase 9 — ATC: clearance and conversation**
+
+**Goal:** a tower that talks back. The pilot chats to a controller and gets real clearances — *"N172SP, cleared for takeoff runway 36"* — for the full procedural loop: clearance → taxi → line up → takeoff → frequency handoff between airports, and approach/landing back in. This is what makes the training sim *procedural* rather than *freeform*: the gates (§26) already teach flying; ATC teaches flying *the way it is actually flown*.
+
+- **Rules-based core, first and load-bearing.** A deterministic server-side state machine per airport that knows its runways, taxiways and procedures, parses the pilot's chat for the standard calls ("request taxi", "ready for departure", "clearance to"), and answers from its state — issuing clearances only when the aircraft is actually where it must be. Zero cost, zero latency, fully testable in the existing style (same seed → same session). This is the whole product if the AI layer never ships; it is also the safety net under it.
+- **LLM layer, on top, interchangeable.** An optional real-AI controller wired through `HttpService` from a **server** script (⚠️ the API key lives server-side only — never in a client script, which anyone can read), fed the aircraft's live state (position, altitude, airspeed, phase) as context. It converses freely and can handle anything the rules would answer with a canned line. Rate-limited and paid per message, so it defaults off with the rules core running underneath, and **when it fails or is disabled, the rules still answer**.
+- **Chat plumbing.** The pilot's chat is read server-side and routed to whichever ATC layer is active; responses appear as the controller's speech in the same chat. Ground-only and in-air frequencies (local tower → departure → approach) give the handoff something to do.
+- **How to test it.** The rules core is a state machine — assert clearance is refused when the aircraft is on the wrong taxiway, granted when it is lined up, and handed off at the airport boundary. The LLM layer is the one thing arithmetic cannot check: same rule as §17's trap — **if a module talks, listen to it.**
+
+**Phase 10 — Airliners: Boeing and Airbus definitions**
+
+**Goal:** fly the big stuff. Where Phase 5's jet (§14) proves the aircraft registry generalises, this phase does it at scale: a fleet of airliner definitions — the 737, 747, A320, A350 class — each with its published geometry, mass, performance and cockpit, through the same definition → builder → registry path the 172 uses. `Aircraft/Registry.luau` is already id → definition and the only thing crossing the network at spawn, so a new airliner is a definition, not new plumbing.
+
+- **The definitions are the work.** Each airliner is a `Cessna172`-shaped definition: `Aerodynamics` surfaces from real wing area/AR/CL, an engine spec (high-bypass turbofan — the Phase 5 jet already exercises compressibility, the airliners exercise it in cruise), a mass budget in the 40–400 t range, and a cockpit with its own panel layout. The physics first: same rule as §4 — published figures measured against the mass and aero layout, and every phase gate flown.
+- **Flying them is the point, not collecting them.** Airliner handling differs from the 172 in kind — far higher wing loading, inertial response, retracted-gear flap discipline, an autopilot that has to earn the Phase 5 / §29 altitude-hold work. Each aircraft type is signed off by a gate flown in that type before the next is added.
+- **Meshing per type is deferred to Phase 12.** One airliner is meshed as the proof of the primitive-shell workflow; the rest ride the primitive shell until then. The control-surface rule holds (§31): a single mesh cannot deflect its own ailerons, so surfaces stay definition-driven whatever the exterior.
+
+**Phase 11 — Fighter jets, and aircraft carriers in the ocean**
+
+**Goal:** carrier ops. The ocean is the biggest thing Phase 3's terrain never touched — `Terrain` ends at the coast, so a carrier needs water that an aircraft can take off from and land on. Then the jet: a high-performance fighter definition (supersonic-era geometry and thrust, Phase 5's compressibility and the engine model's real work), flown off a moving deck.
+
+- **The ocean and the carrier come first.** Water surface, deck geometry, catapult/arresting-gear physics — `GroundHandling` currently assumes a runway; carrier recovery is launch-and-recover forces on a ship that moves and pitches. This is a decision-heavy phase (moving-platform physics is new), so it is scoped before the jet that uses it.
+- **The fighter definition.** Same definition → builder → registry path as Phase 10's airliners, but a very different flight envelope — high alpha, afterburner thrust, a stall that must not bite a pilot in the circuit. It is the risk case for the flight model: if the physics cannot hold a fast, low-AR, unstable platform, it fails here, where the 172 and the airliners could never expose it.
+- **Gate: a carrier circuit.** Launch, transit, a bolter (touch and go without catching) and a trap — flown and signed off, with the arrested landing the phase's load-bearing moment.
+
+**Phase 12 — Mesh: the final polish, deliberately last**
+
+- The primitive 78-part shell is the exterior until here. Meshing is a **pure visual swap over unchanged physics** — the structural boxes stay, the control surfaces stay ours (a single mesh cannot deflect its own ailerons, §31), and nothing re-tunes. One aircraft to make beautiful, dropped onto a finished world.
+- This is why everything else comes first: mesh work is the one thing that touches only appearance, so doing it after the world, the aircraft and the carrier exist means a single mesh project covers all of it and cannot break anything.
+- The purged Sketchfab import (§33) and `CREDITS.md` are the standing note: when the day comes, either re-evaluate that asset or commission/reference a fresh one.
+
+**Beyond — deliberately not planned yet**
+
+Phase 13 (multiplayer sky) and Phase 14 (career — the tablet's destinations as goals) stay as headings only. They are where the architecture already points — server-authority since Phase 1, the tablet's destination picker since Phase 4b — but planning them now would be guessing about a game that has not yet been flown end to end.
 
 ---
 
@@ -2172,3 +2237,178 @@ Changing what the gauges display made six `SixPack` checks fail, correctly — t
 - "Absent telemetry reads zero" became "is survivable": **a true heading of zero is genuinely not magnetic zero**, and demanding it be would assert the absence of the feature.
 
 Two new checks pin that the error reaches the panel at all, so a future "simplification" back to the raw number fails loudly.
+
+---
+
+## 33. The mesh is purged, and the aeroplane is the size of the published aeroplane (2026-08-06)
+
+**752/752 across 19 suites**; `Cessna172` 29 → 33, `CameraController` 24 → 29.
+
+### The imported mesh was imported, wired in, and removed on the pilot's call
+
+`0fab920` loaded a Sketchfab 172 through `InsertService`, fitted its scale, and posed every control surface onto it. The pilot flew it and reported the shell *"really weird"* and the *"scaling very abnormal"* — it did not sit on the aeroplane. **Removed rather than patched**, and deferred rather than abandoned: a mesh may come back as its own stage, re-decided from scratch.
+
+What went, in two files and nothing else:
+
+| `Cessna172.luau` | `AircraftBuilder.luau` |
+|---|---|
+| `MESH_GREY`, the `meshPose` mirror in `addPair`, seven `meshPose` blocks, the `meshShell` spec | the `MESH SHELL` section — `loadMeshShell`, `meshShellProblem`, `meshShellScale` and their state — plus `posed()` and the shell build block |
+
+⚠️ **`exteriorFromMesh` and `keepWithMesh` went too, and that is one step past "restore the flag to false".** Deleting `useMesh` — which the purge instructions called for — leaves nothing that reads either of them, and a dead boolean named after a deleted feature is exactly the trace the purge was for. Both are one line to reinstate if a mesh returns. **The diff is otherwise 100% deletions**: no mass, no aero, no surface definition moved, and the one added line renames `rawSpec` back to `decoSpec`.
+
+**The exterior is the pre-mesh primitive shell of §31** — 78 parts, lofted fuselage, dihedral wing, struts, swept fin, gear legs — not the invisible structural boxes. Verified after the purge: **78 parts, 1 assembly, 1,111 kg**, and all six control surfaces still driven (elevator up on stick back, ailerons opposed with the right one raised on right roll, rudder right on right pedal, flap 30° down, trim tab opposing the elevator) — measured as **where each trailing edge physically moved**, not from the sign of an angle.
+
+### The aeroplane was the wrong size in three directions at once
+
+There was **no scale factor to fix**. The hand-built shell measured:
+
+| | built | published 172S | error |
+|---|---|---|---|
+| span | 10.500 m | 11.00 | **−4.5%** |
+| height | 2.920 m | 2.72 | **+7.4%** |
+| length | 8.450 m | 8.28 | **+2.1%** |
+
+Three errors in three directions, so one uniform factor cannot correct them and each axis is fixed in the part layout instead. It now measures **11.000 × 2.720 × 8.280** — and that is the *visible* shell, because the shell is what a pilot sees and measures.
+
+- **Span** — the outer wing is 0.25 m longer each side and the tip and nav light follow it out. The aerodynamic `WING_SPAN` was **already 11.0**, so the drawn wing was 0.5 m shorter than the wing the model flies on; this closes that, it does not open it.
+- **Height** — everything above y = 0.50 is compressed by 0.8425, so the fin keeps its proportions rather than having its tip sliced off, and the beacon still sits exactly on the fin tip. Its top face **is** the 2.72 m.
+- **Length** — split between the nose (0.064 m aft) and the tail (0.106 m forward) in proportion to how far each already stood from the datum, so the aeroplane is trimmed to length without being shifted along it. The vertical tail moves as a **group**, or the rudder buries itself in the fin.
+
+⚠️ **NOT ONE STRUCTURAL BOX MOVED.** Every change is a decoration: massless, skipped by `measure()`, incapable of touching the mass budget, the centre of mass, the static margin or the inertia tensor. `Cessna172`'s original 29 checks — static margin included — pass unchanged. §31's rule stands: *the skin exists to match the box*, and here the box was never what the published dimensions describe.
+
+⚠️ **The whole-model envelope still reads 2.85 m, and that is correct.** The invisible structural `Fin` box tops out 0.13 m above the visible fin. Shrinking it to tidy the number would move mass and rewrite the inertia tensor to improve something nobody can see — §31's decision point, not a cleanup.
+
+### Four checks now pin the dimensions
+
+Computed in `Cessna172.runTests()` from the same numbers the builder reads, with each part's rotation folded in exactly as `createPart` folds it, so the check cannot drift from what is built. It agrees with the built model to four decimals by an independent path. The fourth asserts **the shell's lowest point is the wheel contact plane at −1.15 m** — without it, a fin lowered to hit 2.72 m against a sunken undercarriage would pass while sitting wrong on the runway.
+
+### The pilot: 1.75 m is exact, 0.50 m wide is not reachable with it
+
+Measured settled (§30's discipline — five consecutive readings within 0.005 studs, rig standing and still):
+
+| | measured | wanted |
+|---|---|---|
+| height | **1.7502 studs** ✅ | 1.75 |
+| shoulder width | **0.547** | ~0.50 |
+
+⚠️ **One uniform `Model:ScaleTo` cannot deliver both, and no code change makes it.** The R15 rig is built with a shoulder-width-to-height ratio of **0.3125** against a human's 0.2857 — it is **9.4% too broad for its height**, and a uniform scale carries that ratio with it whatever value it takes. Scale for height and the shoulders come out 0.547 m; scale for width and the pilot is 1.60 m tall.
+
+The two mechanisms that could narrow the rig are the ones §30 already measured: the R15 `BodyWidthScale` `NumberValue`s are **inert on this rig**, and per-part rescaling means hand-resizing a constraint rig carrying 15 `WrapTarget`s of layered clothing — the "manual part-rescaling" §30 established was never needed.
+
+**Raised with the pilot rather than silently chosen**, per the scale-fix brief. The pilot's answer was to change the rig instead: **classic R6**, proportioned to look right beside the aeroplane rather than measured against a human. See the open item in §0 — **R6 is not a property Rojo can write**, which is a decision before it is a task.
+
+**Boarding still moves the aircraft 0.000 m**, re-measured with the aeroplane confirmed at rest first.
+
+⚠️ **`AircraftService` reports 33/35 if the suite is run the instant Play starts.** It was chased down rather than assumed: the first guess — that hand-built aircraft earlier in the session contaminated it — was **tested and disproved** (building aeroplanes by hand first, and running the whole client sweep first, both still give 35/35). Every 33/35 was a run fired immediately after "Game Started"; every run with a few seconds' wait passes. **Give the services time to start before believing a server-suite failure.** The suite is fine.
+
+---
+
+## 34. The pilot is a classic R6, built in code (2026-08-06)
+
+**761/761 across 20 suites**; new `PlayerService` at 9.
+
+The pilot asked for R6 — *"it doesn't have to be realistic in measurements, just very well proportional to the aircraft to hide that we even scaled down at all"* — after §33 established that no uniform scale can make an R15 rig both 1.75 m and 0.50 m wide.
+
+### R6 is not a property Rojo can write, so the rig is built in code
+
+`StarterPlayer`, `Workspace` and `Players` were all probed: **none of them carries a rig-type property.** The choice lives in place-level Game Settings, which is not a file, so §3's "files are the source of truth" cannot cover it. `PlayerService` makes it true in the repository instead:
+
+```lua
+Players.CharacterAutoLoads = false
+Players:CreateHumanoidModelFromDescription(desc, Enum.HumanoidRigType.R6)
+```
+
+The Studio setting is set to R6 as well, so the two agree and a place opened without the service still gets the right rig.
+
+⚠️ **`PlayerService` runs LAST in `SERVICE_ORDER`, and that is load-bearing.** It stands the character on `Workspace.SpawnLocation`, which **AirportService moves** onto the apron at the airport elevation (§20, §30). Started any earlier, the pad is still at Rojo's y = 0 and the pilot spawns under the terrain.
+
+**Nothing else needed changing.** `FlightController.scaleForHumanProportions` is rig-agnostic — it measures the assembled rig rather than assuming R15 — so R6 lands on 1.75 m through the same path, and `AircraftService.trackCharacter` still gets its `CharacterAdded` because assigning `player.Character` fires it normally. ⚠️ **A cosmetic preference must never leave a player bodiless**: if the R6 build fails the service falls back to `player:LoadCharacter()`, and the pilot gets an R15 body they can still fly.
+
+### 🐛 The trap: the server's view of a scaled character is not evidence
+
+Read from the **server**, the new pilot appeared to be standing **1.956 m underground** — torso on the apron, both legs straight through it — while the `Humanoid` reported `Running` throughout.
+
+**It was an artefact.** `Model:ScaleTo` is applied by `FlightController` on the **client** and **does not replicate**, so the server holds unscaled 5-stud legs hanging off a root positioned by the client's 1.75 m character. Comparing that replica against the ground compares a full-size body to a scaled-down stance, and the difference looks exactly like sinking.
+
+A `hipHeightFor()` was derived from the rig geometry to "fix" it, written with three tests, and **thrown away** — for R6 the feet rest at `ground + HipHeight`, so the derived 2.000 lifted the pilot into the air once scaled:
+
+| HipHeight | feet vs ground |
+|---|---|
+| 0.7002 (the "fix", scaled) | **+0.6971 m** — floating |
+| 0.0000 (the default) | **−0.0013 m** — standing on it |
+
+**R6's HipHeight of 0 was right all along.** This is §30's lesson a second time: a number that cannot tell success from doing nothing is not a measurement. ⚠️ **Verify character geometry on the CLIENT.** The comment recording this is in the file, where the next person to see the server reading will be.
+
+### Two smaller things that were measured, not assumed
+
+- ⚠️ **The rig brings its own `Animate` LocalScript.** This was the real risk in hand-building a character: `StarterPlayer.StarterCharacterScripts` is **empty** in this place, so had the rig not carried Animate, the pilot would have stood frozen and §30's settle-then-measure would have had nothing to settle. Checked before the service was written.
+- ⚠️ **A fresh rig's `GetExtentsSize()` is meaningless — 6.7 × 16.5 × 31.5 studs** — because its accessories have not welded on yet, and it has **no `PrimaryPart`**, so `GetPivot()` returns that sprawl's centre. The root is therefore found **by name**, and the feet are measured from the body parts only, which *are* already in their rest pose (root +18.000, feet +15.000, a clean 3.000). That is what lets a character be placed correctly on the first attempt instead of dropped and corrected.
+- ⚠️ **A `CFrame` stores its position as float32.** At an airport 250 m up that is ~1.5e-5 studs of precision, and a test comparing to 1e-6 failed on the round-trip alone — reporting a spawn clearance of 0.050 as wrong when 0.050 was exactly right.
+
+### What the pilot measures now
+
+| | R6, settled on the apron |
+|---|---|
+| height | **1.741 m** (tolerance is 0.02) |
+| feet vs ground | **−0.003 m** |
+| torso width | 0.700 m |
+| across the arms | 1.408 m |
+| model scale | 0.3500 |
+
+⚠️ **R6 is BROADER than R15, not narrower** — a 2-stud torso on a 5-stud rig is a **0.40** width-to-height ratio, against R15's 0.3125 and a human's 0.2857. It was chosen as a *look*, not as a fix for §33's width, and the pilot said so explicitly. What matters is the one they asked for: **against a 2.72 m Cessna, a 1.75 m pilot reads right**, and the wingtip sits just above their head where a high wing should.
+
+---
+
+## 35. Four bugs from the first flight of the resized aeroplane (2026-08-06)
+
+**776/776 across 20 suites**; `PlayerService` 9 → 14, `FlightController` 46 → 52, `CameraController` 29 → 33. New shared `CharacterTuning`.
+
+The pilot flew §33's resized Cessna with §34's R6 pilot, reported the flight itself as good, and brought back four faults. All four are fixed. **Three of them were caused by something silently rescaling or replacing a value that every source file still reported correctly** — the same shape of bug as §30's inert marker.
+
+### 🐛 1a. `ScaleTo` scales WalkSpeed and JumpHeight with the rig
+
+Reported as a reset leaving the pilot unable to jump properly. The first theory — that `StarterPlayer.CharacterWalkSpeed` never reaches a hand-built character — is **true and was fixed**, but it was not the cause. Measured on the live pilot afterwards:
+
+| | `Constants` says | Humanoid carried |
+|---|---|---|
+| WalkSpeed | 20.00 m/s | **7.00** |
+| JumpHeight | 1.00 m | **0.35** |
+
+Both are exactly the tuning times **0.35**, the pilot's model scale. `Model:ScaleTo` rescales movement along with the rig, so `PlayerService` set the right numbers and `FlightController` shrank them a second later.
+
+⚠️ **Scaling a rig does not make its owner a smaller person.** §30's rule is that a 1.75 m human walks at the configured speed whatever the rig measures, so the metre-scale values are **restored after the scale converges**, not scaled to match the model. Both callers now share `Shared/CharacterTuning.luau` so the two applications cannot drift apart.
+
+### 🐛 1b. A reset left the camera at the aeroplane
+
+`release()` handed the camera back with `CameraSubject = humanoid or camera.CameraSubject`, and the on-foot branch only repaired the subject **if the camera was still `Scriptable`**. On a reset from the seat both fail together: the old character is destroyed before the new one exists, so the humanoid is nil and the old subject is kept; `release()` has already set the type back to `Custom`, so the repair never runs. The camera stayed pointed at the aeroplane the pilot had just left.
+
+⚠️ **A stale subject is the WRONG object, not a missing one.** A new character carries a new `Humanoid`, so every check of the form "fix it only if it is nil" sees a healthy camera. `groundSubjectFor()` is pure and compares against the live humanoid, and four checks pin the swap.
+
+### 2. The camera sits on the eyes SEATED, and is left stock ON FOOT
+
+Roblox focuses the character camera on the subject's origin — the centre of the head — so zooming in centres on the middle of the skull. `Humanoid.CameraOffset` moves it, and both components are **derived from the head** (a fifth of its height up, three tenths of its depth forward) rather than typed in. ⚠️ **`CameraOffset` is in studs and `ScaleTo` does not rescale it**, so it is read off the head as it currently measures and applied once the scale has converged; a constant would be a head-height out on a 1.75 m pilot.
+
+⚠️ **ON FOOT THE RIGHT ANSWER IS TO DO NOTHING, AND THAT WAS LEARNED THE HARD WAY.** Applying the eye offset while walking was shipped first and rejected immediately — *"really funky"*. A third-person orbit about a point ahead of and above the head centre does not swing about the body, and players' hands already expect stock behaviour. Seated is the opposite case: the camera is a view **out of a cockpit** rather than an orbit, so it wants an eye height. The offset therefore follows `Humanoid.Seated` — applied on sitting, reverted to zero on standing — rather than being a property of the character.
+
+**The cockpit `EYE_OFFSET` was also raised, 0.60 → 0.65**, which was what the written brief asked for before the on-foot problem was clarified. Measured against the airframe:
+
+| eye (datum) | glareshield clearance | view down over the cowling |
+|---|---|---|
+| 0.75 (was) | 0.055 m | 10.6° |
+| **0.80 (now)** | **0.105 m** | **13.0°** |
+
+⚠️ **A REALISTIC SEATED EYE HEIGHT DOES NOT FIT THIS AIRFRAME, and that is a decision point.** A 1.75 m person's eye sits ~0.78 m above the seat pan, which would be datum 1.03 — inside the wing centre section and above the cabin roof. It is 0.55 m above the pan instead, because the pan is **1.40 m above the wheels where a real 172's is about 0.95 m**: the seat is roughly 0.4 m too high in a cabin that is otherwise the right size. Fixing it means moving `PilotSeat`, which is **structural** (§31). Raise it with the pilot before acting.
+
+### 3. The name tag floated far above the head
+
+⚠️ **Roblox's built-in name tag is positioned in stock studs and does not follow `Model:ScaleTo`**, so on a 1.75 m pilot it hangs overhead, and nothing exposes its offset to move it down. A replacement billboard scaled to the pilot was built, and then **deleted on the pilot's instruction** — they asked for no name in the world at all. `HumanoidDisplayDistanceType.None` on both the server and the client, which takes the health bar with it. Neither belongs over a pilot's head in a flight simulator.
+
+### 🐛 4. The vestigial piece on the tail was the fuselage itself
+
+The loft's last station sat at z = 4.70, so the tail cone **stopped in mid-air a few centimetres short of the fin's trailing edge** — a square-ended block sticking out the back of the aeroplane with nothing behind it.
+
+⚠️ **§33 caused it, and §33's own numbers are still correct.** Moving the vertical tail 0.106 m forward to trim the aircraft to its published length pulled the fin off the end of the cone it used to hide. The cone was always blunt; it simply used to be covered.
+
+It was found by **census, not by eye**: every visible part was checked against the definition — 78 parts, 66 declarations, no duplicates, none missing, nothing floating — which proved there was no stray part to delete, and then by colouring the tail part by part until the offender was unambiguous. The station now dies at **z = 4.35**, buried inside both the fin (3.974..4.774) and the tailplane (3.82..4.74), which is where a real 172's cone dies too. **Envelope, mass and part count are unchanged**: still 11.000 × 2.720 × 8.280, still 78 parts, `Cessna172` still 33/33.
+
+⚠️ **Do not "simplify" a loft by deleting its last station.** Deleting `Fuselage11` outright leaves a *bigger* blunt face further forward, where nothing covers it at all. Where the loft ends is the whole question — a loft can only end in a flat face.

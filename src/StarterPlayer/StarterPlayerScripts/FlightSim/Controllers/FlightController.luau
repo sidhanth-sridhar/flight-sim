@@ -714,50 +714,75 @@ end
 	scale has converged (section 30). Sized at spawn it would be built for a
 	stock rig and throw the camera a head-height off.
 ]]
-local seatedCameraConnection: RBXScriptConnection? = nil
+--[[
+	⚠️ ROBLOX FOCUSES THE CHARACTER CAMERA A HARD-CODED 1.500 STUDS ABOVE THE
+	HumanoidRootPart, AND THAT CONSTANT DOES NOT SCALE WITH `Model:ScaleTo`.
 
-function FlightController.eyeCameraOffset(head: BasePart?): Vector3
-	if not head then
+	Measured, by writing offsets and reading back camera.Focus in the root's own
+	frame - the focus is exactly (0, 1.500, 0) + CameraOffset, one for one, on
+	all three axes and at any scale:
+
+	    CameraOffset (0, 0, 0)      -> focus (0.000, 1.500, 0.000)
+	    CameraOffset (0, 0, -0.5)   -> focus (0.000, 1.500, -0.500)
+	    CameraOffset (0.5, 0, 0)    -> focus (0.500, 1.500, 0.000)
+
+	1.500 is where a STOCK 5-stud rig's head sits. Our pilot is scaled to 0.35,
+	so their head is only 0.514 above the root - and the camera was therefore
+	orbiting and zooming to a point **0.905 m above their face**, which is why
+	"centre on the eyes" kept looking wrong however the offset was nudged. This
+	is the same trap as the name tag: a stock-scale constant the engine applies
+	over the top of a scaled rig.
+]]
+local STOCK_FOCUS_ABOVE_ROOT = 1.5
+-- Up from the head's centre to the bridge of the nose, as a fraction of the
+-- head's own height, so it holds for an R6 or an R15 head at any scale.
+local NOSE_RISE = 0.10
+
+--[[
+	The CameraOffset that lands the camera's focus on the pilot's nose - the
+	point between their eyes, on the front of the head.
+
+	Pure arithmetic over measured geometry, so it can be asserted without a
+	character, and so it stays right at any scale rather than being a constant
+	that happens to suit one:
+
+	    focus = root + (0, STOCK_FOCUS_ABOVE_ROOT, 0) + offset      (measured)
+	    want  = root + (0, headAboveRoot + rise, -headDepth / 2)
+
+	`headAboveRoot` and the head's size are both read off the live rig, which is
+	what makes the correction track the pilot as they are scaled to 1.75 m.
+]]
+function FlightController.faceCameraOffset(headSize: Vector3?, headAboveRoot: number?): Vector3
+	if not headSize or not headAboveRoot then
 		return Vector3.zero
 	end
-	return Vector3.new(0, head.Size.Y * 0.20, -head.Size.Z * 0.30)
+	return Vector3.new(
+		0,
+		headAboveRoot + headSize.Y * NOSE_RISE - STOCK_FOCUS_ABOVE_ROOT,
+		-headSize.Z / 2
+	)
 end
 
 --[[
-	The offset for a given seated state. Pure, so both cases can be asserted
-	without a character - and so the "on foot is stock" rule is a testable
-	property rather than a comment.
-]]
-function FlightController.cameraOffsetFor(head: BasePart?, seated: boolean): Vector3
-	if not seated then
-		return Vector3.zero
-	end
-	return FlightController.eyeCameraOffset(head)
-end
+	Put the camera's focus on the pilot's face.
 
---[[
-	Apply the right offset now, and keep applying it as the pilot sits and
-	stands. `Humanoid.Seated` is the signal rather than polling: it fires with
-	the new state on both boarding and stepping out.
+	⚠️ APPLIED ONLY ONCE THE SCALE HAS SETTLED. The correction is the difference
+	between a stock constant and the live rig's geometry, so it is only right
+	when the rig has finished converging on 1.75 m (section 30). Applied at
+	spawn it would be computed for a full-size rig and be a metre out.
 ]]
-function FlightController.fitCameraToEyes(character: Model?): RBXScriptConnection?
+function FlightController.fitCameraToEyes(character: Model?)
 	if not character then
-		return nil
+		return
 	end
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local head = character:FindFirstChild("Head")
-	if not humanoid or not head or not head:IsA("BasePart") then
-		return nil
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not head or not head:IsA("BasePart") or not root or not root:IsA("BasePart") then
+		return
 	end
-
-	local function apply(seated: boolean)
-		humanoid.CameraOffset = FlightController.cameraOffsetFor(head, seated)
-	end
-
-	apply(humanoid.Sit)
-	return humanoid.Seated:Connect(function(active: boolean)
-		apply(active)
-	end)
+	local headAboveRoot = (root.CFrame:Inverse() * head.CFrame).Position.Y
+	humanoid.CameraOffset = FlightController.faceCameraOffset(head.Size, headAboveRoot)
 end
 
 function FlightController.scaleForHumanProportions(character: Model?)
@@ -864,12 +889,7 @@ function FlightController.scaleForHumanProportions(character: Model?)
 		CharacterTuning.apply(character:FindFirstChildOfClass("Humanoid"))
 		FlightController.hideNameTag(character)
 
-		-- One per character: a reset builds a new Humanoid, and the old
-		-- connection would otherwise sit on a destroyed one forever.
-		if seatedCameraConnection then
-			seatedCameraConnection:Disconnect()
-		end
-		seatedCameraConnection = FlightController.fitCameraToEyes(character)
+		FlightController.fitCameraToEyes(character)
 
 		local measured = FlightController.rigHeightStuds(character)
 		if measured and math.abs(measured - PILOT_HEIGHT_M) <= HEIGHT_TOLERANCE then
@@ -2063,63 +2083,61 @@ function FlightController.runTests(): (boolean, { any })
 	)
 
 	--[[
-		---- The camera sits on the eyes ONLY when seated ---------------------
+		---- The camera focuses on the pilot's face ---------------------------
 
-		⚠️ TWO OPPOSITE REQUIREMENTS, AND THE ON-FOOT ONE IS "DO NOTHING".
-		Roblox focuses the character camera on the CENTRE of the head, so
-		zooming in centres on the middle of the skull - wrong in the cockpit,
-		where the camera is a view out rather than an orbit. Moving it to the
-		eyes ON FOOT was tried and rejected by the pilot as "really funky",
-		because a third-person orbit about a point ahead of the head does not
-		behave the way hands expect. So the offset is applied seated and
-		reverted to stock the moment the pilot stands up.
+		⚠️ THE BUG THIS PINS, AND IT IS NOT "THE OFFSET WAS SLIGHTLY OFF".
+		Roblox focuses the character camera a hard-coded 1.500 studs above the
+		HumanoidRootPart, and that constant does NOT scale with
+		`Model:ScaleTo` - measured by writing offsets and reading camera.Focus
+		back in the root's own frame. A pilot scaled to 0.35 has their head only
+		0.514 above the root, so the camera was orbiting a point almost a metre
+		ABOVE their face. Zero offset was never "centred on the head".
 
-		The offset itself must be DERIVED FROM THE HEAD, because CameraOffset is
-		in studs and `Model:ScaleTo` does not rescale it - a constant would be a
-		head-height out on a 1.75 m pilot.
+		The correction is therefore the difference between that stock constant
+		and the live rig's geometry, which is why both inputs are measured.
 	]]
-	local stockHead = Instance.new("Part")
-	stockHead.Size = Vector3.new(2, 1, 1)
-	local scaledHead = Instance.new("Part")
-	scaledHead.Size = Vector3.new(2, 1, 1) * 0.35
-
-	local stockOffset = FlightController.eyeCameraOffset(stockHead)
-	local scaledOffset = FlightController.eyeCameraOffset(scaledHead)
+	local STOCK_HEAD = Vector3.new(2, 1, 1)
+	local stockOffset = FlightController.faceCameraOffset(STOCK_HEAD, 1.5)
 
 	record(
-		"On foot the camera is left exactly where Roblox puts it",
-		FlightController.cameraOffsetFor(stockHead, false) == Vector3.zero,
-		"zero offset walking around - stock third-person behaviour"
+		"A stock-size rig needs almost no correction",
+		math.abs(stockOffset.Y - STOCK_HEAD.Y * 0.10) < 1e-6,
+		string.format("%s - only the rise to the nose bridge", tostring(stockOffset))
+	)
+
+	--[[
+		The pilot as they actually are: a 0.35x rig whose head sits 0.514 above
+		the root. The measured focus error was 0.905 m, so the correction has to
+		be about that far DOWN - a positive offset here would be the bug.
+	]]
+	local scaledOffset = FlightController.faceCameraOffset(Vector3.new(2, 1, 1) * 0.35, 0.514)
+	record(
+		"A scaled pilot's focus is pulled DOWN onto the face",
+		scaledOffset.Y < -0.8 and scaledOffset.Y > -1.0,
+		string.format("%.3f studs, against the 0.905 m error measured live", scaledOffset.Y)
 	)
 	record(
-		"Seated, the camera moves to the pilot's eyes",
-		FlightController.cameraOffsetFor(stockHead, true) == stockOffset
-			and stockOffset.Magnitude > 0,
-		string.format("%s once in the seat", tostring(stockOffset))
+		"The focus lands on the nose, not inside the skull",
+		math.abs(scaledOffset.Z - (-0.35 / 2)) < 1e-6,
+		string.format("%.3f forward, the front face of a %.3f-deep head", scaledOffset.Z, 0.35)
+	)
+	--[[
+		The whole point: the corrected focus must sit on the head wherever the
+		stock constant would have put it. Reconstructing focus from the measured
+		rule - root + 1.5 + offset - has to land on the face.
+	]]
+	local focusAboveRoot = 1.5 + scaledOffset.Y
+	record(
+		"The corrected focus sits on the head, not above it",
+		math.abs(focusAboveRoot - (0.514 + 0.35 * 0.10)) < 1e-6,
+		string.format("focus %.3f above the root, head centre %.3f", focusAboveRoot, 0.514)
 	)
 	record(
-		"The eye offset is above the head's centre and ahead of it",
-		stockOffset.Y > 0 and stockOffset.Z < 0,
-		string.format("%s on a stock head", tostring(stockOffset))
-	)
-	record(
-		"The eye offset stays inside the head",
-		stockOffset.Y < stockHead.Size.Y / 2 and math.abs(stockOffset.Z) < stockHead.Size.Z / 2,
-		"the pivot is at the eyes, not out through the face or the crown"
-	)
-	record(
-		"The eye offset scales with the pilot",
-		(scaledOffset - stockOffset * 0.35).Magnitude < 1e-6,
-		string.format("%s at 0.35x, exactly 0.35 of the stock offset", tostring(scaledOffset))
-	)
-	record(
-		"A missing head yields no offset rather than a wrong one",
-		FlightController.eyeCameraOffset(nil) == Vector3.zero
-			and FlightController.cameraOffsetFor(nil, true) == Vector3.zero,
+		"Missing geometry yields no offset rather than a wrong one",
+		FlightController.faceCameraOffset(nil, 0.5) == Vector3.zero
+			and FlightController.faceCameraOffset(STOCK_HEAD, nil) == Vector3.zero,
 		"zero, so the camera is left where Roblox put it"
 	)
-	stockHead:Destroy()
-	scaledHead:Destroy()
 	end
 
 	local ok, err = pcall(body)

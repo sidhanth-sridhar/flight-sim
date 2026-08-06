@@ -6,9 +6,9 @@
 
 ## 0. Resume here — state at 2026-08-06
 
-**All 776 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 775 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
 
-🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. The camera centred on the middle of the skull; `Humanoid.CameraOffset` now puts it on the eyes **while seated**, derived from the head because `ScaleTo` does not rescale it either — and is left **stock on foot**, because moving it there was rejected as "really funky". The name tag is **off entirely**, by the pilot's call.
+🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. ⚠️ **The character camera focuses a hard-coded 1.500 studs above the HumanoidRootPart and does NOT scale with `ScaleTo`**, so on a 0.35x pilot it orbited a point **0.905 m above their face**; `Humanoid.CameraOffset` now corrects it onto the nose, derived from the live rig. The name tag is **off entirely**, by the pilot's call.
 
 🐛 **THE "VESTIGIAL PIECE ON THE TAIL" WAS THE FUSELAGE, AND §33 EXPOSED IT (§35).** The loft's last station ended at z = 4.70, so the tail cone stopped in mid-air just short of the fin's trailing edge — a square-ended block sticking out the back. Moving the vertical tail 0.106 m forward for §33's length fix pulled the fin off the end of the cone that used to hide it. It now dies at **z = 4.35**, inside the fin and tailplane. **Envelope, mass and part count unchanged.** ⚠️ **Do not fix a loft like this by deleting its last station** — that leaves a bigger blunt face further forward, where nothing covers it.
 
@@ -189,7 +189,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (776 checks total)
+### Verified green (775 checks total)
 
 ⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 
@@ -204,7 +204,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
-| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 52/52 | Client |
+| `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 51/51 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 33/33 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
@@ -969,9 +969,11 @@ This changes **trim, not stability** — static margin depends on lift slopes an
 
 ---
 
-## 14. Plan — Phases 2 to 6 (with 4b)
+## 14. Plan — Phases 2 to 14 (with 4b)
 
 Written 2026-08-04, at the pilot's request, **before** starting Phase 2. The rule from §8 still holds: each phase ends with a gate the pilot flies and signs off, and nothing downstream begins until they do. Phases 5 and 6 were planned the same day, at the pilot's request, once Phase 2 had a full instrument set to carry them — a weather system no instrument can read is pointless, so the order is deliberate.
+
+Phases 7–12 were added on 2026-08-06, at the pilot's request, as the game's direction past the flight model: the world (more airports, scenery), UI depth and the interactive map, ATC, airliners, fighter/carrier ops, and mesh as the deliberate final polish. They are deliberately lighter than Phases 2–6 — goals rather than gates — because they are about *world* and *content*, not *physics*, and they are why the primitive shell (§31) carries the game for a long time.
 
 Two phases already ran out of order and it is worth knowing why, because the roadmap in memory still reads as though they have not:
 - **`CameraController` (§6h)** landed during Phase 1 — flying the gate through Roblox's default character camera would have been miserable.
@@ -2361,7 +2363,7 @@ A `hipHeightFor()` was derived from the rig geometry to "fix" it, written with t
 
 ## 35. Four bugs from the first flight of the resized aeroplane (2026-08-06)
 
-**776/776 across 20 suites**; `PlayerService` 9 → 14, `FlightController` 46 → 52, `CameraController` 29 → 33. New shared `CharacterTuning`.
+**775/775 across 20 suites**; `PlayerService` 9 → 14, `FlightController` 46 → 51, `CameraController` 29 → 33. New shared `CharacterTuning`.
 
 The pilot flew §33's resized Cessna with §34's R6 pilot, reported the flight itself as good, and brought back four faults. All four are fixed. **Three of them were caused by something silently rescaling or replacing a value that every source file still reported correctly** — the same shape of bug as §30's inert marker.
 
@@ -2384,11 +2386,21 @@ Both are exactly the tuning times **0.35**, the pilot's model scale. `Model:Scal
 
 ⚠️ **A stale subject is the WRONG object, not a missing one.** A new character carries a new `Humanoid`, so every check of the form "fix it only if it is nil" sees a healthy camera. `groundSubjectFor()` is pure and compares against the live humanoid, and four checks pin the swap.
 
-### 2. The camera sits on the eyes SEATED, and is left stock ON FOOT
+### 🐛 2. The camera was focusing a metre above the pilot's head
 
-Roblox focuses the character camera on the subject's origin — the centre of the head — so zooming in centres on the middle of the skull. `Humanoid.CameraOffset` moves it, and both components are **derived from the head** (a fifth of its height up, three tenths of its depth forward) rather than typed in. ⚠️ **`CameraOffset` is in studs and `ScaleTo` does not rescale it**, so it is read off the head as it currently measures and applied once the scale has converged; a constant would be a head-height out on a 1.75 m pilot.
+**Two wrong fixes shipped before this was measured properly, and both were wrong because the premise was.** "Roblox focuses on the centre of the head" is **false**.
 
-⚠️ **ON FOOT THE RIGHT ANSWER IS TO DO NOTHING, AND THAT WAS LEARNED THE HARD WAY.** Applying the eye offset while walking was shipped first and rejected immediately — *"really funky"*. A third-person orbit about a point ahead of and above the head centre does not swing about the body, and players' hands already expect stock behaviour. Seated is the opposite case: the camera is a view **out of a cockpit** rather than an orbit, so it wants an eye height. The offset therefore follows `Humanoid.Seated` — applied on sitting, reverted to zero on standing — rather than being a property of the character.
+⚠️ **ROBLOX FOCUSES THE CHARACTER CAMERA A HARD-CODED 1.500 STUDS ABOVE THE `HumanoidRootPart`, AND THAT CONSTANT DOES NOT SCALE WITH `Model:ScaleTo`.** Measured by writing offsets and reading `camera.Focus` back in the root's own frame — the focus is exactly `(0, 1.500, 0) + CameraOffset`, one for one, on all three axes:
+
+| `CameraOffset` | focus, in the root's frame |
+|---|---|
+| `(0, 0, 0)` | `(0.000, 1.500, 0.000)` |
+| `(0, 0, −0.5)` | `(0.000, 1.500, −0.500)` |
+| `(0.5, 0, 0)` | `(0.500, 1.500, 0.000)` |
+
+1.500 is where a **stock 5-stud rig's** head sits. The pilot is scaled to 0.35, so their head is only **0.514** above the root — the camera was orbiting and zooming to a point **0.905 m above their face**. Zero offset was never "centred on the head"; it was above the head entirely, which is why nudging the offset never helped and the first attempt read as *"really funky"* while walking.
+
+The offset is now the **difference between that stock constant and the live rig's geometry**, so it lands on the nose — the point between the eyes, on the front of the head. Measured after the fix: focus **1.7 mm** from the nose point, against 0.905 m before. Same trap as the name tag: a stock-scale constant the engine applies over a scaled rig.
 
 **The cockpit `EYE_OFFSET` was also raised, 0.60 → 0.65**, which was what the written brief asked for before the on-foot problem was clarified. Measured against the airframe:
 

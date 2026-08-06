@@ -5,7 +5,7 @@ Read HANDOFF.md first — it is the source of truth. Commit style: short imperat
 commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user
 asks. Keep this file LEAN — do not re-add sections for work already recorded in HANDOFF.
 
-CURRENT STATE: 776/776 across 20 suites. The mesh is purged, the Cessna measures the published
+CURRENT STATE: 775/775 across 20 suites. The mesh is purged, the Cessna measures the published
 8.28 x 11.00 x 2.72 m, the pilot is a classic R6 built in code by PlayerService, and the four
 bugs from the first flight of the resized aeroplane are FIXED (HANDOFF §33, §34, §35 — all DONE).
 ⚠️ Constants.luau carries the pilot's own tuning: WALK_SPEED = 20.0, JUMP_HEIGHT = 1. Leave it.

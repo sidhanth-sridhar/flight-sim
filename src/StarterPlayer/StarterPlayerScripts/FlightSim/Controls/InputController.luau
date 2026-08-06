@@ -84,10 +84,18 @@ InputController.DEFAULT_BINDINGS = {
 	]]
 	Brake = Enum.KeyCode.B,
 
-	-- Pitch trim. Genuinely useful once the aircraft is stable enough to fly
-	-- hands-off, and comma/period are well clear of the left-hand cluster.
-	TrimNoseDown = Enum.KeyCode.Comma,
-	TrimNoseUp = Enum.KeyCode.Period,
+	--[[
+		Pitch trim. Genuinely useful once the aircraft is stable enough to fly
+		hands-off, and U/J are well clear of the left-hand cluster.
+
+		⚠️ NOSE-DOWN IS J, NOT H. H is `ToggleHud`, which the pilot specified
+		(section 19), so a trim key there silently shadowed it - two actions on
+		one key means the pilot cannot tell why a control is dead. U and J are a
+		vertical pair on the keyboard, up above down, which is what the trim
+		wheel does.
+	]]
+	TrimNoseDown = Enum.KeyCode.J,
+	TrimNoseUp = Enum.KeyCode.U,
 
 	--[[
 		Gear on L, not the conventional G - the pilot assigned G to flaps up.

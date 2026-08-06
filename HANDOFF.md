@@ -8,6 +8,8 @@
 
 **All 783 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
 
+⌨️ **PITCH TRIM NOSE-DOWN MOVED H → J, BECAUSE H WAS ALREADY THE HUD (§38).** Two actions on one key means the pilot cannot tell why a control is dead. ⚠️ **The guard caught this the whole time and it was read past** — `InputController` was reporting **109/110**, not the 110/110 quoted in earlier sessions, because the clash arrived in an uncommitted edit after those runs. Read the failing check, not the aggregate.
+
 🎛️ **THE TRIM TAB RIDES THE ELEVATOR NOW (§37).** Reported as "a small piece on the right elevator that does not move". ⚠️ **Every hinge got `Part0 = root`**, so the tab was bolted to the airframe and only ever did its own trim. An optional **`hinge.parent`** chains a surface's Motor6D to another surface, and the tab is now carried up 22° with the elevator while still sitting 15° nose-down of it. ⚠️ **The arithmetic was already right, which is why nothing caught it** — `SurfaceAnimation`'s 21 checks are all *pure*, and the bug lived in the joint the builder made. There is now a check that drives a **real built model**, because that is the only place the two layers meet.
 
 🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. ⚠️ **The character camera focuses a hard-coded 1.500 studs above the HumanoidRootPart and does NOT scale with `ScaleTo`**, so on a 0.35x pilot it orbited a point **0.905 m above their face**; `Humanoid.CameraOffset` now corrects it onto the pilot (§35 landed it on the nose, §36 moved it to the **head centre**), derived from the live rig. The name tag is **off entirely**, by the pilot's call.
@@ -973,7 +975,7 @@ This changes **trim, not stability** — static margin depends on lift slopes an
 
 ---
 
-## 14. Plan — Phases 2 to 14 (with 4b)
+## 14. Plan — Phases 2 to 14 (with 4b, 4c)
 
 Written 2026-08-04, at the pilot's request, **before** starting Phase 2. The rule from §8 still holds: each phase ends with a gate the pilot flies and signs off, and nothing downstream begins until they do. Phases 5 and 6 were planned the same day, at the pilot's request, once Phase 2 had a full instrument set to carry them — a weather system no instrument can read is pointless, so the order is deliberate.
 
@@ -1041,6 +1043,32 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 - Distance and bearing to destination, which is `AirportService` navigation data presented rather than new physics.
 - Aircraft picker driven by `Aircraft/Registry.luau`, which already maps id → definition and is the only thing that crosses the network at spawn.
 - **The tablet is the first thing in this project that genuinely wants to absorb input.** The cursor-is-the-yoke rule (§6g, §7) means it cannot simply be a clickable UI while flying — it needs either a modal state that releases the yoke, or to be usable only on the ground. **Decide that before building it, not during.**
+
+### Phase 4c — The missing 172S systems: rudder trim and everything the POH lists that we do not fly yet
+
+**Goal:** close the gap between the aeroplane we have and the aeroplane the POH describes. Written 2026-08-06, at the pilot's request, after researching the full published 172S systems list and comparing it against what is modelled. The research source is the POH's systems chapter (fuel, electrics, trim, cockpit environment) and the Cessna 172S trainer guides; the rule from §4 holds — **anything that moves mass or aero is a decision point, re-verified against §4's figures, never silently changed.**
+
+This phase is the systems *behind* the cockpit Phase 4 item 4 builds: **rudder trim, fuel selection, mixture, magnetos, master/electrical, engine gauges, cabin environment, and the lights**. It is deliberately separate from Phase 4 (the interior is visual-only; the switches are inert parts) — this is where some of them become real. Nothing here is needed for the world or the ATC phases, so it slots after the aircraft build work and before the weather.
+
+**Scope — what the research found missing, in one list:**
+
+1. **Rudder trim tab.** The 172S has a small tab on the rudder's trailing edge, driven by a knob on the pedestal. **There is no rudder trim at all** — `Rudder` (Cessna172.luau ~945) hinges only on the rudder channel, and no RudderTrim symbol exists anywhere. Model the tab like the elevator's (§37's `TrimTab`, including `hinge.parent = "Rudder"` so it rides the rudder *and* trims against it — compound motion, the §37 test shape), add a binding, and drive it on its own trim channel in `SurfaceAnimation`.
+2. **Fuel selector.** The real 172S has a LEFT/BOTH/RIGHT/OFF valve in the pedestal feeding from two wing tanks. The sim has one `fuelKg` tank in the engine state. A selector changes *where* the engine draws from and makes tank imbalance a real behaviour (the POH's takeoff-and-land-on-BOTH rule becomes flyable).
+3. **Mixture.** The 172S is fuel-injected (no carb heat — that is the 172R's carburetted engine) but it has a mixture knob for leaning. A leaner mixture changes fuel flow and the air/fuel ratio at the engine; at minimum it is a control the engine model reads.
+4. **Magnetos / keyed ignition.** The 172S starts off a key with OFF-R-L-BOTH-START and a mag check is part of the run-up. The sim's `EngineToggle` (E) is a straight on/off. A keyed start makes the engine's `startTime`/starter work (§6's starter already exists) and adds a real procedure.
+5. **Master / avionics / electrical.** BAT and ALT master switches, avionics master, circuit breakers, ammeter. The panel parts are modelled (Phase 4 item 4); this wires the *state* behind them — what is powered when, and the electrical load on the alternator.
+6. **Engine gauges the POH lists that we do not read:** oil pressure, oil temperature, fuel flow. `SixPack` already samples telemetry; these are three more samplers and dials, with the POH's green bands.
+7. **Cabin environment.** Cabin heat, ventilating and defrost controls (§ the POH systems list) — mostly switches and vents for now; doors and windows as detail.
+8. **Lights that actually switch.** Beacon, NAV, strobe, taxi, landing — the parts exist (NavLightRight/Left, LandingLight, Beacon in Cessna172.luau) but are **inert**: no switch, no electrical dependence, no night effect. The electrical state from item 5 gives them a home.
+
+**Constraints that are already known, not negotiable**
+- **The Controls contract (six fields) must not change.** Trim, mixture, fuel selector, mags, master and lights are *systems* state in the `state.systems` style the engine toggle already uses — never new Controls fields (§6c's contract is pinned by tests).
+- **Anything that changes the fuel mass split or engine behaviour re-verifies §4.** The 153 kg tank is one lump today; a two-tank layout moves CoM assumptions. Same rule as passengers/baggage in Phase 4 item 4.
+- **The cursor-is-the-yoke rule (§6g, §7) applies to every switch.** A clickable knob mid-flight IS the flight controls by construction — interactive cockpit controls need the modal-state-or-ground-only decision Phase 4 item 4 and §4b already punt on. This phase does not build that; it builds the state the switch will one day drive, and the inert parts are already modelled.
+
+**How to test it.** Same shape as every suite here: pure functions of state. Fuel selector BOTH drains both tanks, LEFT drains the left faster, OFF starves the engine in the POH's time; mixture leans fuel flow against a published figure; mag check shows the expected RPM drop; master off kills the ammeter read. Assert against the published numbers, not against what the code currently does.
+
+**Gate:** the pilot re-flies with real systems — a start on the mag check, tank selection on BOTH for takeoff, trim flying hands-off in climb, and the engine gauges reading like the POH's green bands.
 
 ### Phase 5 — Weather and the air through which you fly
 
@@ -2512,3 +2540,30 @@ Carried up 22° with the elevator and still sitting 15° nose-down of it. **Mass
 ⚠️ **A wrong `hinge.parent` would not error.** `Part0 = nil` builds a motor that silently leaves the surface hanging in space, so `validate()` now refuses a parent name that is not a part or a decoration, and refuses a surface hinged onto itself — the same reasoning as the duplicate-name check in §31.
 
 **A new check drives a real built model inside `SurfaceAnimation.runTests`**, because that is the only place the builder and the animator meet, and this bug was invisible to either alone. It asserts all three properties: the tab is carried by the elevator, it still deflects on trim against it, and full stick with full trim **compounds** rather than one overriding the other.
+
+---
+
+## 38. Two actions were on H (2026-08-06)
+
+**783/783 across 20 suites**, `InputController` back to 110/110 from **109/110**.
+
+Asked for as a scan for overlapping keybinds. There was exactly one, and it was live:
+
+| key | claimed by |
+|---|---|
+| **H** | `ToggleHud` **and** `TrimNoseDown` |
+
+`ToggleHud = H` is **pilot-specified** and documented in §19 as the pilot-facing control for the raw-numbers panel. `TrimNoseDown = H` arrived later, in an **uncommitted edit** that moved pitch trim off `Comma`/`Period` onto `H`/`U`. So the newer, unspecified binding moved: **nose-down is now `J`**, directly below `U`, keeping the vertical up-above-down pair the edit was reaching for. `TrimNoseUp = U` is unchanged.
+
+The full set, verified with no collisions: `W`/`S` throttle · `A`/`D` yaw · `F`/`G` flaps · `U`/`J` trim · `B` brake · `C` camera hold · `V` view cycle · `T` view toggle · `R` altitude hold · `E` engine · `L` gear · `P` pause · `H` HUD · `Backspace` reset.
+
+### ⚠️ The guard was working. The aggregate was being read instead.
+
+`"No two actions share a key"` had been **failing** — `InputController` was **109/110**, not the 110/110 quoted in the sessions before the edit landed. Nothing was wrong with the test; the clash simply arrived after those runs, and later sweeps printed only per-suite totals that were skimmed rather than read. **A suite total is not a pass. Read the failing check.**
+
+### What the scan covered beyond the table
+
+- **Every raw input handler resolves its key through the bindings table.** `FlightController.onInputBegan` uses `resetKey()` and `UIController.onInputBegan` uses `hudKey()`, so there are **no hard-coded keys anywhere outside `DEFAULT_BINDINGS`** and the collision check genuinely covers the whole game.
+- **On-foot versus flying does not create a second clash.** `update()` only runs while an aircraft is being flown, so `W`/`A`/`S`/`D` are throttle and yaw only in the air and plain character movement on the apron. The two actions consumed outside `update()` — `ToggleHud` and `ResetAircraft` — are on `H` and `Backspace`, neither of which Roblox claims.
+
+⚠️ **`InputController.rebind` does NOT reject a clash** — it asserts the action exists and then assigns. A settings menu could therefore reproduce this bug at runtime, and only `DEFAULT_BINDINGS` is checked by the suite. **Left alone deliberately**: an existing test rebinds `Brake` onto `V` (which `ViewCycle` holds) to exercise the mechanics, so rejecting clashes would change that contract. Worth deciding when the settings menu is actually built.

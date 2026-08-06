@@ -88,13 +88,27 @@ local VIEW_FREE = 3
 	follows it without anyone remembering to update a second constant. Both are
 	welded into one assembly, so this is rigid either way.
 
-	The height is chosen against the airframe, not by feel. In datum
-	coordinates the seat pan is at y = 0.25, the nose tops out at y = 0.625 and
-	the wing centre section starts at y = 0.825. An eye at y = 0.75 therefore
-	sees over the nose - as you do in a real 172, where the cowling is
-	prominent - while staying clear of the wing above it.
+	THE HEIGHT IS MEASURED AGAINST THE AIRFRAME, NOT FELT. In datum coordinates,
+	with the seat pan at y = 0.25:
+
+	    glareshield (Fuselage04, right in front of the eye)   y = 0.695
+	    wing centre section, underside of the skin            y = 0.850
+
+	so the eye has a 0.155 m slot to live in, and it is now at y = 0.80 - near
+	the top of it. That is 0.105 m of glareshield clearance and 13.0 degrees of
+	view down over the cowling, against the 0.055 m and 10.6 degrees it had at
+	y = 0.75. The pilot reported the old value as not being on their eyes.
+
+	⚠️ A REALISTIC SEATED EYE HEIGHT DOES NOT FIT IN THIS AIRFRAME. A 1.75 m
+	person's eye sits about 0.78 m above the seat pan, which would be y = 1.03 -
+	well inside the wing centre section, and above the cabin roof. The eye is
+	0.55 m above the pan instead, because that is all the room there is: the pan
+	is 1.40 m above the wheels where a real 172's is about 0.95 m, so the seat
+	is roughly 0.4 m too high in a cabin that is otherwise the right size.
+	Fixing that means moving PilotSeat, which is a STRUCTURAL part - a decision
+	for the pilot rather than an assumption (section 31). Raise it before acting.
 ]]
-local EYE_OFFSET = Vector3.new(0, 0.60, -0.15)
+local EYE_OFFSET = Vector3.new(0, 0.65, -0.15)
 
 --[[
 	How far outside a part's own box the eye still counts as "inside" it.
@@ -460,6 +474,33 @@ end
 -- =========================================================================
 
 --[[
+	Which humanoid the on-foot camera should be watching.
+
+	Pure, so the character-swap case can be tested without a player: hand it the
+	live character and whatever the camera currently points at, and it answers
+	with the subject the camera should have.
+
+	⚠️ THE STALE SUBJECT IS THE BUG A RESET EXPOSES. Resetting from the seat
+	destroys the old character and builds a new one, and a new character carries
+	a NEW Humanoid instance - so the old subject is not nil, it is simply the
+	wrong object, and any check of the form "fix it only if it is missing" sees
+	nothing wrong. The camera then stays pointed at the aeroplane the pilot just
+	left. Comparing against the live humanoid is what catches it.
+
+	Returns nil while there is no character, which is honest rather than sticky:
+	the caller re-asks every frame, so the subject is picked up the moment the
+	replacement rig exists.
+]]
+function CameraController.groundSubjectFor(character: Model?, current: Instance?): Instance?
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		return humanoid
+	end
+	local _ = current
+	return nil
+end
+
+--[[
 	Give the camera back to the player's own character.
 
 	Called whenever there is no aircraft to look at - the pilot stood up, died,
@@ -482,9 +523,16 @@ local function release()
 	local camera = workspace.CurrentCamera
 	if camera then
 		camera.CameraType = Enum.CameraType.Custom
-		local character = player.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		camera.CameraSubject = humanoid or camera.CameraSubject
+		--[[
+			⚠️ NO `or camera.CameraSubject` FALLBACK HERE. release() is called
+			the frame the aeroplane goes away, and when that is a RESET the old
+			character is already destroyed while the new one does not exist yet
+			- so the humanoid is nil, and keeping "whatever the subject was"
+			pins the camera to the aircraft the pilot just left. Leaving it nil
+			is honest and self-correcting: onRenderStep reacquires the subject
+			as soon as a character exists.
+		]]
+		camera.CameraSubject = CameraController.groundSubjectFor(player.Character, camera.CameraSubject)
 	end
 end
 
@@ -587,17 +635,31 @@ local function onRenderStep(dt: number)
 			On foot the camera belongs to ROBLOX, which is what keeps
 			right-drag orbiting and scroll zoom alive. All this branch does is
 			size the zoom range to the pilot, and hand the camera back if
-			anything has left it Scriptable.
+			anything has left it pointing somewhere else.
 		]]
 		if camera.CameraType == Enum.CameraType.Scriptable then
 			camera.CameraType = Enum.CameraType.Custom
-			local character = player.Character
-			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-			if humanoid then
-				camera.CameraSubject = humanoid
-			end
 		end
-		frameGroundPilot(player.Character)
+
+		--[[
+			⚠️ THE SUBJECT IS REPAIRED UNCONDITIONALLY, NOT ONLY WHEN THE CAMERA
+			IS Scriptable. That gate is the bug the pilot hit by resetting from
+			the seat: release() had already set the type back to Custom, so this
+			branch declared the camera healthy while CameraSubject still pointed
+			at the humanoid of a character that no longer exists. The camera
+			stayed out at the aeroplane and never found the new pilot.
+
+			A character swap replaces the Humanoid instance, so comparing
+			against the live one is what detects it - the stale subject is a
+			different object, not a nil one.
+		]]
+		local character = player.Character
+		local subject = CameraController.groundSubjectFor(character, camera.CameraSubject)
+		if subject and camera.CameraSubject ~= subject then
+			camera.CameraSubject = subject
+		end
+
+		frameGroundPilot(character)
 		return
 	end
 
@@ -1045,6 +1107,48 @@ function CameraController.runTests(): (boolean, { any })
 		zMin > 0 and zMax > 0,
 		string.format("clamped to min %.4f, max %.3f", zMin, zMax)
 	)
+
+	--[[
+		9. Handing the camera back across a character swap --------------------
+
+		⚠️ THE BUG THIS PINS: resetting from the pilot seat left the camera out
+		at the aeroplane. A reset builds a NEW character with a NEW Humanoid, so
+		the old subject is the wrong object rather than a missing one, and the
+		old "repair it only if the camera is Scriptable / only if it is nil"
+		checks both saw a healthy camera and did nothing.
+	]]
+	local oldChar = Instance.new("Model")
+	local oldHum = Instance.new("Humanoid")
+	oldHum.Parent = oldChar
+	local newChar = Instance.new("Model")
+	local newHum = Instance.new("Humanoid")
+	newHum.Parent = newChar
+	local aircraftPart = Instance.new("Part")
+
+	record(
+		"A fresh character claims the camera from the old one",
+		CameraController.groundSubjectFor(newChar, oldHum) == newHum,
+		"the live humanoid wins over the destroyed character's"
+	)
+	record(
+		"A fresh character claims the camera from the AIRCRAFT",
+		CameraController.groundSubjectFor(newChar, aircraftPart) == newHum,
+		"a part left over from chase or free view does not survive the swap"
+	)
+	record(
+		"With no character the subject is dropped, not held",
+		CameraController.groundSubjectFor(nil, oldHum) == nil,
+		"nil rather than sticky - the frame loop re-asks until the rig exists"
+	)
+	record(
+		"An unchanged character keeps its own humanoid",
+		CameraController.groundSubjectFor(newChar, newHum) == newHum,
+		"idempotent, so the frame loop is not writing CameraSubject every frame"
+	)
+
+	oldChar:Destroy()
+	newChar:Destroy()
+	aircraftPart:Destroy()
 
 	end
 

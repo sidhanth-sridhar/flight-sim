@@ -67,6 +67,7 @@ local SurfaceAnimation = require(FlightSim.Aircraft.SurfaceAnimation)
 local AircraftBuilder = require(FlightSim.Aircraft.AircraftBuilder)
 local Cessna172 = require(FlightSim.Aircraft.Definitions.Cessna172)
 local Units = require(FlightSim.Shared.Units)
+local CharacterTuning = require(FlightSim.Shared.CharacterTuning)
 
 --[[
 	InputController lives under Controls/, not Controllers/. It is not a
@@ -657,6 +658,108 @@ function FlightController.pilotScaleFor(currentScale: number?, measuredHeight: n
 	return currentScale * PILOT_HEIGHT_M / measuredHeight
 end
 
+--[[
+	The pilot's name tag: switched off entirely, by the pilot's decision.
+
+	⚠️ ROBLOX'S BUILT-IN NAME TAG DOES NOT SCALE WITH `Model:ScaleTo`. It is
+	positioned above the character in STOCK studs, so shrinking the rig to
+	1.75 m leaves the tag hanging far above the head - reported as "floats
+	extremely high". Nothing exposes its offset, so it cannot simply be moved
+	down; a replacement billboard sized to the scaled pilot was built and then
+	dropped, because the pilot asked for no name in the world at all.
+
+	`HumanoidDisplayDistanceType.None` hides the health bar with it, which is
+	wanted: this is a flight simulator and neither belongs over a pilot's head.
+
+	Applied on the client as well as in PlayerService so a character the engine
+	loaded - the fallback path when an R6 build fails (section 34) - is covered
+	too.
+]]
+function FlightController.hideNameTag(character: Model?)
+	if not character then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return
+	end
+	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+end
+
+--[[
+	Where the character camera looks from, which DEPENDS ON WHETHER THE PILOT IS
+	SEATED.
+
+	⚠️ ON FOOT IT MUST BE ZERO. Roblox focuses the character camera on the centre
+	of the head, and moving that focus onto the eyes was tried and rejected:
+	walking around with the pivot ahead of and above the head centre makes the
+	orbit swing about a point that is not the body, which the pilot reported as
+	"really funky". Stock behaviour is what a player's hands already expect.
+
+	SEATED IS THE OPPOSITE CASE. In the aeroplane the camera is a view out of a
+	cockpit rather than a third-person orbit, so it wants the pilot's eye
+	height, not the middle of their skull.
+
+	Both components are derived FROM THE HEAD rather than typed in, so they stay
+	right for an R6 or an R15 rig and at any scale:
+
+	  up      a fifth of the head's height above its centre, which is where a
+	          face's eyes sit on the classic head
+	  forward three tenths of its depth, so the pivot is at the eyes rather than
+	          inside the skull, without pushing it out through the face
+
+	⚠️ SCALED, AND APPLIED ONLY ONCE THE SCALE HAS SETTLED. CameraOffset is in
+	studs and is NOT rescaled by `Model:ScaleTo`, so it is read off the head as
+	it currently measures - and the head is only its final size once the 1.75 m
+	scale has converged (section 30). Sized at spawn it would be built for a
+	stock rig and throw the camera a head-height off.
+]]
+local seatedCameraConnection: RBXScriptConnection? = nil
+
+function FlightController.eyeCameraOffset(head: BasePart?): Vector3
+	if not head then
+		return Vector3.zero
+	end
+	return Vector3.new(0, head.Size.Y * 0.20, -head.Size.Z * 0.30)
+end
+
+--[[
+	The offset for a given seated state. Pure, so both cases can be asserted
+	without a character - and so the "on foot is stock" rule is a testable
+	property rather than a comment.
+]]
+function FlightController.cameraOffsetFor(head: BasePart?, seated: boolean): Vector3
+	if not seated then
+		return Vector3.zero
+	end
+	return FlightController.eyeCameraOffset(head)
+end
+
+--[[
+	Apply the right offset now, and keep applying it as the pilot sits and
+	stands. `Humanoid.Seated` is the signal rather than polling: it fires with
+	the new state on both boarding and stepping out.
+]]
+function FlightController.fitCameraToEyes(character: Model?): RBXScriptConnection?
+	if not character then
+		return nil
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local head = character:FindFirstChild("Head")
+	if not humanoid or not head or not head:IsA("BasePart") then
+		return nil
+	end
+
+	local function apply(seated: boolean)
+		humanoid.CameraOffset = FlightController.cameraOffsetFor(head, seated)
+	end
+
+	apply(humanoid.Sit)
+	return humanoid.Seated:Connect(function(active: boolean)
+		apply(active)
+	end)
+end
+
 function FlightController.scaleForHumanProportions(character: Model?)
 	if not character then
 		return
@@ -746,6 +849,27 @@ function FlightController.scaleForHumanProportions(character: Model?)
 			pcall(character.ScaleTo, character, scale)
 			task.wait(0.2)
 		end
+
+		--[[
+			⚠️ RE-APPLIED AFTER SCALING, NOT AT SPAWN. `Model:ScaleTo` scales
+			WalkSpeed and JumpHeight along with the rig, so the tuned 20.00 m/s
+			and 1.00 m that PlayerService set arrive here and are quietly
+			rescaled to 7.00 and 0.35 by the shrink to 1.75 m. Scaling a rig
+			does not make its owner a smaller person - section 30's rule is that
+			a 1.75 m human walks at the configured speed whatever the rig
+			measures - so the metre-scale values are restored once the scale has
+			settled. This is what the pilot reported as a reset leaving them
+			unable to jump properly.
+		]]
+		CharacterTuning.apply(character:FindFirstChildOfClass("Humanoid"))
+		FlightController.hideNameTag(character)
+
+		-- One per character: a reset builds a new Humanoid, and the old
+		-- connection would otherwise sit on a destroyed one forever.
+		if seatedCameraConnection then
+			seatedCameraConnection:Disconnect()
+		end
+		seatedCameraConnection = FlightController.fitCameraToEyes(character)
 
 		local measured = FlightController.rigHeightStuds(character)
 		if measured and math.abs(measured - PILOT_HEIGHT_M) <= HEIGHT_TOLERANCE then
@@ -1937,6 +2061,65 @@ function FlightController.runTests(): (boolean, { any })
 		#FlightController.formatRecording(sine) == #sine + 1,
 		string.format("%d data rows + header", #sine)
 	)
+
+	--[[
+		---- The camera sits on the eyes ONLY when seated ---------------------
+
+		⚠️ TWO OPPOSITE REQUIREMENTS, AND THE ON-FOOT ONE IS "DO NOTHING".
+		Roblox focuses the character camera on the CENTRE of the head, so
+		zooming in centres on the middle of the skull - wrong in the cockpit,
+		where the camera is a view out rather than an orbit. Moving it to the
+		eyes ON FOOT was tried and rejected by the pilot as "really funky",
+		because a third-person orbit about a point ahead of the head does not
+		behave the way hands expect. So the offset is applied seated and
+		reverted to stock the moment the pilot stands up.
+
+		The offset itself must be DERIVED FROM THE HEAD, because CameraOffset is
+		in studs and `Model:ScaleTo` does not rescale it - a constant would be a
+		head-height out on a 1.75 m pilot.
+	]]
+	local stockHead = Instance.new("Part")
+	stockHead.Size = Vector3.new(2, 1, 1)
+	local scaledHead = Instance.new("Part")
+	scaledHead.Size = Vector3.new(2, 1, 1) * 0.35
+
+	local stockOffset = FlightController.eyeCameraOffset(stockHead)
+	local scaledOffset = FlightController.eyeCameraOffset(scaledHead)
+
+	record(
+		"On foot the camera is left exactly where Roblox puts it",
+		FlightController.cameraOffsetFor(stockHead, false) == Vector3.zero,
+		"zero offset walking around - stock third-person behaviour"
+	)
+	record(
+		"Seated, the camera moves to the pilot's eyes",
+		FlightController.cameraOffsetFor(stockHead, true) == stockOffset
+			and stockOffset.Magnitude > 0,
+		string.format("%s once in the seat", tostring(stockOffset))
+	)
+	record(
+		"The eye offset is above the head's centre and ahead of it",
+		stockOffset.Y > 0 and stockOffset.Z < 0,
+		string.format("%s on a stock head", tostring(stockOffset))
+	)
+	record(
+		"The eye offset stays inside the head",
+		stockOffset.Y < stockHead.Size.Y / 2 and math.abs(stockOffset.Z) < stockHead.Size.Z / 2,
+		"the pivot is at the eyes, not out through the face or the crown"
+	)
+	record(
+		"The eye offset scales with the pilot",
+		(scaledOffset - stockOffset * 0.35).Magnitude < 1e-6,
+		string.format("%s at 0.35x, exactly 0.35 of the stock offset", tostring(scaledOffset))
+	)
+	record(
+		"A missing head yields no offset rather than a wrong one",
+		FlightController.eyeCameraOffset(nil) == Vector3.zero
+			and FlightController.cameraOffsetFor(nil, true) == Vector3.zero,
+		"zero, so the camera is left where Roblox put it"
+	)
+	stockHead:Destroy()
+	scaledHead:Destroy()
 	end
 
 	local ok, err = pcall(body)

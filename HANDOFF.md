@@ -6,7 +6,9 @@
 
 ## 0. Resume here — state at 2026-08-06
 
-**All 783 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 787 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+
+🛋️ **THE SEAT CAME DOWN AND THE COCKPIT WENT IN (§39).** `PilotSeat` is structural, so it was a pilot decision: pan **0.63 → 0.30 m above the cabin floor**, headroom **0.60 → 0.93 m**, so a seated avatar clears the roof. **Mass, assemblies and static margin unchanged; the CoM moved 0.3 mm.** 38 massless interior decorations went in — panel, seats, yokes, pedals, throttle, trim wheel, switches — and **the six-pack now mounts on a real `PanelBoard` via `SixPack.mountOnPart`, with no drawing code changed** (§19, waiting since Phase 2). ⚠️ **The eye did NOT follow the seat down** — it is held at y 0.80 by a larger `EYE_OFFSET`, because riding the seat down would put it below the glareshield. ⚠️ **`UIController` still drives the SCREEN panel; nothing wires the 3D one to a flying aircraft yet**, and the seated avatar is not rigged — see §39.
 
 ⌨️ **PITCH TRIM NOSE-DOWN MOVED H → J, BECAUSE H WAS ALREADY THE HUD (§38).** Two actions on one key means the pilot cannot tell why a control is dead. ⚠️ **The guard caught this the whole time and it was read past** — `InputController` was reporting **109/110**, not the 110/110 quoted in earlier sessions, because the clash arrived in an uncommitted edit after those runs. Read the failing check, not the aggregate.
 
@@ -18,7 +20,7 @@
 
 🧍 **THE PILOT IS NOW 1.55 m, AND THE ON-FOOT CAMERA PIVOTS INSIDE THE HEAD (§36).** The pilot asked why the Cessna reads smaller than PTFS's — it is the avatar-to-plane ratio, not the aircraft's size (§33's 8.28 × 11.00 × 2.72 m is unchanged). Decision: **shrink the pilot to 1.55 m** via the existing uniform `Model:ScaleTo` path (1.30–1.40 m rejected as child-sized; no uniform scale fixes the ratio). **Nothing else moved, by construction**: the cockpit eye is anchored to the `PilotSeat`, and the on-foot framing reads the live `character:GetScale()`. The orbit pivot was then moved **from the nose to the head centre** (`headPivotOffset`), because §35's own notes had already found the eyes/nose placement "really funky" on foot — the pivot must sit inside the skull for seamless orbiting. ⚠️ **A 1.55 m pilot still cannot sit naturally in this airframe** (real seated eye ~datum 0.95, slot tops out at 0.80) — that stays a structural decision (§31/§35).
 
-➡️ **NEXT: the pilot re-flies it before the interior work starts** (the project rule). ⚠️ **Still open, and a decision rather than a task: a realistic seated eye height does not fit this airframe.** The seat pan is 1.40 m above the wheels where a real 172's is about 0.95 m, so the eye is 0.55 m above the pan instead of 0.78 m. Fixing it means moving the **structural** `PilotSeat` (§31). See §35.
+✅ **THE RE-FLY CLEARED IT, AND PHASE 4 ITEMS 4 AND 5 HAVE BEGUN.** The pilot re-flew the committed §36/§37 build and reported it good: the **1.55 m pilot feels right**, the **head-centre orbit pivots seamlessly**, and the **trim tab rides the elevator**. ⚠️ **Still open, and a decision rather than a task: a realistic seated eye height does not fit this airframe.** The seat pan is 1.40 m above the wheels where a real 172's is about 0.95 m, so the eye is 0.55 m above the pan instead of 0.78 m. Fixing it means moving the **structural** `PilotSeat` (§31). See §35. This is now **urgent** because the player's own avatar has to physically fit in the interior Phase 4 item 4 builds. **DECIDED (2026-08-06, pilot): lower the seat ~0.4 m AND shift it left to x ≈ −0.30 for a two-seat 172 layout** — pilot left, copilot right, shared centre pedestal; the copilot gets its own yoke/throttle and panel/pedestal reach (HANDOFF §14 item 6).
 
 🧱 **THE PILOT IS A CLASSIC R6 NOW, BUILT IN CODE (§34).** ⚠️ **R6 is not a property Rojo can write** — `StarterPlayer`, `Workspace` and `Players` were all probed and none has one, so the new `PlayerService` builds every character with `Players:CreateHumanoidModelFromDescription(desc, R6)` and `CharacterAutoLoads = false`. It runs **last** in `SERVICE_ORDER` because it stands the pilot on the `SpawnLocation` that AirportService moves. Settled: **1.741 m tall at the 1.75 m setting, feet on the apron, scale 0.3500** (the height is now **1.55 m** after §36; the mechanism is unchanged) — and `FlightController`'s scaling needed no change, because it measures the rig rather than assuming R15. 🐛 **A "sinking pilot" cost a fix that had to be thrown away: `Model:ScaleTo` does not replicate, so the SERVER's copy of a scaled character is not evidence — measure it on the CLIENT.**
 
@@ -195,7 +197,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (783 checks total)
+### Verified green (787 checks total)
 
 ⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 
@@ -216,7 +218,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
 | `InstrumentError` | `StarterPlayer/.../FlightSim/UI/Instruments/InstrumentError.luau` | 24/24 | Client |
-| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 | Client |
+| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 (aggregate 181) | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
 | `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 98/98 | **Server** |
@@ -1022,24 +1024,24 @@ Two phases already ran out of order and it is worth knowing why, because the roa
 
 **Scope**
 1. **Exterior.** The fuselage, wing, tail, struts, gear and prop modelled to the 172S's real shape, replacing the `Cessna172.model` boxes. **The aerodynamic offsets and part layout must NOT change** — `FlightModel` caches geometry at spawn from the definition, the CoM and static margin depend on the mass layout, and §4's published figures are all measured against the current budget. If the model is redrawn, the definition is re-verified, not assumed.
-2. **Cockpit interior.** Panel, seats, yokes, rudder pedals, trim wheel, throttle — and the 3D instruments from §19's roadmap, now that they have somewhere to live. The gauges already drop in almost unchanged: `SixPack.buildPanel()` builds into any parent, `Instrument.luau` is rendering-agnostic.
+2. **Cockpit interior.** Panel, seats, yokes, rudder pedals, trim wheel, throttle — and the 3D instruments from §19's roadmap, now that they have somewhere to live. The gauges already drop in almost unchanged: `SixPack.buildPanel()` builds into any parent, `Instrument.luau` is rendering-agnostic. **Two seats, offset like the real 172 (2026-08-06, pilot): pilot LEFT (x ≈ −0.30), copilot RIGHT (x ≈ +0.30), shared centre pedestal between them.** ⚠️ `PilotSeat` today sits on the centreline (0, 0.15, −0.40); the interior shifts it left, and the right seat is a second occupant position (Phase 13). The right seat must have its own yoke and throttle within reach, and the panel/pedestal switches must be reachable from BOTH seats — the copilot presses buttons too.
 3. **Controls and switches as 3D parts** — buttons, knobs, circuit breakers, the whole panel face — **visual only for now**, inert and non-interactive.
 4. **Interactive later, not now — and when it comes, it is keyboard-bound.** The cursor-is-the-yoke rule (§6g, §7) means a clickable switch mid-flight *is* the flight controls by construction. **Decision (2026-08-06, pilot): interior switches get keyboard binds, not clickable UI** — each switch is assigned a key that flips it on/off, and the 3D part visibly toggles state as the key is pressed. No modal state, no cursor capture, no ground-only gating: a key press costs no cursor movement at all (the same reasoning that made ViewToggle a key, §6k). This resolves the decision here and in §4b/4c — the switch *state* is driven by the same key system `InputController` already owns, and the cockpit part is a mirror of that state.
 5. **The pilot you see in the cockpit IS the player's avatar — not a random prop.** **Decision (2026-08-06, pilot): when you sit down, the arms and body inside the cockpit are your own character.** The player's real rig is positioned into the pilot seat and rigged so its hands grip the yoke, its feet reach the rudder pedals, and one arm rests on the throttle — driven from the **same control signals** that already move the ailerons, so the yoke visibly swings with your stick, the pedals with rudder, and the hands animate between yoke / throttle / flap lever as you use each function. In first person you look down and see your own avatar's hands and legs on the controls; in chase view it is your avatar sitting in the seat. ⚠️ This brings the avatar's own proportions into the cockpit — the R6's blocky 0.40 shoulder ratio (§33/§36) is now visible in the seat, and the ~0.60 m shoulders in a 1.16 m cabin is the trade-off the pilot accepted with this choice. Nothing touches physics — the character is neutralised (massless, non-collidable) as §6d already does, so §4's budget and the CoM are untouched.
-6. **The copilot is another player's avatar.** **Decision (2026-08-06, pilot): the right-seat occupant is a second player's real character, not a generic rig** — in the future multiplayer, the copilot is whoever boards the right seat, rigged to the same pedestal/yoke/pedals. In single-player there is no generic stand-in; the right seat is simply empty (or occupied only when a second player boards, Phase 13). One shared rigging recipe, applied to whichever player sits where.
+6. **The copilot is another player's avatar.** **Decision (2026-08-06, pilot): the right-seat occupant is a second player's real character, not a generic rig** — in the future multiplayer, the copilot is whoever boards the right seat, rigged to the same pedestal/yoke/pedals. In single-player there is no generic stand-in; the right seat is simply empty (or occupied only when a second player boards, Phase 13). One shared rigging recipe, applied to whichever player sits where. ⚠️ **The copilot must be ABLE TO DO THE JOB, not just sit there (2026-08-06, pilot):** the right seat gets its own yoke, its own throttle, and reach to the panel and centre pedestal so the copilot can press switches and handle the controls. Each player has their own keyboard, so the keyboard-bound switch decision (item 4) gives the copilot their own binds into the same `state.systems` switches. Two ~0.60 m-shoulder avatars side by side in a 1.30 m cabin is snug but realistic — a real 172's occupants do touch shoulders — and it is the look the pilot chose.
 
 **Refined for realism (2026-08-04), at the pilot's request.** This phase is *modelling*, not *physics* — §4's figures are measured against the current mass and aero layout and must not move. Realism here means the aeroplane **looks and reads like a 172S** without changing what the physics does:
 
 1. **Control surfaces move with the controls.** Ailerons, elevators, rudder, flaps and the trim tab visibly deflect with the pilot's actual inputs, and the prop spins up with RPM. Purely visual, driven by the same signals the physics already reads — the flight model is untouched by definition.
 2. **The instruments read like a real 172, not like the physics.** The gauges have until now shown the perfect number. A real ASI carries static-source position error and the pitot is not where the airflow says it is; a real compass reads magnetic, not true, and lags in turns; the altimeter reads what its baro setting says, and `Atmosphere.getPressureAltitude` already feeds QNH in. These are **display errors, injected in the instrument layer and never in the physics**, and they are the entire training value of the phase — a pilot who learns on a perfect altimeter cannot read a real one.
-3. **Cockpit detail from the real aircraft.** Panel, seats, yokes, pedals, trim wheel, throttle and circuit breakers laid out per the published 172S interior, so §19's `SurfaceGui` panel drops onto its real position. Reference material is already gathered (published 172S panel guides: flightnerdairforce, pilotmall, cessna172sim).
+3. **Cockpit detail from the real aircraft.** Panel, seats, yokes, pedals, trim wheel, throttle and circuit breakers laid out per the published 172S interior, so §19's `SurfaceGui` panel drops onto its real position. Reference material is already gathered (published 172S panel guides: flightnerdairforce, pilotmall, cessna172sim). **Left-seat pilot, right-seat copilot, shared centre pedestal — the 172's actual seating (2026-08-06, pilot).**
 4. **Anything that moves the mass or the aero is a decision point, not an assumption.** Passengers and baggage shift the CG, and the CoM and static margin depend on the mass layout. If a phase ever wants loadable weight it starts by re-verifying §4's figures with the new layout — it does not silently change them. The modelled aircraft uses exactly the mass budget §4 measures.
 
 The seated avatar (scope item 5) is part of this realism pass, with one extra rule: **its limbs read the same controls the surfaces read.** No new input plumbing and no separate body geometry involved — the player's own hands/feet are driven by `SurfaceAnimation`-style signals, so the first-person body and the ailerons can never disagree, because they are driven by the same numbers.
 
 **Why this is Phase 4 and not before:** it depends on nothing in Phase 3, but it is the prerequisite for the tablet — there is no point choosing a destination "in the aeroplane" until the aeroplane has an interior. And the 3D-panel roadmap (§19) has been waiting on exactly this since Phase 2.
 
-**How to test the seated avatar.** Same shape as the rest of the phase: pure functions of state. The rigged avatar's limb angles are a function of the same control values that drive the surfaces — assert the hands sit on the yoke at neutral, move with stick deflection, and migrate to the throttle/flap lever when those are commanded; the feet track rudder. The character stays neutralised (massless, non-collidable) while seated, so the existing mass-budget and one-assembly checks must stay green unchanged (§31, §6d).
+**How to test the seated avatar.** Same shape as the rest of the phase: pure functions of state. The rigged avatar's limb angles are a function of the same control values that drive the surfaces — assert the hands sit on the yoke at neutral, move with stick deflection, and migrate to the throttle/flap lever when those are commanded; the feet track rudder. The character stays neutralised (massless, non-collidable) while seated, so the existing mass-budget and one-assembly checks must stay green unchanged (§31, §6d). **Both seats get the same recipe (2026-08-06, pilot):** the rigging is written once and applied to whichever player sits where — assert it drives the left seat's pilot and the right seat's copilot identically, and that each seat's hands reach its own yoke/throttle at neutral.
 
 ### Phase 4b — Flight tablet
 
@@ -2508,6 +2510,10 @@ The pilot asked why the Cessna reads smaller than PTFS's Cessna. **It is not the
 
 ⚠️ **Comments in `FlightController` and `CameraController` previously described the 1.75 m / 0.35x pilot and the nose pivot.** The now-stale ones were updated to reference `PILOT_HEIGHT_M`; historical measurement numbers (7.00 / 0.35 movement rescale, 0.905 m focus error) are retained but labelled as measured at the old 0.35x scale.
 
+### The re-fly cleared it (2026-08-06)
+
+The pilot re-flew the committed §36/§37 build and reported it good: the **1.55 m pilot feels right**, the **head-centre orbit pivots seamlessly**, and the **trim tab rides the elevator**. ⚠️ The earlier "avatar reads wider than the fuselage" report was the **pre-§36 build** (an unscaled ~5.16 m avatar with ~2 m shoulders next to a 1.16 m cabin); the §36 shrink resolves it by construction. With the re-fly green, **Phase 4 items 4 and 5 begin** (HANDOFF §14), including the seat-height open decision now being urgent because the player's own avatar must physically fit the interior.
+
 ---
 
 ## 37. The trim tab now rides the elevator (2026-08-06)
@@ -2573,3 +2579,51 @@ The full set, verified with no collisions: `W`/`S` throttle · `A`/`D` yaw · `F
 - **On-foot versus flying does not create a second clash.** `update()` only runs while an aircraft is being flown, so `W`/`A`/`S`/`D` are throttle and yaw only in the air and plain character movement on the apron. The two actions consumed outside `update()` — `ToggleHud` and `ResetAircraft` — are on `H` and `Backspace`, neither of which Roblox claims.
 
 ⚠️ **`InputController.rebind` does NOT reject a clash** — it asserts the action exists and then assigns. A settings menu could therefore reproduce this bug at runtime, and only `DEFAULT_BINDINGS` is checked by the suite. **Left alone deliberately**: an existing test rebinds `Brake` onto `V` (which `ViewCycle` holds) to exercise the mechanics, so rejecting clashes would change that contract. Worth deciding when the settings menu is actually built.
+
+---
+
+## 39. The seat came down and the cockpit went in (2026-08-06, Phase 4 items 4 and 5 begun)
+
+**787/787 across 20 suites**; `UIController`'s aggregate 177 → 181. The aeroplane is **116 parts**, still **1,111.0 kg**, one assembly.
+
+### The seat, lowered on the pilot's decision
+
+`PilotSeat` is **structural**, so moving it was a decision (§31/§35), and §4's figures were re-verified rather than assumed:
+
+| | before | after |
+|---|---|---|
+| seat centre | y +0.150 | **y −0.180** |
+| pan above the cabin floor | 0.63 m | **0.30 m** |
+| headroom above the pan | 0.60 m | **0.93 m** |
+| mass / assemblies | 1,111.0 kg / 1 | **unchanged** |
+| centre of mass | — | moved **0.3 mm** |
+| static margin | 14.2% MAC | **14.183% MAC** |
+
+0.63 m above the floor was a bar stool. At 0.30 m a seated avatar clears the roof — a 1.55 m pilot needs about 0.81 m of sitting height against the 0.93 m now available, which was the pilot's actual complaint.
+
+### ⚠️ The eye did NOT follow the seat down, and that is deliberate
+
+`EYE_OFFSET` went **0.65 → 0.98** to hold the cockpit eye at **y = 0.80**, where §35 measured it good. Letting it ride the seat down would have put it at **y = 0.47** — below the **0.695** glareshield, so the pilot would have been looking at the back of the panel.
+
+⚠️ **THE EYE IS THEREFORE ~0.19 m ABOVE THE AVATAR'S OWN EYES.** A seated 1.55 m pilot's eye is about 0.69 m above the pan, which is y = 0.61 — inside the panel. **The gap is the cowl deck, not the seat**: `Fuselage04` tops out 1.075 m above the cabin floor where a real 172's glareshield is about 0.75 m. Closing it means lowering the loft's shoulder, which changes the exterior profile — **a separate decision for the pilot, not an assumption.**
+
+### The interior (item 4)
+
+38 massless decorations: cabin floor, two seats with backs and headrests, panel board, glareshield, breaker panel, two yokes with wheels and grips, four rudder pedals, throttle quadrant with throttle and mixture knobs, trim wheel and indicator, fuel selector, six switches and a magneto key. **Physics untouched by construction** — `measure()` skips massless parts, and mass, assemblies and centre of mass are identical to before the interior existed.
+
+⚠️ **THE FUSELAGE IS SOLID, NOT A SHELL, SO THE INTERIOR LIVES INSIDE IT.** There is no hollow cabin to furnish. It works because `hideForCockpit` already hides whatever encloses the eye — `Cabin`, `Fuselage04`, `Fuselage05`, `Windscreen` and both wing centre parts vanish from the inside — which is the same mechanism that already lets the pilot see out at all.
+
+🐛 **The panel was first built 0.07 m in front of the eye** — directly under the pilot's chin and invisible from the seat, because it was tucked under the aft end of the glareshield. ⚠️ **Its station is set by the WINDSCREEN, not by eye distance**: the glass is a raked slab, so how high the board may reach depends on how far forward it sits (z −1.05 → glass at 0.565; z −0.98 → 0.605; z −0.90 → 0.652). At **z = −0.98** the board tops out at 0.576 just under the glass, 0.43 m ahead of the eye and 27° below it.
+
+### The six-pack is on a real panel now (§19, waiting since Phase 2)
+
+`SixPack.mountOnPart(board)` puts the existing panel frame on a `SurfaceGui` on the cockpit's `PanelBoard`. **No drawing code changed** — that was §19's whole point, and it held.
+
+⚠️ **THE BOARD'S ASPECT RATIO IS THE SIX-PACK'S, NOT A GUESS.** The frame is 488 × 240 px, so the board is **0.96 × 0.472 m** — 2.0333:1. A SurfaceGui maps a fixed-pixel frame onto the face, so a board of any other shape renders every circular dial as an **oval and nothing errors**. A check asserts the two agree to 1%.
+
+### Still to do in this phase
+
+1. ⚠️ **`UIController` still drives the screen panel, not the 3D one.** `mountOnPart` exists and is tested, but nothing wires it to the flying aircraft yet — the gauges above were driven by hand. That wiring is the next step, and it needs a decision on whether the screen panel stays as well.
+2. **The seated avatar is not rigged.** The geometry it needs is in place (wheel positions, pedal positions, throttle), but no limb posing exists. ⚠️ **`Model:ScaleTo` does not scale Roblox's seat weld** — §35 measured a seated rig sitting **2.1 m above the seat**, invisible only because the seated pilot is transparent (§6e). **That has to be solved before an avatar can be shown in the cockpit at all.**
+3. **Switches are inert geometry**, as decided — no `ClickDetector`, no `ProximityPrompt`. Keyboard wiring is Phase 4c.
+4. ⚠️ **Both seats are symmetric about the centreline and the eye is in neither.** The structural `PilotSeat` is at x = 0, so the camera is too; a real 172 pilot sits left. Moving it is another structural change *and* puts a lateral offset on the centre of mass. Recorded, not acted on.

@@ -466,6 +466,47 @@ end
 	Everything screen-specific in this module is in this function and nowhere
 	else. When the instruments move into the cockpit, this is what gets deleted.
 ]]
+--[[
+	Mount the panel on a real part in the world - the cockpit's `PanelBoard`.
+
+	This is what §19 has been building toward since Phase 2: `buildPanel` knows
+	nothing about a screen, so putting the instruments in the aeroplane is a
+	reparent rather than a rewrite. Nothing below is new drawing code.
+
+	⚠️ THE BOARD'S SHAPE MUST MATCH THE FRAME'S, OR THE DIALS GO OVAL. The frame
+	is a fixed pixel size and a SurfaceGui maps it onto the face, so the part's
+	own aspect ratio is what decides whether a circular dial renders circular.
+	`Cessna172`'s board is sized 0.96 x 0.472 m for exactly this reason, and a
+	check asserts the two agree rather than trusting the definition.
+
+	`PixelsPerStud` is derived from the frame and the part, so the panel fills
+	the face whatever size the board is built at.
+]]
+function SixPack.mountOnPart(board: BasePart, face: Enum.NormalId?): (SurfaceGui, Frame, { [string]: any })
+	local surface = Instance.new("SurfaceGui")
+	surface.Name = "FlightSimPanel"
+	surface.Adornee = board
+	--[[
+		The pilot faces -Z, so the face they see is the part's +Z side, which
+		Roblox calls Back. Passed in rather than assumed so a definition that
+		mounts a panel the other way round can say so.
+	]]
+	surface.Face = face or Enum.NormalId.Back
+	surface.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surface.LightInfluence = 0
+	surface.AlwaysOnTop = false
+	surface.Parent = board
+
+	local panel, built = SixPack.buildPanel(surface)
+	surface.PixelsPerStud = panel.AbsoluteSize.X > 0
+		and (panel.Size.X.Offset / board.Size.X)
+		or 50
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+
+	return surface, panel, built
+end
+
 function SixPack.build(parent: Instance): (ScreenGui, { [string]: any })
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "FlightSimSixPack"
@@ -1115,6 +1156,67 @@ function SixPack.runTests(): (boolean, { any })
 		end)
 		if not surfaceOk then
 			record("The panel builds inside a SurfaceGui", false, tostring(surfaceErr))
+		end
+
+		--[[
+			5c. AND IT MOUNTS ON THE COCKPIT'S OWN BOARD.
+
+			`mountOnPart` is the one-call version the cockpit uses. It is checked
+			against the REAL board out of the definition rather than a made-up
+			part, because the thing that can silently go wrong is the board's
+			SHAPE: a SurfaceGui maps a fixed-pixel frame onto the face, so if the
+			part's aspect ratio does not match the frame's, every circular dial
+			renders as an oval and nothing errors.
+		]]
+		local boardSpec
+		for _, spec in Cessna172.model.decorations do
+			if spec.name == "PanelBoard" then
+				boardSpec = spec
+			end
+		end
+		record(
+			"The cockpit defines a panel board to mount on",
+			boardSpec ~= nil,
+			boardSpec and string.format("%.2f x %.2f m", boardSpec.size.X, boardSpec.size.Y) or "no PanelBoard"
+		)
+		if boardSpec then
+			local cockpitBoard = Instance.new("Part")
+			cockpitBoard.Size = boardSpec.size
+			cockpitBoard.Anchored = true
+			cockpitBoard.Parent = holder
+
+			local mountOk, mountErr = pcall(function()
+				local mountedGui, mountedPanel, mountedBuilt = SixPack.mountOnPart(cockpitBoard)
+				SixPack.render(mountedBuilt, telemetry)
+
+				record(
+					"The six-pack mounts on the cockpit panel board",
+					mountedGui:IsA("SurfaceGui")
+						and mountedGui.Adornee == cockpitBoard
+						and mountedPanel.Parent == mountedGui,
+					string.format("SurfaceGui on the %s face", mountedGui.Face.Name)
+				)
+				--[[
+					⚠️ A DIAL IS ONLY ROUND IF THE BOARD IS THE FRAME'S SHAPE.
+					Asserted to 1%, which is far tighter than an eye would catch
+					but loose enough to survive rounding the board to centimetres.
+				]]
+				local frameAspect = mountedPanel.Size.X.Offset / mountedPanel.Size.Y.Offset
+				local boardAspect = cockpitBoard.Size.X / cockpitBoard.Size.Y
+				record(
+					"The board's aspect ratio matches the panel's, so dials stay round",
+					math.abs(frameAspect - boardAspect) / frameAspect < 0.01,
+					string.format("board %.4f against frame %.4f", boardAspect, frameAspect)
+				)
+				record(
+					"The mounted panel faces the pilot",
+					mountedGui.Face == Enum.NormalId.Back,
+					"the +Z face, which is aft - the pilot flies facing -Z"
+				)
+			end)
+			if not mountOk then
+				record("The six-pack mounts on the cockpit panel board", false, tostring(mountErr))
+			end
 		end
 
 		-- 6. The engine cluster, driven ---------------------------------------

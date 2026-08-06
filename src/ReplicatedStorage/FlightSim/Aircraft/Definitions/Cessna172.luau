@@ -1045,6 +1045,270 @@ add({
 	material = Enum.Material.Neon,
 })
 
+--[[
+	---- COCKPIT INTERIOR (Phase 4, scope item 4) ----------------------------
+
+	The 172S cockpit, as MASSLESS DECORATIONS. Physics is untouched by
+	construction: AircraftBuilder forces `Massless` on every decoration and
+	`measure()` skips massless parts, so none of this can move the mass budget,
+	the centre of mass, the static margin or the inertia tensor (§31). The
+	suite proves it rather than trusting it.
+
+	⚠️ THE FUSELAGE IS SOLID, NOT A SHELL, SO THE INTERIOR LIVES INSIDE IT.
+	The lofted stations are solid boxes - there is no hollow cabin to furnish.
+	That works because the cockpit camera already hides whatever ENCLOSES the
+	eye (`CameraController.hideForCockpit`): Cabin, Fuselage04, Fuselage05,
+	Windscreen and the wing centre all vanish from the inside, revealing what
+	is behind them, while from outside the interior stays buried in the skin.
+	It is the same mechanism that already lets the pilot see out at all.
+
+	THE VOLUME EVERYTHING IS FITTED TO, measured off the built aeroplane:
+
+	    cabin floor (Fuselage05 underside)     y = -0.380
+	    seat pan top                           y = -0.080
+	    glareshield (Fuselage04 top)           y = +0.695
+	    cabin roof (WingCentre underside)      y = +0.850
+	    cabin half-width                       x = +-0.575
+	    cockpit eye                            y = +0.800, z = -0.550
+
+	⚠️ BOTH SEATS ARE SYMMETRIC ABOUT THE CENTRELINE, AND THE PILOT'S EYE IS
+	NOT IN EITHER OF THEM. The structural `PilotSeat` sits at x = 0, so the
+	camera does too - a real 172 pilot sits in the left seat. Moving it is
+	another structural change AND puts a lateral offset on the centre of mass,
+	so it is a decision for the pilot rather than an assumption. Recorded, not
+	acted on.
+]]
+local LEATHER = Color3.fromRGB(48, 44, 42)
+local PANEL_FACE = Color3.fromRGB(32, 32, 34)
+local KNOB_BLACK = Color3.fromRGB(20, 20, 22)
+local SEAT_X = 0.29
+
+-- The floor the seats and pedals stand on, so the cabin has a bottom to it
+-- rather than the pilot's feet hanging over the structural box's edge.
+add({
+	name = "CabinFloor",
+	size = Vector3.new(1.06, 0.04, 1.80),
+	position = Vector3.new(0, -0.380, -0.05),
+	color = Color3.fromRGB(58, 56, 54),
+})
+
+-- ---- Seats --------------------------------------------------------------
+-- Pan top at y = -0.08, which is the structural seat's pan: the cushion the
+-- avatar sits on and the box the camera is anchored to agree by construction.
+addPair({
+	name = "SeatCushion",
+	size = Vector3.new(0.46, 0.10, 0.48),
+	position = Vector3.new(SEAT_X, -0.130, -0.40),
+	color = LEATHER,
+})
+addPair({
+	name = "SeatBack",
+	size = Vector3.new(0.46, 0.56, 0.09),
+	position = Vector3.new(SEAT_X, 0.150, -0.145),
+	rotation = Vector3.new(-9, 0, 0),
+	color = LEATHER,
+})
+addPair({
+	name = "SeatHeadrest",
+	size = Vector3.new(0.26, 0.14, 0.08),
+	position = Vector3.new(SEAT_X, 0.430, -0.100),
+	rotation = Vector3.new(-9, 0, 0),
+	color = LEATHER,
+})
+addPair({
+	name = "SeatRail",
+	size = Vector3.new(0.44, 0.04, 0.52),
+	position = Vector3.new(SEAT_X, -0.340, -0.40),
+	color = METAL,
+})
+
+--[[
+	---- The instrument panel ----------------------------------------------
+
+	⚠️ THE BOARD'S ASPECT RATIO IS THE SIX-PACK'S, NOT A GUESS. SixPack's frame
+	is 488 x 240 pixels (four 116 px dials with 8 px gaps, two rows), so the
+	board is 0.96 x 0.472 m - exactly 2.0333:1. A board of any other shape would
+	either letterbox the instruments or stretch them, and §19's whole point is
+	that the panel moves into the cockpit without being redrawn.
+
+	⚠️ ITS Z IS SET BY THE WINDSCREEN, NOT BY EYE DISTANCE. The glass is a raked
+	slab, so how high the panel may reach depends on how far forward it sits:
+
+	    z = -1.05  glass at y 0.565      z = -0.95  glass at y 0.623
+	    z = -0.98  glass at y 0.605      z = -0.90  glass at y 0.652
+
+	At z = -0.98 the board tops out at 0.576, just under the 0.605 glass line,
+	and sits 0.43 m ahead of the eye and 27 degrees below it - which is where a
+	panel belongs. The first attempt put it at z = -0.62, only 0.07 m ahead of
+	the eye: directly under the pilot's chin, and invisible from the seat.
+]]
+add({
+	name = "PanelBoard",
+	size = Vector3.new(0.96, 0.472, 0.05),
+	position = Vector3.new(0, 0.340, -0.980),
+	color = PANEL_FACE,
+	material = Enum.Material.SmoothPlastic,
+})
+-- The hood over the panel that keeps sun off the glass, and the visual line
+-- that reads as "cockpit" from the pilot's seat. Kept under the 0.634 glass
+-- line at its own station.
+add({
+	name = "GlareShield",
+	size = Vector3.new(1.04, 0.04, 0.20),
+	position = Vector3.new(0, 0.600, -0.930),
+	color = PANEL_FACE,
+})
+-- Circuit breakers: a column strip on the right of the panel, as on the 172S.
+add({
+	name = "BreakerPanel",
+	size = Vector3.new(0.16, 0.36, 0.04),
+	position = Vector3.new(0.560, 0.330, -0.975),
+	color = Color3.fromRGB(44, 44, 46),
+})
+
+--[[
+	---- Flight controls ----------------------------------------------------
+
+	⚠️ THE YOKES ARE INERT PARTS FOR NOW (scope item 5). They are placed where a
+	hinge would go - the column's axis through its base - so wiring them to the
+	elevator and aileron channels later is a matter of adding `hinge`, not of
+	moving geometry. The seated avatar's hands are meant to grip the wheel, so
+	the wheel's position is the thing that has to be right.
+
+	The wheel sits 0.13 m ahead of the eye's station and 0.49 m below it, which
+	is where a seated pilot's hands fall: shoulders are about 0.43 m above the
+	pan (y 0.35) and the arms reach forward, not down. The column then runs
+	forward into the base of the panel.
+]]
+addPair({
+	name = "YokeColumn",
+	size = Vector3.new(0.055, 0.055, 0.30),
+	position = Vector3.new(SEAT_X, 0.285, -0.820),
+	rotation = Vector3.new(-10, 0, 0),
+	color = KNOB_BLACK,
+})
+addPair({
+	name = "YokeWheel",
+	size = Vector3.new(0.30, 0.045, 0.045),
+	position = Vector3.new(SEAT_X, 0.310, -0.680),
+	color = KNOB_BLACK,
+})
+addPair({
+	name = "YokeGripLeft",
+	size = Vector3.new(0.05, 0.055, 0.12),
+	position = Vector3.new(SEAT_X - 0.145, 0.310, -0.655),
+	color = KNOB_BLACK,
+})
+addPair({
+	name = "YokeGripRight",
+	size = Vector3.new(0.05, 0.055, 0.12),
+	position = Vector3.new(SEAT_X + 0.145, 0.310, -0.655),
+	color = KNOB_BLACK,
+})
+
+-- Rudder pedals, on the floor ahead of each seat where the avatar's feet reach,
+-- forward of the panel's base and inside the cowl deck's lower box.
+addPair({
+	name = "RudderPedalInner",
+	size = Vector3.new(0.09, 0.14, 0.05),
+	position = Vector3.new(SEAT_X - 0.11, -0.270, -1.060),
+	rotation = Vector3.new(-22, 0, 0),
+	color = METAL,
+})
+addPair({
+	name = "RudderPedalOuter",
+	size = Vector3.new(0.09, 0.14, 0.05),
+	position = Vector3.new(SEAT_X + 0.11, -0.270, -1.060),
+	rotation = Vector3.new(-22, 0, 0),
+	color = METAL,
+})
+
+--[[
+	---- Centre console ------------------------------------------------------
+
+	Throttle black and mixture red, side by side under the panel, which is the
+	arrangement on the real aeroplane and the one a pilot's hand expects. The
+	trim wheel sits below them between the seats, where the avatar's right hand
+	falls.
+]]
+add({
+	name = "ThrottleQuadrant",
+	size = Vector3.new(0.22, 0.12, 0.18),
+	position = Vector3.new(0, 0.150, -0.800),
+	color = PANEL_FACE,
+})
+add({
+	name = "ThrottleKnob",
+	size = Vector3.new(0.05, 0.05, 0.14),
+	position = Vector3.new(-0.055, 0.200, -0.700),
+	color = KNOB_BLACK,
+})
+add({
+	name = "MixtureKnob",
+	size = Vector3.new(0.05, 0.05, 0.14),
+	position = Vector3.new(0.055, 0.200, -0.700),
+	color = Color3.fromRGB(170, 30, 30),
+})
+add({
+	name = "TrimWheel",
+	size = Vector3.new(0.035, 0.17, 0.17),
+	position = Vector3.new(0, -0.010, -0.640),
+	rotation = Vector3.new(0, 90, 0),
+	shape = "Cylinder",
+	color = KNOB_BLACK,
+})
+add({
+	name = "TrimIndicator",
+	size = Vector3.new(0.03, 0.10, 0.02),
+	position = Vector3.new(0.060, -0.010, -0.640),
+	color = Color3.fromRGB(220, 220, 225),
+})
+add({
+	name = "FuelSelector",
+	size = Vector3.new(0.10, 0.03, 0.10),
+	position = Vector3.new(0, -0.240, -0.520),
+	color = METAL,
+})
+
+--[[
+	---- Switches (scope item 5) ---------------------------------------------
+
+	⚠️ INERT PARTS ONLY. They carry no ClickDetector and no ProximityPrompt, by
+	decision: switches are to be KEYBOARD-bound, with the 3D part mirroring a
+	value in `state.systems`, and that wiring is Phase 4c. Building them as
+	geometry now means 4c is a binding and a toggle rather than a modelling job.
+
+	Nothing here may become a GuiButton or a clickable part while the cursor is
+	the yoke (§6g, §7) - a click mid-flight would be a control input.
+]]
+local SWITCH_Y = 0.150
+local SWITCH_Z = -0.958
+for index, switch in {
+	{ name = "SwitchMaster", x = -0.400, color = Color3.fromRGB(200, 30, 30) },
+	{ name = "SwitchBeacon", x = -0.330, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchNav", x = -0.260, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchStrobe", x = -0.190, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchLanding", x = -0.120, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchPitotHeat", x = -0.050, color = Color3.fromRGB(220, 220, 225) },
+} do
+	local _ = index
+	add({
+		name = switch.name,
+		size = Vector3.new(0.03, 0.055, 0.025),
+		position = Vector3.new(switch.x, SWITCH_Y, SWITCH_Z),
+		color = switch.color,
+	})
+end
+-- The magneto/starter key, left of the switch row as on the 172S.
+add({
+	name = "MagnetoSwitch",
+	size = Vector3.new(0.06, 0.06, 0.03),
+	position = Vector3.new(-0.470, SWITCH_Y, SWITCH_Z),
+	shape = "Cylinder",
+	rotation = Vector3.new(0, 90, 0),
+	color = METAL,
+})
+
 Cessna172.model = {
 	-- Everything is welded to this part, and it defines the body axes.
 	rootPart = "Cabin",
@@ -1195,9 +1459,27 @@ Cessna172.model = {
 		-- network ownership of the whole assembly to whoever sits in one -
 		-- which is exactly the client-owned physics model this project uses.
 		{
+			--[[
+				⚠️ STRUCTURAL, AND LOWERED 0.33 m ON THE PILOT'S DECISION
+				(2026-08-06). It used to sit at y = 0.15, which put the pan
+				0.63 m above the cabin floor - a bar stool. A real 172's pan is
+				about 0.30 m up, which is where it is now:
+
+				    visible cabin floor (Fuselage05 underside)   y = -0.380
+				    pan top                                      y = -0.080
+				    cabin roof (WingCentre underside)            y = +0.850
+
+				That is what lets a seated avatar fit under the roof instead of
+				sitting through it, which was the pilot's actual complaint.
+
+				Moving a structural part is a decision, not a tidy-up (§31): it
+				carries 1 kg of 1,111, so the centre of mass moves by less than
+				a millimetre, and §4's figures were re-verified after the move
+				rather than assumed.
+			]]
 			name = "PilotSeat",
 			size = Vector3.new(0.55, 0.20, 0.55),
-			position = Vector3.new(0, 0.15, -0.40),
+			position = Vector3.new(0, -0.18, -0.40),
 			mass = 1,
 			color = Color3.fromRGB(60, 55, 50),
 			className = "VehicleSeat",

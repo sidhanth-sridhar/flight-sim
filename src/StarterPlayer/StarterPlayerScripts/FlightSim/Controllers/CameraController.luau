@@ -88,27 +88,31 @@ local VIEW_FREE = 3
 	follows it without anyone remembering to update a second constant. Both are
 	welded into one assembly, so this is rigid either way.
 
-	THE HEIGHT IS MEASURED AGAINST THE AIRFRAME, NOT FELT. In datum coordinates,
-	with the seat pan at y = 0.25:
+	THE HEIGHT IS MEASURED AGAINST THE AIRFRAME, NOT FELT. In datum coordinates:
 
 	    glareshield (Fuselage04, right in front of the eye)   y = 0.695
 	    wing centre section, underside of the skin            y = 0.850
 
-	so the eye has a 0.155 m slot to live in, and it is now at y = 0.80 - near
-	the top of it. That is 0.105 m of glareshield clearance and 13.0 degrees of
-	view down over the cowling, against the 0.055 m and 10.6 degrees it had at
-	y = 0.75. The pilot reported the old value as not being on their eyes.
+	so the eye has a 0.155 m slot to live in, and it sits at y = 0.80 - near the
+	top of it. That is 0.105 m of glareshield clearance and 13.0 degrees of view
+	down over the cowling, against 0.055 m and 10.6 degrees at y = 0.75, which
+	the pilot reported as not being on their eyes.
 
-	⚠️ A REALISTIC SEATED EYE HEIGHT DOES NOT FIT IN THIS AIRFRAME. A 1.75 m
-	person's eye sits about 0.78 m above the seat pan, which would be y = 1.03 -
-	well inside the wing centre section, and above the cabin roof. The eye is
-	0.55 m above the pan instead, because that is all the room there is: the pan
-	is 1.40 m above the wheels where a real 172's is about 0.95 m, so the seat
-	is roughly 0.4 m too high in a cabin that is otherwise the right size.
-	Fixing that means moving PilotSeat, which is a STRUCTURAL part - a decision
-	for the pilot rather than an assumption (section 31). Raise it before acting.
+	⚠️ THE OFFSET GREW WHEN THE SEAT WAS LOWERED, TO HOLD THE EYE STILL. The
+	seat dropped 0.33 m so a seated avatar fits under the roof, and this offset
+	went 0.65 -> 0.98 to keep the eye at the same y = 0.80. Letting the eye
+	follow the seat down would have put it at y = 0.47 - BELOW the 0.695
+	glareshield, so the pilot would have been looking at the back of the panel.
+
+	⚠️ THE EYE IS THEREFORE HIGHER THAN THE AVATAR'S OWN EYES, BY ABOUT 0.19 m.
+	A seated 1.55 m pilot's eye is roughly 0.69 m above the pan, which is y =
+	0.61 - inside the panel. The gap exists because THE COWL DECK IS TOO HIGH,
+	not because the seat is: Fuselage04 tops out 1.075 m above the cabin floor
+	where a real 172's glareshield is about 0.75 m. Closing it means lowering
+	the loft's shoulder, which changes the aeroplane's exterior profile - a
+	separate decision for the pilot, not an assumption (section 31).
 ]]
-local EYE_OFFSET = Vector3.new(0, 0.65, -0.15)
+local EYE_OFFSET = Vector3.new(0, 0.98, -0.15)
 
 --[[
 	How far outside a part's own box the eye still counts as "inside" it.

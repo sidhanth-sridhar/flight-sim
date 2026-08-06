@@ -53,8 +53,8 @@ Constants.CHARACTER = {
 		apron a chore. The aircraft park 30 m from the spawn pad, which is the
 		trip that has to not be annoying.
 	]]
-	WALK_SPEED = 7.0, -- m/s (~25 km/h)
-	JUMP_HEIGHT = 0.9, -- m, a realistic standing jump
+	WALK_SPEED = 20.0, -- m/s 
+	JUMP_HEIGHT = 1, -- m, a realistic standing jump
 	USE_JUMP_POWER = false,
 }
 

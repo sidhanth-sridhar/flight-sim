@@ -125,6 +125,7 @@ end
 	Built: TerrainService   - the ground itself, and the airport's flat pad
 	       AirportService   - the world: runway, taxiway, apron, navigation
 	       AircraftService  - spawning, ownership, validation
+	       PlayerService    - the pilot's body, built as a classic R6 rig
 	Later: FlightPlanService, WeatherService, PlayerDataService
 
 	SERVICE_ORDER exists because Services:GetChildren() returns whatever order
@@ -147,6 +148,15 @@ local SERVICE_ORDER = {
 	"TerrainService",
 	"AirportService",
 	"AircraftService",
+	--[[
+		⚠️ PlayerService IS LAST, AND THAT IS LOAD-BEARING. It builds the
+		pilot's character itself (R6 is not a property Rojo can write), and it
+		stands that character on Workspace.SpawnLocation - which AirportService
+		MOVES onto the apron at the airport elevation. Started any earlier, the
+		pad is still at Rojo's y = 0 and the pilot spawns underneath the
+		terrain, inside the ground.
+	]]
+	"PlayerService",
 }
 
 --[[

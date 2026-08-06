@@ -35,8 +35,8 @@
 	It does not scale the pilot. FlightController.scaleForHumanProportions
 	already measures the rig and scales it to PILOT_HEIGHT_M (section 30), and
 	it is rig-agnostic - it reads the assembled rig rather than assuming R15 -
-	so R6 lands on 1.75 m through exactly the same path. Adding a second thing
-	that scales characters is how two of them end up disagreeing.
+	so R6 lands on PILOT_HEIGHT_M through exactly the same path. Adding a second
+	thing that scales characters is how two of them end up disagreeing.
 
 	It does not set collision groups. AircraftService.trackCharacter already
 	does that on CharacterAdded, and assigning player.Character fires
@@ -147,8 +147,9 @@ end
 	surface, both legs straight through it. It is not: `Model:ScaleTo` is
 	applied by FlightController on the CLIENT and does not replicate, so the
 	server holds unscaled 5-stud legs hanging off a root positioned by the
-	client's 1.75 m character. Measuring that replica compares a full-size body
-	against a scaled-down stance, and the difference looks exactly like sinking.
+	client's PILOT_HEIGHT_M character. Measuring that replica compares a
+	full-size body against a scaled-down stance, and the difference looks
+	exactly like sinking.
 
 	Deriving a HipHeight from the geometry to "correct" it was written, tested
 	and thrown away: for R6 the feet rest at `ground + HipHeight`, so the
@@ -244,7 +245,7 @@ local function spawnCharacter(player: Player)
 		No name or health floating over the pilot - the pilot's call.
 
 		⚠️ Roblox's built-in tag is positioned in STOCK studs and does not follow
-		`Model:ScaleTo`, so on a 1.75 m pilot it hangs far overhead. Set here as
+		`Model:ScaleTo`, so on a PILOT_HEIGHT_M pilot it hangs far overhead. Set here as
 		well as on the client so it is off from the first frame and for every
 		viewer, not just the owner.
 	]]
@@ -496,9 +497,10 @@ function PlayerService.runTests(): (boolean, { any })
 		⚠️ THE ONE THAT ACTUALLY BIT: `Model:ScaleTo` scales WalkSpeed and
 		JumpHeight with the rig. Tuned values of 20.00 m/s and 1.00 m were
 		measured on the live pilot afterwards as 7.00 and 0.35 - the scale
-		factor, 0.35, applied to both. Re-applying has to RESTORE the metre-
-		scale numbers rather than re-scale them, because a scaled rig is still a
-		1.75 m person (section 30).
+		factor applied to both (measured at the old 0.35x pilot scale; the
+		factor changes with PILOT_HEIGHT_M). Re-applying has to RESTORE the
+		metre-scale numbers rather than re-scale them, because a scaled rig is
+		still a PILOT_HEIGHT_M person (section 30).
 	]]
 	rigged.WalkSpeed = wantWalk * 0.35
 	rigged.JumpHeight = Units.metersToStuds(Constants.CHARACTER.JUMP_HEIGHT) * 0.35

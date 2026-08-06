@@ -17,17 +17,18 @@
 	     entirely.
 
 	  2. ⚠️ `Model:ScaleTo` SCALES WalkSpeed AND JumpHeight WITH THE RIG. This is
-	     the one that actually bit. FlightController shrinks the pilot to 1.75 m
-	     at scale 0.35, and the engine helpfully rescales the movement with it:
+	     the one that actually bit. FlightController shrinks the pilot to
+	     PILOT_HEIGHT_M and the engine helpfully rescales the movement with it:
 	     a tuned 20.00 m/s and 1.00 m were measured afterwards as **7.00 and
-	     0.35**. The pilot reported it as a reset leaving them unable to jump
-	     properly, and every number in Constants was correct the whole time.
+	     0.35** (at the old 0.35x scale; the factor scales with the rig). The
+	     pilot reported it as a reset leaving them unable to jump properly, and
+	     every number in Constants was correct the whole time.
 
 	(2) is why FlightController re-applies this AFTER its scale loop converges
 	rather than at spawn. Scaling a rig does not make its owner a smaller
-	person: section 30's rule is that a 1.75 m human walks at the configured
-	speed whatever the rig measures, so the speed is restored in metres per
-	second and not scaled to match the model.
+	person: section 30's rule is that a PILOT_HEIGHT_M human walks at the
+	configured speed whatever the rig measures, so the speed is restored in
+	metres per second and not scaled to match the model.
 
 	⚠️ UseJumpPower must stay FALSE at metre scale. JumpPower is a raw launch
 	velocity, so at one twentieth of normal gravity a stock jump clears a

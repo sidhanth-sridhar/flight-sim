@@ -8,19 +8,21 @@
 
 **All 775 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
 
-🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. ⚠️ **The character camera focuses a hard-coded 1.500 studs above the HumanoidRootPart and does NOT scale with `ScaleTo`**, so on a 0.35x pilot it orbited a point **0.905 m above their face**; `Humanoid.CameraOffset` now corrects it onto the nose, derived from the live rig. The name tag is **off entirely**, by the pilot's call.
+🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. ⚠️ **The character camera focuses a hard-coded 1.500 studs above the HumanoidRootPart and does NOT scale with `ScaleTo`**, so on a 0.35x pilot it orbited a point **0.905 m above their face**; `Humanoid.CameraOffset` now corrects it onto the pilot (§35 landed it on the nose, §36 moved it to the **head centre**), derived from the live rig. The name tag is **off entirely**, by the pilot's call.
 
 🐛 **THE "VESTIGIAL PIECE ON THE TAIL" WAS THE FUSELAGE, AND §33 EXPOSED IT (§35).** The loft's last station ended at z = 4.70, so the tail cone stopped in mid-air just short of the fin's trailing edge — a square-ended block sticking out the back. Moving the vertical tail 0.106 m forward for §33's length fix pulled the fin off the end of the cone that used to hide it. It now dies at **z = 4.35**, inside the fin and tailplane. **Envelope, mass and part count unchanged.** ⚠️ **Do not fix a loft like this by deleting its last station** — that leaves a bigger blunt face further forward, where nothing covers it.
 
+🧍 **THE PILOT IS NOW 1.55 m, AND THE ON-FOOT CAMERA PIVOTS INSIDE THE HEAD (§36).** The pilot asked why the Cessna reads smaller than PTFS's — it is the avatar-to-plane ratio, not the aircraft's size (§33's 8.28 × 11.00 × 2.72 m is unchanged). Decision: **shrink the pilot to 1.55 m** via the existing uniform `Model:ScaleTo` path (1.30–1.40 m rejected as child-sized; no uniform scale fixes the ratio). **Nothing else moved, by construction**: the cockpit eye is anchored to the `PilotSeat`, and the on-foot framing reads the live `character:GetScale()`. The orbit pivot was then moved **from the nose to the head centre** (`headPivotOffset`), because §35's own notes had already found the eyes/nose placement "really funky" on foot — the pivot must sit inside the skull for seamless orbiting. ⚠️ **A 1.55 m pilot still cannot sit naturally in this airframe** (real seated eye ~datum 0.95, slot tops out at 0.80) — that stays a structural decision (§31/§35).
+
 ➡️ **NEXT: the pilot re-flies it before the interior work starts** (the project rule). ⚠️ **Still open, and a decision rather than a task: a realistic seated eye height does not fit this airframe.** The seat pan is 1.40 m above the wheels where a real 172's is about 0.95 m, so the eye is 0.55 m above the pan instead of 0.78 m. Fixing it means moving the **structural** `PilotSeat` (§31). See §35.
 
-🧱 **THE PILOT IS A CLASSIC R6 NOW, BUILT IN CODE (§34).** ⚠️ **R6 is not a property Rojo can write** — `StarterPlayer`, `Workspace` and `Players` were all probed and none has one, so the new `PlayerService` builds every character with `Players:CreateHumanoidModelFromDescription(desc, R6)` and `CharacterAutoLoads = false`. It runs **last** in `SERVICE_ORDER` because it stands the pilot on the `SpawnLocation` that AirportService moves. Settled: **1.741 m tall, feet on the apron, scale 0.3500** — and `FlightController`'s scaling needed no change, because it measures the rig rather than assuming R15. 🐛 **A "sinking pilot" cost a fix that had to be thrown away: `Model:ScaleTo` does not replicate, so the SERVER's copy of a scaled character is not evidence — measure it on the CLIENT.**
+🧱 **THE PILOT IS A CLASSIC R6 NOW, BUILT IN CODE (§34).** ⚠️ **R6 is not a property Rojo can write** — `StarterPlayer`, `Workspace` and `Players` were all probed and none has one, so the new `PlayerService` builds every character with `Players:CreateHumanoidModelFromDescription(desc, R6)` and `CharacterAutoLoads = false`. It runs **last** in `SERVICE_ORDER` because it stands the pilot on the `SpawnLocation` that AirportService moves. Settled: **1.741 m tall at the 1.75 m setting, feet on the apron, scale 0.3500** (the height is now **1.55 m** after §36; the mechanism is unchanged) — and `FlightController`'s scaling needed no change, because it measures the rig rather than assuming R15. 🐛 **A "sinking pilot" cost a fix that had to be thrown away: `Model:ScaleTo` does not replicate, so the SERVER's copy of a scaled character is not evidence — measure it on the CLIENT.**
 
-🗑️ **THE IMPORTED MESH IS GONE, ON THE PILOT'S CALL (§33).** It sat wrong on the aeroplane and its fitted scale was abnormal, so it was **removed rather than patched** — deferred, not abandoned. The exterior is the pre-mesh primitive Cessna of §31 again: 78 parts, 1,111 kg, one assembly, all six surfaces still deflecting. The diff is **100% deletions** bar one identifier rename. `exteriorFromMesh` and `keepWithMesh` went with it, one step past "restore the flag to false", because deleting `useMesh` left nothing reading either.
+🗑️ **THE IMPORTED MESH IS GONE, ON THE PILOT'S CALL (§33).** It sat wrong on the aeroplane and its fitted scale was abnormal, so it was **removed rather than patched** — deferred, not abandoned. The exterior is the pre-mesh primitive Cessna of §31 again: 79 parts (78 until §35 tapered the tail cone), 1,111 kg, one assembly, all six surfaces still deflecting. The diff is **100% deletions** bar one identifier rename. `exteriorFromMesh` and `keepWithMesh` went with it, one step past "restore the flag to false", because deleting `useMesh` left nothing reading either.
 
 📏 **THE AEROPLANE IS NOW THE SIZE OF THE PUBLISHED AEROPLANE — 11.000 × 2.720 × 8.280 m (§33).** It measured 10.500 × 2.920 × 8.450: **three errors in three different directions**, which is why there was no scale factor to fix and why each axis was corrected in the part layout. ⚠️ **Not one structural box moved** — every change is massless decoration, and the original 29 `Cessna172` checks including static margin pass untouched. Four new checks pin the dimensions against the definition. **The whole-model envelope still reads 2.85 m and that is correct**: the invisible structural fin box tops out 0.13 m above the visible fin, and shrinking it would move mass to improve something nobody can see.
 
-🧍 **THE PILOT IS EXACTLY 1.75 m AND CANNOT ALSO BE 0.50 m WIDE (§33).** Measured settled at **1.7502 studs** with **0.547 m** shoulders. The R15 rig is built **9.4% too broad for its height** (ratio 0.3125 against a human's 0.2857) and a uniform `ScaleTo` carries that ratio whatever value it takes — scale for width instead and the pilot is 1.60 m tall. The two mechanisms that could narrow it are the ones §30 measured as inert (`BodyWidthScale`) or destructive (hand-resizing a constraint rig with 15 `WrapTarget`s of layered clothing).
+🧍 **THE PILOT IS NOW 1.55 m AND CANNOT ALSO BE 0.50 m WIDE (§33, height superseded by §36).** Measured settled at **1.7502 studs** with **0.547 m** shoulders before the pilot asked for 1.55 m (§36). The R15 rig is built **9.4% too broad for its height** (ratio 0.3125 against a human's 0.2857) and a uniform `ScaleTo` carries that ratio whatever value it takes — scale for width instead and the pilot is 1.60 m tall. The two mechanisms that could narrow it are the ones §30 measured as inert (`BodyWidthScale`) or destructive (hand-resizing a constraint rig with 15 `WrapTarget`s of layered clothing).
 
 The pilot's answer was to change the rig instead — **classic R6, now done in §34**. Note that R6 is **broader still** — a 2-stud torso on a 5-stud rig is a 0.40 ratio — so it was a choice of *look*, not a fix for the width.
 
@@ -28,7 +30,7 @@ The pilot's answer was to change the rig instead — **classic R6, now done in �
 
 ✈️ **PHASE 4 — THE CESSNA LOOKS LIKE A CESSNA (§31).** The exterior is modelled (78 parts, lofted fuselage, dihedral wing, struts, swept fin, gear legs) and **the control surfaces move with the controls** — ailerons, elevators, rudder, flaps, trim tab and a spinning prop, all on `Motor6D` hinges. **The physics did not move**: the structural boxes are unchanged and merely hidden, and `Cessna172` is still 29/29 at 1,111 kg with the CoM where it predicts. Two real bugs were caught doing it — a duplicate part name that **silently detached the tailplane and lost 20 kg**, and **ailerons that deflected backwards** past a test asserting the wrong sign. Scope items 3–5 (instrument realism, cockpit interior, 3D controls) are **not started**.
 
-🧍 **THE PILOT IS 1.75 m, AND THE PREVIOUS ATTEMPT AT IT DID NOTHING AT ALL (§30).** `d19d805` set the R15 scale `NumberValue`s and printed a success line while moving the rig **0.00 studs** — the marker reported the scale it *asked for* beside an unrelated `HumanoidRootPart` number, so it could not tell success from doing nothing. The answer is **`Model:ScaleTo()`** — `Humanoid` has no `ScaleTo`, but a character is a `Model` and that one exists. **There is no 0.4 floor** (it was inferred from a mechanism that was never working) and **no `Motor6D` joints on this rig to rewrite** — it is a constraint rig. The planned manual part-rescaling was never needed. ⚠️ **Leave `AutomaticScalingEnabled` TRUE**: setting it false moves the camera focus onto an unscaled 2-stud constant, putting it 1.30 studs above a shrunken pilot's head. Boarding still moves the aircraft **0.000 m**.
+🧍 **THE PILOT IS 1.75 m (NOW 1.55 m, §36), AND THE PREVIOUS ATTEMPT AT IT DID NOTHING AT ALL (§30).** `d19d805` set the R15 scale `NumberValue`s and printed a success line while moving the rig **0.00 studs** — the marker reported the scale it *asked for* beside an unrelated `HumanoidRootPart` number, so it could not tell success from doing nothing. The answer is **`Model:ScaleTo()`** — `Humanoid` has no `ScaleTo`, but a character is a `Model` and that one exists. **There is no 0.4 floor** (it was inferred from a mechanism that was never working) and **no `Motor6D` joints on this rig to rewrite** — it is a constraint rig. The planned manual part-rescaling was never needed. ⚠️ **Leave `AutomaticScalingEnabled` TRUE**: setting it false moves the camera focus onto an unscaled 2-stud constant, putting it 1.30 studs above a shrunken pilot's head. Boarding still moves the aircraft **0.000 m**.
 
 ✅ **THE ALTITUDE-HOLD PORPOISE IS FIXED, FLOWN, AND SIGNED OFF (§29).** Recorded at **125.1 kt** — above the 112–118 kt band that used to limit-cycle — **0 vertical-speed crossings and a peak command of 0.219** against the old saturated 0.450. ⚠️ **The slow climb/descent while engaged is WANTED and is not a bug** — the pilot asked for that variability as realism, so **do not add an integrator to flatten it**. Revisit the loop with **weather (Phase 5)**, when density, thermals and hot pockets give it something real to fight; the ~29 m droop is parked there too.
 
@@ -2035,11 +2037,11 @@ Worth noting for whoever reads the next trace: the autopilot held **~−0.19 of 
 
 ---
 
-## 30. The pilot is 1.75 m — and the previous attempt did nothing at all (2026-08-05)
+## 30. The pilot is 1.75 m — and the previous attempt did nothing at all (2026-08-05; the height is now 1.55 m, see §36)
 
 **698/698 across 17 suites**; `FlightController` 38 → 46.
 
-The pilot is now **1.75 m** standing beside the real-scale Cessna, measured live: `[Avatar] pilot is 1.75 m (model scale 0.339x)`.
+The pilot was **1.75 m** standing beside the real-scale Cessna, measured live: `[Avatar] pilot is 1.75 m (model scale 0.339x)`. §36 lowers the target to **1.55 m** at the pilot's request; every mechanism in this section is unchanged.
 
 ### The previous commit `d19d805` was completely inert, and its marker hid that
 
@@ -2087,12 +2089,12 @@ So the wait is on **the measurement settling**, not on any state flag: two conse
 
 `pilotScaleFor()` is **idempotent by construction** — `ScaleTo` takes an absolute scale, not a multiplier, so the current scale is folded back in and re-applying to a correct rig is a no-op. That is what lets the applier converge in a loop instead of having to measure perfectly first time, and a test pins it.
 
-**The height is measured, not hard-coded**, so it lands on 1.75 m for any player's avatar rather than only for a default one. Accessories and the `HumanoidRootPart` are excluded — hair is not height, and the HRP is the box that produced the misleading 1.92.
+**The height is measured, not hard-coded**, so it lands on PILOT_HEIGHT_M (1.55 m after §36) for any player's avatar rather than only for a default one. Accessories and the `HumanoidRootPart` are excluded — hair is not height, and the HRP is the box that produced the misleading 1.92.
 
 ### Nothing physical changed
 - **Boarding still moves the aircraft 0.000 m** — re-measured after the change (§6e).
 - The scale holds through the `Sit` weld and back out; the pilot walks normally with no vertical drift.
-- `WalkSpeed` is untouched — it is the project's own metre-scale 2.4 m/s from `Constants.CHARACTER`, and a 1.75 m human should walk at that speed whatever the rig measures.
+- `WalkSpeed` is untouched — it is the project's own metre-scale 2.4 m/s from `Constants.CHARACTER`, and a PILOT_HEIGHT_M human should walk at that speed whatever the rig measures.
 - The cockpit eye is anchored to the `PilotSeat`, not the head, so the view does not move.
 
 ### The spawn pad is hidden, and **sunk flush** rather than just made invisible
@@ -2400,7 +2402,7 @@ Both are exactly the tuning times **0.35**, the pilot's model scale. `Model:Scal
 
 1.500 is where a **stock 5-stud rig's** head sits. The pilot is scaled to 0.35, so their head is only **0.514** above the root — the camera was orbiting and zooming to a point **0.905 m above their face**. Zero offset was never "centred on the head"; it was above the head entirely, which is why nudging the offset never helped and the first attempt read as *"really funky"* while walking.
 
-The offset is now the **difference between that stock constant and the live rig's geometry**, so it lands on the nose — the point between the eyes, on the front of the head. Measured after the fix: focus **1.7 mm** from the nose point, against 0.905 m before. Same trap as the name tag: a stock-scale constant the engine applies over a scaled rig.
+The offset is now the **difference between that stock constant and the live rig's geometry**, so it lands on the nose — the point between the eyes, on the front of the head. Measured after the fix: focus **1.7 mm** from the nose point, against 0.905 m before. Same trap as the name tag: a stock-scale constant the engine applies over a scaled rig. (⚠️ §36 then moved the pivot from the nose **into the head centre** — the pilot found the on-foot orbit swings around a point ahead of the body, which §2's earlier notes had already called *"really funky"*.)
 
 **The cockpit `EYE_OFFSET` was also raised, 0.60 → 0.65**, which was what the written brief asked for before the on-foot problem was clarified. Measured against the airframe:
 
@@ -2421,6 +2423,51 @@ The loft's last station sat at z = 4.70, so the tail cone **stopped in mid-air a
 
 ⚠️ **§33 caused it, and §33's own numbers are still correct.** Moving the vertical tail 0.106 m forward to trim the aircraft to its published length pulled the fin off the end of the cone it used to hide. The cone was always blunt; it simply used to be covered.
 
-It was found by **census, not by eye**: every visible part was checked against the definition — 78 parts, 66 declarations, no duplicates, none missing, nothing floating — which proved there was no stray part to delete, and then by colouring the tail part by part until the offender was unambiguous. The station now dies at **z = 4.35**, buried inside both the fin (3.974..4.774) and the tailplane (3.82..4.74), which is where a real 172's cone dies too. **Envelope, mass and part count are unchanged**: still 11.000 × 2.720 × 8.280, still 78 parts, `Cessna172` still 33/33.
+It was found by **census, not by eye**: every visible part was checked against the definition — 78 parts, 66 declarations, no duplicates, none missing, nothing floating — which proved there was no stray part to delete, and then by colouring the tail part by part until the offender was unambiguous.
 
-⚠️ **Do not "simplify" a loft by deleting its last station.** Deleting `Fuselage11` outright leaves a *bigger* blunt face further forward, where nothing covers it at all. Where the loft ends is the whole question — a loft can only end in a flat face.
+⚠️ **IT TOOK THREE GOES, BECAUSE THE FIRST TWO MOVED THE BLUNT FACE INSTEAD OF SHRINKING IT.** The pilot had to report it twice more.
+
+| attempt | last station | result |
+|---|---|---|
+| original | z = 4.70 | stopped in mid-air just short of the fin's trailing edge — a square block hanging off the back |
+| first fix | z = 4.35 | inside the fin's chord, but still a **0.35 × 0.44** face. The fin is only 0.13 thick and the tailplane 0.15, so its corners stood proud above and below the tailplane on both sides of the fin |
+| **now** | z = 4.30 **and** 4.60 | a **0.15 × 0.22** post, about a tenth the area, dying between the tailplane and the fin |
+
+⚠️ **A loft can only ever end in a flat face, so the question is how BIG it is and what covers it — not where it is.** Moving a blunt end does not stop it being blunt.
+
+⚠️ **AND ONE STATION CANNOT TAPER IT.** Each box is sized to the **mean** of its two stations, so the last box can never reach the last station's dimensions — shrinking the final station only pulls the box halfway. It takes **another station beyond it** to bring the last box down, which is why this ends in two stations rather than one smaller one.
+
+⚠️ **Do not "simplify" this by deleting the last station.** That leaves a *bigger* face (0.51 × 0.58) further forward, where even less covers it.
+
+**Envelope, mass and balance are unchanged**: still 11.000 × 2.720 × 8.280, still **1,111.0 kg**, one assembly, the same centre of mass, `Cessna172` still 33/33. The part count is **79** (was 78) — one more massless loft box.
+
+---
+
+## 36. The pilot is 1.55 m, and the on-foot camera pivots inside the head (2026-08-06)
+
+**Test counts unchanged from §35** — the `FlightController` suite still passes, with the two `faceCameraOffset` checks re-expressed for the head-centre pivot.
+
+The pilot asked why the Cessna reads smaller than PTFS's Cessna. **It is not the aircraft's size** — §33 fixed that to the published 8.28 × 11.00 × 2.72 m — it is the **avatar-to-plane ratio**. PTFS leans the same ratio toward the aeroplane; our 1.75 m pilot stood at a ratio that read small.
+
+### Decision: shrink the pilot to 1.55 m, and only via the existing uniform scale
+
+- **1.30–1.40 m was rejected** — it reads child-sized, and a uniform `ScaleTo` carries the width-to-height ratio whatever value it takes, so no uniform shrink ever fixes a "too small next to the plane" reading.
+- **1.55 m keeps a compact adult** while tipping the ratio toward the aeroplane the way PTFS does.
+- The mechanism was already there: `pilotScaleFor()` = `currentScale * PILOT_HEIGHT_M / measuredHeight` applied through `Model:ScaleTo` (§30). **Only the constant changed**: `PILOT_HEIGHT_M` 1.75 → 1.55 in `FlightController`.
+
+### Nothing else needed to move, and that is by construction
+
+- **The cockpit eye does not move** — it is anchored to the `PilotSeat` (`CameraController.EYE_OFFSET`), not to the head, so pilot scale is irrelevant to the seated view.
+- **The on-foot framing follows automatically** — `frameGroundPilot` reads the live `character:GetScale()` rather than a hard-coded height, so the zoom range tracks a 1.55 m pilot the same way it tracked 1.75 m.
+- ⚠️ **A 1.55 m pilot still cannot sit naturally in this airframe.** Their real seated eye would be about datum y = 0.95; the eye slot tops out at 0.80 (§35's 0.155 m slot). The shrink was a *look* decision, not a fix for the seat — the seat stays a structural decision (§31/§35, raised with the pilot before acting).
+
+### The on-foot orbit pivot moved from the nose to the head centre
+
+§35's fix landed the camera focus on the **nose** (front of the head). The pilot reported the orbit still did not pivot seamlessly and asked for the pivot **inside the head**. This is consistent with §35's own history: aiming at the eyes/front of the head was tried earlier and rejected as *"really funky"* — the orbit swings about a point that is not the body.
+
+- `faceCameraOffset` → **`headPivotOffset(headAboveRoot)`**, which returns `(0, headAboveRoot − 1.5, 0)`: the focus lands at the head centre in the root's frame, exactly the stock constant minus the live geometry. `NOSE_RISE` and the `headSize` input are gone.
+- `fitCameraToEyes` → **`fitCameraPivot(character)`**, applied after the scale converges, same as before.
+- X and Z are zero because a rig's head is centred over its root part — no lateral push, the orbit rotates about the skull.
+- Tests re-expressed: a stock rig needs no correction; a scaled pilot's pivot is pulled down onto the head centre (not the nose); the pivot sits inside the head (Z = 0); the reconstructed focus equals `headAboveRoot`; missing geometry yields zero.
+
+⚠️ **Comments in `FlightController` and `CameraController` previously described the 1.75 m / 0.35x pilot and the nose pivot.** The now-stale ones were updated to reference `PILOT_HEIGHT_M`; historical measurement numbers (7.00 / 0.35 movement rescale, 0.905 m focus error) are retained but labelled as measured at the old 0.35x scale.

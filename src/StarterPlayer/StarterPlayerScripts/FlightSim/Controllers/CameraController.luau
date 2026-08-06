@@ -154,9 +154,9 @@ local FREE_MAX_ZOOM = 400
 --[[
 	Ground framing, done with ZOOM DISTANCE rather than a scripted camera.
 
-	The problem is real: the pilot is person-sized at 1.75 m (0.339x the stock
-	rig) and Roblox's default camera does not scale its framing with the
-	character, so a scaled pilot stands tiny in frame.
+	The problem is real: the pilot is person-sized at PILOT_HEIGHT_M (about
+	0.30x the stock rig) and Roblox's default camera does not scale its framing
+	with the character, so a scaled pilot stands tiny in frame.
 
 	⚠️ THE FIRST FIX FOR THIS DROVE THE CAMERA DIRECTLY, AND COST THE MOUSE.
 	Writing camera.CFrame every frame requires CameraType = Scriptable, and a
@@ -302,9 +302,9 @@ end
 	the only scriptable route to it, and it is what GROUND_ZOOM_SETTLE is for.
 
 	Re-applied whenever the character's SCALE changes, not just when the
-	character does. The avatar converges on 1.75 m over about a second after
-	spawning (§30), so a single application at spawn would size the zoom for an
-	unscaled rig and leave the pilot tiny anyway.
+	character does. The avatar converges on PILOT_HEIGHT_M over about a
+	second after spawning (§30), so a single application at spawn would size
+	the zoom for an unscaled rig and leave the pilot tiny anyway.
 ]]
 local groundScale: number? = nil
 

@@ -589,25 +589,34 @@ loft("Fuselage", WHITE, {
 	{ z = 3.15, w = 0.58, h = 0.64, y = 0.40 },
 	{ z = 3.95, w = 0.44, h = 0.52, y = 0.44 },
 	--[[
-		⚠️ THE LAST STATION MUST DIE INSIDE THE EMPENNAGE, NOT BEHIND IT.
+		⚠️ THE TAIL CONE MUST TAPER TO A POST, NOT STOP IN A BLUNT BLOCK.
 
-		A loft can only end in a blunt face, so where it ends is the whole
-		question. This station used to sit at z = 4.70, which left the tail cone
-		stopping in mid-air a few centimetres short of the fin's trailing edge -
-		a square-ended block sticking out the back of the aeroplane with nothing
-		behind it. The pilot reported it as "an extra, vestigial piece on the
-		tail", and they were right.
+		A loft can only ever end in a flat face, so the only question is how BIG
+		that face is and what covers it. This is the "extra, vestigial piece on
+		the tail" the pilot reported twice, and both earlier attempts missed it
+		because they moved the face instead of shrinking it:
+
+		  z = 4.70  the original. Stopped in mid-air just short of the fin's
+		            trailing edge - a square block hanging off the back.
+		  z = 4.35  moved forward to sit inside the fin. Still a 0.35 x 0.44
+		            face, and the fin is only 0.13 thick while the tailplane is
+		            0.15 - so its corners still stood proud above and below the
+		            tailplane, on both sides of the fin. Moving a blunt end does
+		            not stop it being blunt.
 
 		§33 is what exposed it: moving the vertical tail 0.106 m FORWARD to trim
 		the aircraft to its published length pulled the fin off the end of the
-		cone it used to cover. The cone was always blunt; it simply used to be
-		hidden.
+		cone it had been hiding. The cone was always blunt.
 
-		At 4.35 the final face is buried inside both the fin (3.974..4.774) and
-		the tailplane (3.82..4.74), which is where a real 172's cone dies too -
+		TWO MORE STATIONS NOW TAPER IT PROPERLY. Each box is sized to the MEAN of
+		its two stations, so a single station can never reach a small dimension -
+		it takes another station beyond it to pull the last box down. The final
+		face is 0.15 x 0.22 at z = 4.60, about a tenth the area of the old one,
+		sitting between the tailplane and the fin where a real 172's cone dies -
 		into the rudder post, not past it.
 	]]
-	{ z = 4.35, w = 0.26, h = 0.36, y = 0.46 },
+	{ z = 4.30, w = 0.24, h = 0.34, y = 0.45 },
+	{ z = 4.60, w = 0.06, h = 0.10, y = 0.46 },
 })
 
 -- ---- Glazing ------------------------------------------------------------

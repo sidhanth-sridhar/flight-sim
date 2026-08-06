@@ -1,25 +1,69 @@
-CONTINUATION PROMPT — fix the four post-flight bugs first, then build Phase 4 items 4 and 5.
+CONTINUATION PROMPT — the pilot re-flies it, then build Phase 4 items 4 and 5.
 
 You are continuing work on a Roblox flight sim in C:\Users\sidha\OneDrive\Documentos\MyRobloxGame.
 Read HANDOFF.md first — it is the source of truth. Commit style: short imperative messages; the
 commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user
 asks. Keep this file LEAN — do not re-add sections for work already recorded in HANDOFF.
 
-CURRENT STATE: 775/775 across 20 suites. The mesh is purged, the Cessna measures the published
+CURRENT STATE: all suites green. The mesh is purged, the Cessna measures the published
 8.28 x 11.00 x 2.72 m, the pilot is a classic R6 built in code by PlayerService, and the four
 bugs from the first flight of the resized aeroplane are FIXED (HANDOFF §33, §34, §35 — all DONE).
-⚠️ Constants.luau carries the pilot's own tuning: WALK_SPEED = 20.0, JUMP_HEIGHT = 1. Leave it.
+⚠️ **Uncommitted session work (§36):** the pilot is now **1.55 m** (PILOT_HEIGHT_M in
+FlightController, down from 1.75) and the on-foot camera pivot moved from the nose to the **head
+centre** (faceCameraOffset → headPivotOffset, fitCameraToEyes → fitCameraPivot). The cockpit eye
+and the on-foot framing follow automatically; the seated eye slot is untouched. ⚠️ Constants.luau
+carries the pilot's own tuning: WALK_SPEED = 20.0, JUMP_HEIGHT = 1. Leave it.
 
-➡️ THE PILOT RE-FLIES IT BEFORE THE INTERIOR WORK STARTS. That is the project rule, and nothing
-below begins until that report comes back.
+➡️ **THE PILOT RE-FLIES IT BEFORE THE INTERIOR WORK STARTS.** That is the project rule, and nothing
+below begins until that report comes back. The re-fly should specifically check the new pilot
+height (1.55 m) and the head-centre orbit pivot feel.
+
+====================================================================
+NEXT TASK 1 — THE TRIM TAB MUST RIDE THE ELEVATOR
+====================================================================
+The pilot's report: moving the elevator up and down leaves a **small piece on the right
+elevator that does not move** — it just sits there.
+
+**Diagnosis (already done — verify it, then fix it):** the `TrimTab` decoration
+(`Cessna172.luau` ~line 877) is a separate hinged part on the right elevator, but
+`AircraftBuilder.build` gives **every** hinged surface a Motor6D with **`Part0 = root`**
+(`AircraftBuilder.luau` ~line 374). So the tab is anchored to the airframe and only rotates
+on its own `trim` channel — it never follows the elevator's deflection. On a real 172 the
+tab is hinged to the elevator's trailing edge, so it moves **with** the elevator **and** adds
+its own trim deflection on top (compound motion).
+
+**The fix:** support an optional `hinge.parent` in the builder — when present, the trim tab's
+Motor6D gets `Part0 = parts[hinge.parent]` (the right elevator part) and its `C0` is computed
+relative to that part's rest position instead of the root's. Set `TrimTab.hinge.parent =
+"ElevatorRight"` in the definition. `SurfaceAnimation` needs no channel change — it already
+drives the `trim` channel — but its `baseC0 * rotation` rest-motion assumption still holds
+because the tab's own hinge C0 is now in the elevator's frame.
+
+**Constraints that must stay green (do not "simplify" past them):**
+- The tab must STILL deflect on trim, opposing the elevator it trims — `SurfaceAnimation.runTests`
+  pins this (`"The trim tab opposes the elevator it trims"`). Deleting the hinge or welding the
+  tab to the elevator kills it. The tab needs BOTH motions: ride the elevator + own trim.
+- `"Everything welds into ONE assembly"` in `AircraftBuilder.runTests` — a chained Motor6D keeps
+  the tab in the assembly (it already is today via its motor).
+- `Cessna172` suite (33 checks), `SurfaceAnimation` suite, `AircraftBuilder` suite must all stay
+  green; the Controls contract (six fields) is untouched.
+- The mirroring test reads `ElevatorRight`/`ElevatorLeft` from the definition — the trim tab is
+  right-elevator-only by design (the comment at `Cessna172.luau` ~line 871), do not pair it.
+
+**Verify in Studio Play (Client datamodel):** run `SurfaceAnimation.runTests()` and
+`AircraftBuilder.runTests()`; then spawn the aircraft and, from the cockpit or chase view, move
+the elevator (pitch) and confirm the tab now swings with it, and apply trim and confirm the tab
+still deflects its own way.
 
 ====================================================================
 OPEN DECISION — THE SEAT IS TOO HIGH FOR A REALISTIC EYE HEIGHT
 ====================================================================
-A 1.75 m person's eye sits about 0.78 m above the seat pan. This airframe can only give 0.55 m:
+A person's eye sits about 0.78 m above the seat pan. This airframe can only give 0.55 m:
 the pan is 1.40 m above the wheels where a real 172's is about 0.95 m, so the seat is roughly
 0.4 m too high in a cabin that is otherwise correctly sized. The eye is already near the top of
-the 0.155 m slot between the glareshield (y 0.695) and the wing underside (y 0.850).
+the 0.155 m slot between the glareshield (y 0.695) and the wing underside (y 0.850). ⚠️ Even at
+the new 1.55 m pilot height the natural seated eye (~datum y 0.95) does not fit — §36 shrank the
+pilot for LOOKS, not to fix the seat.
 
 Closing it means moving PilotSeat, which is STRUCTURAL (§31) — 1 kg of 1,111, so the CoM shift is
 sub-millimetre, but it is still the pilot's call and not an assumption. Raise it before acting.
@@ -37,13 +81,21 @@ Physics-first, cosmetic-second: verify each feature on the shell model before an
    panel once the interior exists. §32's wet-compass turning-error model is written and tested and
    is waiting for the compass this item mounts on the windscreen frame. Reference already
    gathered: published 172S panel guides (flightnerdairforce, pilotmall, cessna172sim).
+   ✅ SEATED AVATAR DECIDED (2026-08-06, pilot): the body you see in the cockpit IS the player's
+   own avatar, NOT a random rig — the player's character is positioned into the pilot seat and
+   rigged so its hands grip the yoke, feet reach the rudder pedals and an arm rests on the
+   throttle, driven by the same controls as the surfaces. The character stays neutralised
+   (massless, non-collidable) while seated. The copilot is another player's avatar when one boards
+   (no generic stand-in; right seat empty in single-player). Full detail in HANDOFF §14 Phase 4
+   items 5-6; build the interior so the avatar can sit in it and be rigged to the controls.
 
-5. Controls and switches as 3D parts, visual only, inert and non-interactive. ⚠️ Interactive
-   switches are a DECISION, deferred: the cursor-is-the-yoke rule (§6g, §7) means a clickable
-   switch mid-flight IS the flight controls by construction. When that day comes it needs a modal
-   state that releases the yoke, or ground-only use. Do not build interactivity now.
+5. Controls and switches as 3D parts, visual only, inert and non-interactive. ✅ INTERACTIVITY IS DECIDED (2026-08-06, pilot): switches are **keyboard-bound**, not clickable — each gets a key that flips it on/off and the 3D part toggles with the press. No modal state, no cursor capture, no ground-only gating (the cursor IS the yoke, §6g; same reasoning as ViewToggle, §6k). The switch *state* lives in `state.systems` and the cockpit part mirrors it. Build the inert parts now; the key wiring is Phase 4c.
 
 Phase 4b (flight tablet) is NEXT after the interior — blocked on it for a reason.
+📋 Phase 4c (HANDOFF §14) was added 2026-08-06: the missing 172S systems — rudder trim tab,
+fuel selector, mixture, magnetos, master/electrical, engine gauges, cabin environment, switchable
+lights — researched against the POH and scoped. It is planned after Phase 4b/5, NOT now; do not
+build it as part of the interior work.
 Phase 5 (weather) after that: it is what makes §32's instrument realism visible (QNH, density,
 thermals, hot pockets) and where the parked altitude-hold work is scheduled (§29: slow droop is
 WANTED, ~29 m droop revisit, NO integrator).
@@ -68,9 +120,7 @@ the box — never the reverse (§31), and §33's dimension fix touched decoratio
 makes R6 true from code, but the Studio setting is the belt to its braces and lives outside the
 repo.
 
-⚠️ UNCOMMITTED AND NOT MINE: src/ReplicatedStorage/FlightSim/Config/Constants.luau (the pilot's
-WALK_SPEED/JUMP_HEIGHT tuning), progress_journal.txt, opencode.json, and the new PlayerService
-module. Do not sweep them into a commit as though they were part of the aircraft work.
+⚠️ UNTRACKED AND NOT MINE (do not sweep into a commit): progress_journal.txt and opencode.json.
 
 CREDITS.md still attributes the Sketchfab mesh that was purged. Left in place deliberately rather
 than deleted — removing an attribution is the pilot's call, and the mesh is deferred, not

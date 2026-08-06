@@ -6,7 +6,9 @@
 
 ## 0. Resume here — state at 2026-08-06
 
-**All 775 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 783 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+
+🎛️ **THE TRIM TAB RIDES THE ELEVATOR NOW (§37).** Reported as "a small piece on the right elevator that does not move". ⚠️ **Every hinge got `Part0 = root`**, so the tab was bolted to the airframe and only ever did its own trim. An optional **`hinge.parent`** chains a surface's Motor6D to another surface, and the tab is now carried up 22° with the elevator while still sitting 15° nose-down of it. ⚠️ **The arithmetic was already right, which is why nothing caught it** — `SurfaceAnimation`'s 21 checks are all *pure*, and the bug lived in the joint the builder made. There is now a check that drives a **real built model**, because that is the only place the two layers meet.
 
 🐛 **THE FIRST FLIGHT OF THE RESIZED AEROPLANE FOUND FOUR BUGS, ALL FIXED (§35).** The flight itself was good. ⚠️ **Three of the four were something silently rescaling or replacing a value that every source file still reported correctly** — §30's lesson again. `Model:ScaleTo` **rescales WalkSpeed and JumpHeight with the rig** (a tuned 20.00 m/s and 1.00 m measured as **7.00 and 0.35**), so the tuning is now restored *after* the scale converges through the shared `CharacterTuning`. A reset from the seat left the camera at the aeroplane, because a stale `CameraSubject` is the **wrong object, not a missing one**. ⚠️ **The character camera focuses a hard-coded 1.500 studs above the HumanoidRootPart and does NOT scale with `ScaleTo`**, so on a 0.35x pilot it orbited a point **0.905 m above their face**; `Humanoid.CameraOffset` now corrects it onto the pilot (§35 landed it on the nose, §36 moved it to the **head centre**), derived from the live rig. The name tag is **off entirely**, by the pilot's call.
 
@@ -191,7 +193,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (775 checks total)
+### Verified green (783 checks total)
 
 ⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 
@@ -201,8 +203,8 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Aerodynamics` | `Physics/Aerodynamics.luau` | 37/37 | Client |
 | `Engine` | `Physics/Engine.luau` | 24/24 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 33/33 | Client |
-| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 20/20 | Client |
-| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 21/21 | Client |
+| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 25/25 | Client |
+| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 24/24 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
@@ -2471,3 +2473,42 @@ The pilot asked why the Cessna reads smaller than PTFS's Cessna. **It is not the
 - Tests re-expressed: a stock rig needs no correction; a scaled pilot's pivot is pulled down onto the head centre (not the nose); the pivot sits inside the head (Z = 0); the reconstructed focus equals `headAboveRoot`; missing geometry yields zero.
 
 ⚠️ **Comments in `FlightController` and `CameraController` previously described the 1.75 m / 0.35x pilot and the nose pivot.** The now-stale ones were updated to reference `PILOT_HEIGHT_M`; historical measurement numbers (7.00 / 0.35 movement rescale, 0.905 m focus error) are retained but labelled as measured at the old 0.35x scale.
+
+---
+
+## 37. The trim tab now rides the elevator (2026-08-06)
+
+**783/783 across 20 suites**; `AircraftBuilder` 20 → 25, `SurfaceAnimation` 21 → 24.
+
+The pilot reported **a small piece on the right elevator that does not move** while the elevator swung around it. It was the trim tab.
+
+### Every hinge was bolted to the airframe
+
+`AircraftBuilder.build` gave **every** hinged surface a Motor6D with `Part0 = root`. That is right for the eight surfaces bolted straight to the aeroplane, and wrong for the one that is not: a real 172's trim tab hinges on the **elevator's trailing edge**, so it has to do two things at once — ride the elevator wherever the pilot puts it, and add its own trim deflection on top. Anchored to the airframe it only ever did the second.
+
+⚠️ **THE ARITHMETIC WAS ALREADY CORRECT, WHICH IS WHY NOTHING CAUGHT IT.** `SurfaceAnimation.surfaceAngle` returned a perfectly good trim deflection the whole time, and its suite passed 21/21 — every check in it is **pure**, and the bug lived in the joint the builder made. The two layers were each right on their own.
+
+### The fix: `hinge.parent`
+
+An optional `hinge.parent` names the part a surface swings from; absent, it is the root, which is every other surface. `TrimTab.hinge.parent = "ElevatorRight"`, and the builder chains the motor to that part.
+
+The C0 maths generalises rather than special-cases: `C0 = Rparent⁻¹ * (p + h − pParent)` folds the parent's own mounting rotation back out, so C0 still lands in the **datum's axes at rest** and the animation layer keeps saying "rotate about X" meaning the aircraft's lateral axis. With the parent as the root it reduces to exactly the old expression, so the other eight surfaces are untouched — and **nothing moves at rest**, which a check now pins.
+
+Measured on a built model, driven through the animator:
+
+| | elevator | tab, world | tab **relative to the elevator** |
+|---|---|---|---|
+| stick back | −22.00° | −22.00° | **+0.00°** — rides it |
+| stick forward | +22.00° | +22.00° | **+0.00°** — rides it |
+| nose-up trim, stick neutral | +0.00° | +15.00° | +15.00° — its own deflection |
+| stick back **and** nose-up trim | −22.00° | **−7.00°** | **+15.00°** — both at once |
+
+Carried up 22° with the elevator and still sitting 15° nose-down of it. **Mass 1,111.0 kg, one assembly, the same centre of mass** — the tab was already massless decoration, and a chained motor keeps it in the assembly.
+
+### Two traps worth keeping
+
+⚠️ **THE MOTOR STAYS PARENTED TO THE ROOT even though `Part0` is not the root.** `SurfaceAnimation.new` finds each motor with `root:FindFirstChild("Hinge_"..name)`, so re-parenting it to the elevator would hide it from the animator and the tab would stop moving **altogether** — a worse bug than the one being fixed. A Roblox joint works from anywhere; only `Part0`/`Part1` decide what it connects.
+
+⚠️ **A wrong `hinge.parent` would not error.** `Part0 = nil` builds a motor that silently leaves the surface hanging in space, so `validate()` now refuses a parent name that is not a part or a decoration, and refuses a surface hinged onto itself — the same reasoning as the duplicate-name check in §31.
+
+**A new check drives a real built model inside `SurfaceAnimation.runTests`**, because that is the only place the builder and the animator meet, and this bug was invisible to either alone. It asserts all three properties: the tab is carried by the elevator, it still deflects on trim against it, and full stick with full trim **compounds** rather than one overriding the other.

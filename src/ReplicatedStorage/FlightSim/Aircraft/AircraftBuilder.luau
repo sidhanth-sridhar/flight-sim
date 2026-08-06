@@ -166,6 +166,29 @@ function AircraftBuilder.validate(definition: any): (boolean, { string })
 		claim(tostring(spec.name), "decoration")
 	end
 
+	--[[
+		A hinge may hang off ANOTHER surface, and the name has to exist.
+
+		`hinge.parent` is what makes a trim tab ride the elevator it trims. If
+		the name is wrong the motor would silently get Part0 = nil, which does
+		not error - it produces a surface that has come off the aeroplane and
+		hangs in space, which is exactly the class of failure the duplicate-name
+		check above exists to stop being silent.
+	]]
+	for _, spec in model.decorations or {} do
+		local parentName = spec.hinge and spec.hinge.parent
+		if parentName then
+			if not seen[tostring(parentName)] then
+				table.insert(problems, string.format(
+					"'%s' hinges onto '%s', which is not a part or a decoration.",
+					tostring(spec.name), tostring(parentName)
+				))
+			elseif tostring(parentName) == tostring(spec.name) then
+				table.insert(problems, string.format("'%s' hinges onto itself.", tostring(spec.name)))
+			end
+		end
+	end
+
 	if definition.mass and definition.mass.maxTakeoff and totalMass > definition.mass.maxTakeoff then
 		table.insert(problems, string.format(
 			"total mass %.0f kg exceeds max takeoff weight %.0f kg",
@@ -190,7 +213,7 @@ end
 	against the current layout. Cosmetic parts carry no mass and cannot.
 ]]
 local function specRotation(spec: any): CFrame
-	local r = spec.rotation
+	local r = spec and spec.rotation
 	if not r then
 		return CFrame.identity
 	end
@@ -353,27 +376,61 @@ function AircraftBuilder.build(definition: any, cframe: CFrame?, parent: Instanc
 		C1 folds that mounting rotation back out, so at rest the motor
 		reproduces exactly the CFrame createPart would have given the part:
 
-			root * C0 * C1:Inverse()
-			  = base * rootPos * (p + h - rootPos) * (-h) * R
+			parent * C0 * C1:Inverse()
+			  = base * parentPos * Rp * Rp^-1 * (p + h - parentPos) * (-h) * R
 			  = base * p * R                                    ✓
 
 		The surfaces stay massless, so driving them changes nothing physical -
 		the flight model reads the pilot's controls, never these parts.
+
+		---- Hinging onto ANOTHER surface -------------------------------------
+
+		`hinge.parent` names the part a surface swings from; without it that is
+		the root, which is every surface bolted straight to the airframe.
+
+		⚠️ THE TRIM TAB IS NOT BOLTED TO THE AIRFRAME. It lives on the right
+		elevator's trailing edge, so it has to do BOTH things at once: ride the
+		elevator wherever the pilot puts it, AND add its own trim deflection on
+		top. With Part0 = root it did only the second, and the pilot reported it
+		as "a small piece on the right elevator that does not move" while the
+		elevator swung around it.
+
+		Chaining the motor to the elevator's own part is what produces the
+		compound motion, and it costs nothing: Part1's rest CFrame is unchanged,
+		so `Rp^-1` above folds the parent's mounting rotation out and C0 still
+		lands in the DATUM's axes at rest - which is what lets the animation
+		layer keep saying "rotate about X" and meaning the aircraft's lateral
+		axis. Once the elevator deflects, the tab's hinge line rotates with it,
+		which is exactly what a real tab's hinge does.
+
+		⚠️ THE MOTOR STAYS PARENTED TO THE ROOT even when Part0 is not the root.
+		SurfaceAnimation finds each motor by `root:FindFirstChild("Hinge_"..name)`,
+		so re-parenting it to the elevator would hide it from the animator and
+		the tab would stop moving altogether. A joint works from anywhere; only
+		Part0/Part1 decide what it connects.
 	]]
-	local rootSpecPosition = Vector3.zero
+	local specByName: { [string]: any } = {}
 	for _, partSpec in spec.parts do
-		if partSpec.name == spec.rootPart then
-			rootSpecPosition = partSpec.position
-		end
+		specByName[partSpec.name] = partSpec
 	end
+	for _, decoSpec in spec.decorations or {} do
+		specByName[decoSpec.name] = decoSpec
+	end
+	local rootSpec = specByName[spec.rootPart]
 
 	for name, decoSpec in hingedSpecs do
 		local hingeOffset = decoSpec.hinge.offset or Vector3.zero
+		local parentName = decoSpec.hinge.parent
+		local parentSpec = (parentName and specByName[parentName]) or rootSpec
+		local parentPart = (parentName and parts[parentName]) or root
+		local parentPosition = (parentSpec and parentSpec.position) or Vector3.zero
+
 		local motor = Instance.new("Motor6D")
 		motor.Name = "Hinge_" .. name
-		motor.Part0 = root
+		motor.Part0 = parentPart
 		motor.Part1 = parts[name]
-		motor.C0 = CFrame.new(decoSpec.position + hingeOffset - rootSpecPosition)
+		motor.C0 = specRotation(parentSpec):Inverse()
+			* CFrame.new(decoSpec.position + hingeOffset - parentPosition)
 		motor.C1 = specRotation(decoSpec):Inverse() * CFrame.new(hingeOffset)
 		motor.Parent = root
 	end
@@ -693,6 +750,83 @@ function AircraftBuilder.runTests(definitionOverride: any?): (boolean, { any })
 	-- Power loading, kg per kilowatt. The 172 is about 8.3.
 	local powerLoading = m.mass / (definition.engine.maxPowerW / 1000)
 	checkRange("Power loading", powerLoading, 6, 11, "kg/kW")
+
+	--[[
+		10. Hinges that hang off another surface -------------------------------
+
+		⚠️ THE BUG THIS PINS: every hinge used to get Part0 = root, so the trim
+		tab was bolted to the AIRFRAME rather than to the elevator it trims. It
+		deflected on its own channel but never followed the elevator, which the
+		pilot saw as "a small piece on the right elevator that does not move".
+	]]
+	local chained = 0
+	for _, decoSpec in definition.model.decorations or {} do
+		local parentName = decoSpec.hinge and decoSpec.hinge.parent
+		if parentName then
+			chained += 1
+			local motor = model.PrimaryPart:FindFirstChild("Hinge_" .. decoSpec.name)
+			record(
+				string.format("'%s' hinges from '%s', not the airframe", decoSpec.name, parentName),
+				motor ~= nil and (motor :: Motor6D).Part0 == model:FindFirstChild(parentName),
+				motor and string.format("Part0 = %s", (motor :: Motor6D).Part0.Name) or "no motor"
+			)
+			--[[
+				⚠️ AND THE MOTOR MUST STILL LIVE ON THE ROOT. SurfaceAnimation
+				finds it with root:FindFirstChild("Hinge_"..name); parenting it
+				to its Part0 would hide it and the surface would stop animating
+				entirely - a worse bug than the one being fixed.
+			]]
+			record(
+				string.format("'%s' motor is still where the animator looks", decoSpec.name),
+				motor ~= nil and motor.Parent == model.PrimaryPart,
+				motor and string.format("parented to %s", motor.Parent.Name) or "no motor"
+			)
+			--[[
+				Chaining must not MOVE anything at rest. C0 folds the parent's
+				own mounting rotation back out, so the part still lands exactly
+				where createPart would have put it.
+			]]
+			local rootPosition = Vector3.zero
+			for _, p in definition.model.parts do
+				if p.name == definition.model.rootPart then
+					rootPosition = p.position
+				end
+			end
+			local part = model:FindFirstChild(decoSpec.name) :: BasePart
+			local expected = model.PrimaryPart.CFrame
+				* CFrame.new(decoSpec.position - rootPosition)
+			local built = part and part.Position or Vector3.zero
+			record(
+				string.format("'%s' still rests exactly where it was placed", decoSpec.name),
+				part ~= nil and (built - expected.Position).Magnitude < 1e-3,
+				string.format("%.4f m from its unchained rest position", (built - expected.Position).Magnitude)
+			)
+		end
+	end
+	record(
+		"At least one surface hinges from another surface",
+		chained > 0,
+		string.format("%d chained hinge(s) - the trim tab rides its elevator", chained)
+	)
+
+	-- A hinge naming a parent that does not exist would silently build a motor
+	-- with Part0 = nil, leaving the surface hanging in space.
+	local badParent = {
+		name = definition.name,
+		model = {
+			rootPart = definition.model.rootPart,
+			parts = definition.model.parts,
+			decorations = { { name = "Ghost", size = Vector3.one, position = Vector3.zero,
+				hinge = { axis = "X", channel = "trim", parent = "NoSuchPart" } } },
+		},
+		mass = definition.mass,
+	}
+	local okBad, problemsBad = AircraftBuilder.validate(badParent)
+	record(
+		"A hinge onto a part that does not exist is refused",
+		not okBad and #problemsBad > 0,
+		okBad and "accepted it" or tostring(problemsBad[1])
+	)
 
 	model:Destroy()
 

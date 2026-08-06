@@ -873,6 +873,19 @@ addPair({
 	is added singly rather than as a pair. It moves OPPOSITE the elevator it
 	trims - that is how a trim tab works, and a tab that follows the elevator
 	would be modelling an anti-servo tab from a different aeroplane.
+
+	⚠️ `parent` IS WHAT MAKES IT A TAB RATHER THAN A FIN. The tab hangs off the
+	right elevator's trailing edge, so it must do two things at once: RIDE the
+	elevator wherever the pilot puts it, and add its own trim deflection on top.
+	Without this it hinged straight off the airframe, and the pilot reported "a
+	small piece on the right elevator that does not move" while the elevator
+	swung around it.
+
+	The two motions are opposite in sign and independent in size, which is the
+	whole point of a tab: at full nose-up trim on a neutral stick it stands
+	proud of an undeflected elevator, and with the stick fully back it is
+	carried up 22 degrees and still sits 15 degrees nose-down of the surface it
+	is trimming.
 ]]
 add({
 	name = "TrimTab",
@@ -885,6 +898,7 @@ add({
 		offset = Vector3.new(0, 0, -0.10),
 		maxDeg = 15,
 		sign = 1,
+		parent = "ElevatorRight",
 	},
 })
 

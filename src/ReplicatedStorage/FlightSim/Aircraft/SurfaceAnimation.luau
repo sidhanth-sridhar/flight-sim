@@ -477,6 +477,88 @@ function SurfaceAnimation.runTests(): (boolean, { any })
 		string.format("3 s of flap travel: %.4f at 60 Hz against %.4f at 20 Hz", at60, at20)
 	)
 
+	--[[
+		---- The trim tab rides the elevator ----------------------------------
+
+		⚠️ EVERYTHING ABOVE IS PURE ARITHMETIC, AND THIS BUG LIVED WHERE THE
+		ARITHMETIC WAS ALREADY RIGHT. `surfaceAngle` returned a perfectly good
+		trim deflection the whole time; the tab still did not follow the
+		elevator, because the BUILDER hung its motor off the airframe. The
+		pilot saw "a small piece on the right elevator that does not move".
+
+		So this one drives a REAL built model - the only place the two layers
+		meet - and asserts the compound motion a tab must have: it rides the
+		elevator, AND it holds its own deflection relative to it.
+
+		Required lazily so the module itself keeps no build-time dependency on
+		the builder or on any particular aircraft.
+	]]
+	local FlightSimRoot = script.Parent.Parent
+	local okBuild, AircraftBuilder = pcall(require, FlightSimRoot.Aircraft.AircraftBuilder)
+	local okDef, Cessna172 = pcall(require, FlightSimRoot.Aircraft.Definitions.Cessna172)
+
+	if okBuild and okDef then
+		local model = AircraftBuilder.build(Cessna172, CFrame.new(0, 2000, 0), workspace)
+		model.PrimaryPart.Anchored = true
+		local state = SurfaceAnimation.new(model, Cessna172)
+		local elevator = model:FindFirstChild("ElevatorRight") :: BasePart
+		local tabPart = model:FindFirstChild("TrimTab") :: BasePart
+
+		local function angleBetween(part: BasePart, reference: BasePart): number
+			local rel = reference.CFrame:Inverse() * part.CFrame
+			return math.deg(math.asin(math.clamp(rel.UpVector.Z, -1, 1)))
+		end
+		local function settle(controls: any, trimValue: number)
+			for _ = 1, 2000 do
+				SurfaceAnimation.step(state, 1 / 60, controls, trimValue, 0)
+			end
+		end
+		local none = { pitch = 0, roll = 0, yaw = 0, flaps = 0, throttle = 0, brake = 0 }
+
+		settle(none, 0)
+		local restTab = angleBetween(tabPart, elevator)
+
+		settle({ pitch = 1, roll = 0, yaw = 0, flaps = 0, throttle = 0, brake = 0 }, 0)
+		local elevatorMoved = angleBetween(elevator, model.PrimaryPart)
+		local tabWithElevator = angleBetween(tabPart, elevator)
+
+		record(
+			"Full elevator carries the trim tab with it",
+			math.abs(elevatorMoved) > 20 and math.abs(tabWithElevator - restTab) < 0.1,
+			string.format("elevator %+.1f deg, tab still %+.1f deg relative to it", elevatorMoved, tabWithElevator)
+		)
+
+		--[[
+			And it must still trim. A tab welded to the elevator would pass the
+			check above and be useless - it needs BOTH motions.
+		]]
+		settle(none, 1)
+		local tabTrimmed = angleBetween(tabPart, elevator)
+		record(
+			"...and still deflects on trim, against the elevator",
+			math.abs(tabTrimmed) > 10 and tabTrimmed * elevatorMoved < 0,
+			string.format("tab %+.1f deg relative to the elevator, opposing its %+.1f", tabTrimmed, elevatorMoved)
+		)
+
+		--[[
+			The two motions are independent: full stick AND full trim together
+			must give the sum, not one overriding the other.
+		]]
+		settle({ pitch = 1, roll = 0, yaw = 0, flaps = 0, throttle = 0, brake = 0 }, 1)
+		local bothWorld = angleBetween(tabPart, model.PrimaryPart)
+		local bothRelative = angleBetween(tabPart, elevator)
+		record(
+			"Stick and trim compound rather than override",
+			math.abs(bothRelative - tabTrimmed) < 0.1
+				and math.abs(bothWorld - (elevatorMoved + tabTrimmed)) < 0.5,
+			string.format("carried to %+.1f deg while holding %+.1f against the elevator", bothWorld, bothRelative)
+		)
+
+		model:Destroy()
+	else
+		record("Trim tab rides the elevator", false, "could not load the builder or the definition")
+	end
+
 	local passed, total = 0, #results
 	for _, r in results do
 		if r.passed then

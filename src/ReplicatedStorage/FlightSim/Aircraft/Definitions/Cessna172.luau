@@ -503,15 +503,6 @@ Cessna172.limits = {
 
 local WHITE = Color3.fromRGB(240, 240, 243)
 local TRIM = Color3.fromRGB(38, 88, 168)
---[[
-	The imported shell's own colour, measured off the MeshPart.
-
-	The OBJ export carried no textures, so the mesh arrives as flat grey. A
-	white flap and a blue rudder on a grey aeroplane read as slabs bolted on
-	rather than as control surfaces, so the mesh poses below repaint them to
-	match. When textures arrive this is the one constant to revisit.
-]]
-local MESH_GREY = Color3.fromRGB(163, 162, 165)
 local DARK = Color3.fromRGB(38, 38, 42)
 local GLASS = Color3.fromRGB(140, 170, 195)
 local METAL = Color3.fromRGB(165, 168, 175)
@@ -553,17 +544,6 @@ local function addPair(spec: any)
 		end
 		hinge.sign = (hinge.sign or 1) * (hinge.mirrorSign or 1)
 		left.hinge = hinge
-	end
-	-- The mesh-shell pose mirrors the same way the base pose does.
-	if spec.meshPose then
-		local pose = table.clone(spec.meshPose)
-		if pose.position then
-			pose.position = Vector3.new(-pose.position.X, pose.position.Y, pose.position.Z)
-		end
-		if pose.rotation then
-			pose.rotation = Vector3.new(pose.rotation.X, -pose.rotation.Y, -pose.rotation.Z)
-		end
-		left.meshPose = pose
 	end
 	add(left)
 end
@@ -608,7 +588,26 @@ loft("Fuselage", WHITE, {
 	{ z = 2.35, w = 0.74, h = 0.78, y = 0.36 },
 	{ z = 3.15, w = 0.58, h = 0.64, y = 0.40 },
 	{ z = 3.95, w = 0.44, h = 0.52, y = 0.44 },
-	{ z = 4.70, w = 0.34, h = 0.44, y = 0.48 },
+	--[[
+		⚠️ THE LAST STATION MUST DIE INSIDE THE EMPENNAGE, NOT BEHIND IT.
+
+		A loft can only end in a blunt face, so where it ends is the whole
+		question. This station used to sit at z = 4.70, which left the tail cone
+		stopping in mid-air a few centimetres short of the fin's trailing edge -
+		a square-ended block sticking out the back of the aeroplane with nothing
+		behind it. The pilot reported it as "an extra, vestigial piece on the
+		tail", and they were right.
+
+		§33 is what exposed it: moving the vertical tail 0.106 m FORWARD to trim
+		the aircraft to its published length pulled the fin off the end of the
+		cone it used to cover. The cone was always blunt; it simply used to be
+		hidden.
+
+		At 4.35 the final face is buried inside both the fin (3.974..4.774) and
+		the tailplane (3.82..4.74), which is where a real 172's cone dies too -
+		into the rudder post, not past it.
+	]]
+	{ z = 4.35, w = 0.26, h = 0.36, y = 0.46 },
 })
 
 -- ---- Glazing ------------------------------------------------------------
@@ -657,11 +656,20 @@ addPair({
 	color = Color3.fromRGB(205, 205, 208),
 })
 
--- ---- Cowling and propeller ----------------------------------------------
+--[[
+	---- Cowling and propeller -----------------------------------------------
+
+	THE SPINNER TIP IS THE NOSE OF THE AEROPLANE, so its front face is one end
+	of the published 8.28 m length. The spinner and both propeller parts sit
+	0.064 m further aft than the first version did, which is the nose share of
+	the length correction; the tail carries the other 0.106 m. They are split
+	in proportion to how far each already stood from the datum, so the
+	aeroplane is trimmed to length without being shifted along it.
+]]
 add({
 	name = "SpinnerCone",
 	size = Vector3.new(0.28, 0.36, 0.36),
-	position = Vector3.new(0, 0.12, -3.02),
+	position = Vector3.new(0, 0.12, -2.956),
 	rotation = Vector3.new(0, 90, 0),
 	shape = "Cylinder",
 	color = WHITE,
@@ -669,7 +677,7 @@ add({
 add({
 	name = "SpinnerBase",
 	size = Vector3.new(0.36, 0.36, 0.36),
-	position = Vector3.new(0, 0.12, -2.92),
+	position = Vector3.new(0, 0.12, -2.856),
 	shape = "Ball",
 	color = WHITE,
 })
@@ -698,26 +706,19 @@ add({
 add({
 	name = "Propeller",
 	size = Vector3.new(0.20, 1.96, 0.06),
-	position = Vector3.new(0, 0.12, -3.10),
+	position = Vector3.new(0, 0.12, -3.036),
 	color = DARK,
 	hinge = { axis = "Z", channel = "propeller" },
-	-- The mesh's spinner tip is a single vertex on the centreline at
-	-- z = -3.066, y = 0.231; the blade sits just ahead of it.
-	meshPose = { position = Vector3.new(0, 0.231, -3.09) },
 })
 add({
 	name = "PropellerDisc",
 	size = Vector3.new(0.02, 1.96, 1.96),
-	position = Vector3.new(0, 0.12, -3.08),
+	position = Vector3.new(0, 0.12, -3.016),
 	rotation = Vector3.new(0, 90, 0),
 	shape = "Cylinder",
 	color = DARK,
 	transparency = 1,
 	castShadow = false,
-	-- Paired to the propeller hinge: the blade fades out INTO this disc, so
-	-- dropping it with the rest of the shell would leave the blur half-done.
-	keepWithMesh = true,
-	meshPose = { position = Vector3.new(0, 0.231, -3.07) },
 })
 
 --[[
@@ -745,15 +746,15 @@ addPair({
 })
 addPair({
 	name = "WingOuter",
-	size = Vector3.new(1.65, 0.18, 1.42),
-	position = Vector3.new(3.95, 1.05, 0.05),
+	size = Vector3.new(1.90, 0.18, 1.42),
+	position = Vector3.new(4.075, 1.05, 0.05),
 	rotation = Vector3.new(0, 0, DIHEDRAL),
 	color = WHITE,
 })
 addPair({
 	name = "WingTip",
 	size = Vector3.new(0.45, 0.14, 1.10),
-	position = Vector3.new(5.00, 1.09, -0.02),
+	position = Vector3.new(5.25, 1.09, -0.02),
 	rotation = Vector3.new(0, 0, DIHEDRAL),
 	color = WHITE,
 })
@@ -764,14 +765,14 @@ addPair({
 add({
 	name = "NavLightRight",
 	size = Vector3.new(0.10, 0.10, 0.14),
-	position = Vector3.new(5.20, 1.10, -0.10),
+	position = Vector3.new(5.45, 1.10, -0.10),
 	color = Color3.fromRGB(0, 220, 60),
 	material = Enum.Material.Neon,
 })
 add({
 	name = "NavLightLeft",
 	size = Vector3.new(0.10, 0.10, 0.14),
-	position = Vector3.new(-5.20, 1.10, -0.10),
+	position = Vector3.new(-5.45, 1.10, -0.10),
 	color = Color3.fromRGB(230, 30, 30),
 	material = Enum.Material.Neon,
 })
@@ -785,20 +786,6 @@ add({
 	Flaps deflect DOWN only, to 30 degrees, and both together. Ailerons
 	deflect 20 degrees and OPPOSE each other - hence mirrorSign.
 ]]
---[[
-	`meshPose` on each surface below is where it sits on the IMPORTED exterior,
-	measured off the mesh's own vertices rather than estimated:
-
-	  wing trailing edge   z 0.608 at |x| 2.8, z 0.236 at |x| 5.2 (2.46 dihedral)
-	  tailplane            z 3.587..4.378 at y -0.115, halfspan 1.746
-	  rudder trailing edge z 5.196
-	  spinner tip          z -3.066 at y 0.231
-
-	SIZES ARE DELIBERATELY UNCHANGED. Each hinge's offset is half its own
-	chord, so resizing a surface here would silently move its hinge line off
-	the leading edge and make it rotate about the wrong axis. Only position and
-	rotation move.
-]]
 addPair({
 	name = "Flap",
 	size = Vector3.new(2.07, 0.10, 0.42),
@@ -806,16 +793,11 @@ addPair({
 	rotation = Vector3.new(0, 0, DIHEDRAL),
 	color = WHITE,
 	hinge = { axis = "X", channel = "flaps", offset = Vector3.new(0, 0, -0.21), maxDeg = 30 },
-	meshPose = {
-		position = Vector3.new(1.65, 0.700, 0.490),
-		rotation = Vector3.new(0, 0, 2.46),
-		color = MESH_GREY,
-	},
 })
 addPair({
 	name = "Aileron",
-	size = Vector3.new(1.80, 0.09, 0.36),
-	position = Vector3.new(3.85, 1.04, 0.94),
+	size = Vector3.new(2.05, 0.09, 0.36),
+	position = Vector3.new(3.975, 1.04, 0.94),
 	rotation = Vector3.new(0, 0, DIHEDRAL),
 	color = WHITE,
 	hinge = {
@@ -834,11 +816,6 @@ addPair({
 		]]
 		sign = -1,
 		mirrorSign = -1,
-	},
-	meshPose = {
-		position = Vector3.new(4.15, 0.780, 0.219),
-		rotation = Vector3.new(0, 0, 2.46),
-		color = MESH_GREY,
 	},
 })
 
@@ -880,7 +857,6 @@ addPair({
 		maxDeg = 22,
 		sign = -1, -- stick back is elevator UP
 	},
-	meshPose = { position = Vector3.new(0.95, -0.115, 4.148), color = MESH_GREY },
 })
 
 --[[
@@ -901,49 +877,65 @@ add({
 		maxDeg = 15,
 		sign = 1,
 	},
-	meshPose = { position = Vector3.new(0.62, -0.115, 4.278), color = MESH_GREY },
 })
 
+--[[
+	---- The vertical tail ---------------------------------------------------
+
+	THE WHOLE FIN IS SIZED BY THE PUBLISHED 2.72 m HEIGHT, not by eye. The
+	wheels touch at y = -1.15, so the top of the beacon - the highest thing on
+	the aeroplane - must sit at y = +1.57 and nothing above it. The first
+	version put it at 1.77 and the aeroplane measured 2.92 m, 7.4% too tall.
+
+	Everything above the fuselage is compressed about y = 0.50 by 0.8425, so
+	the fin keeps its proportions instead of having its tip sliced off, and the
+	beacon still sits exactly on the fin tip.
+
+	The group also sits 0.106 m further forward than it did, which is the tail
+	half of the length correction below - moved as a GROUP so the rudder does
+	not bury itself in the fin.
+]]
 add({
 	name = "FinMain",
-	size = Vector3.new(0.13, 1.05, 0.80),
-	position = Vector3.new(0, 1.02, 4.48),
+	size = Vector3.new(0.13, 0.88, 0.80),
+	position = Vector3.new(0, 0.935, 4.374),
 	color = TRIM,
 })
 -- The swept leading edge, raked 30 degrees so it runs up and aft.
 add({
 	name = "FinLeadingEdge",
-	size = Vector3.new(0.12, 1.20, 0.22),
-	position = Vector3.new(0, 1.00, 4.02),
+	size = Vector3.new(0.12, 0.99, 0.22),
+	position = Vector3.new(0, 0.921, 3.914),
 	rotation = Vector3.new(30, 0, 0),
 	color = TRIM,
 })
 add({
 	name = "FinTip",
-	size = Vector3.new(0.13, 0.18, 0.58),
-	position = Vector3.new(0, 1.58, 4.60),
+	size = Vector3.new(0.13, 0.16, 0.58),
+	position = Vector3.new(0, 1.39, 4.494),
 	color = TRIM,
 })
 -- The dorsal fillet ahead of the fin, which a 172 has and which reads
 -- immediately as "Cessna" from the side.
 add({
 	name = "DorsalFin",
-	size = Vector3.new(0.10, 0.26, 0.90),
-	position = Vector3.new(0, 0.66, 3.55),
+	size = Vector3.new(0.10, 0.22, 0.90),
+	position = Vector3.new(0, 0.635, 3.55),
 	color = TRIM,
 })
+-- The highest point on the aircraft: its top face IS the 2.72 m height.
 add({
 	name = "Beacon",
 	size = Vector3.new(0.09, 0.10, 0.09),
-	position = Vector3.new(0, 1.72, 4.60),
+	position = Vector3.new(0, 1.52, 4.494),
 	color = Color3.fromRGB(230, 30, 30),
 	material = Enum.Material.Neon,
 })
 
 add({
 	name = "Rudder",
-	size = Vector3.new(0.11, 1.10, 0.48),
-	position = Vector3.new(0, 1.05, 5.05),
+	size = Vector3.new(0.11, 0.93, 0.48),
+	position = Vector3.new(0, 0.965, 4.944),
 	color = TRIM,
 	hinge = {
 		axis = "Y",
@@ -951,7 +943,6 @@ add({
 		offset = Vector3.new(0, 0, -0.24),
 		maxDeg = 22,
 	},
-	meshPose = { position = Vector3.new(0, 0.78, 4.956), color = MESH_GREY },
 })
 
 --[[
@@ -1042,56 +1033,6 @@ Cessna172.model = {
 		and the aerodynamic reference point with it.
 	]]
 	hideStructuralParts = true,
-
-	--[[
-		Flip to true when the imported Cessna mesh lands (CREDITS.md).
-
-		It drops the primitive shell below and keeps the hinged control
-		surfaces, so the mesh becomes the exterior without the two fighting.
-		Nothing physical moves either way - the structural boxes are the
-		aircraft and both exteriors are massless decoration over them.
-
-		The primitive shell stays in the file rather than being deleted: it is
-		what the aeroplane looks like until the mesh arrives, it is the
-		fallback if the import is rejected, and it costs one boolean to have
-		both.
-	]]
-	exteriorFromMesh = true,
-
-	--[[
-		The imported Cessna 172, as a visual shell only (CREDITS.md).
-
-		⚠️ COSMETIC. Massless, collides with nothing, welded to the structural
-		root. The invisible boxes above are still the aeroplane: they carry
-		every kilogram, every aerodynamic reference point and all the
-		collision. AircraftBuilder.measure() skips massless parts, so the suite
-		proves the mass budget is untouched rather than trusting it.
-
-		assetId is the MODEL asset, which is what InsertService:LoadAsset
-		takes. The MeshId inside it is a different id (77050671277064) and is
-		NOT interchangeable - CreateMeshPartAsync rejects the model id and
-		MeshId is not scriptable at all.
-
-		THE SCALE IS FITTED, NOT STATED. The builder measures the mesh and fits
-		length and span together, so re-exporting at a different scale corrects
-		itself. As imported the mesh is 12.598 x 2.962 x 9.443 studs against a
-		real 8.28 x 11.00 x 2.72 m aeroplane - about 14% oversized.
-	]]
-	meshShell = {
-		name = "MeshShell",
-		assetId = 114080937764105,
-		-- Published 172S dimensions. Length and span only: height is left to
-		-- fall where the uniform scale puts it rather than being stretched.
-		targetLengthM = 8.28,
-		targetSpanM = 11.00,
-		-- The wheel contact plane, in datum coordinates: the structural wheels
-		-- are centred at y = -0.95 with a 0.40 m diameter, so they touch at
-		-- -1.15. The shell's underside is put exactly there.
-		wheelBottomY = -1.15,
-		-- Matches the primitive skin's own bounding-box centre, which is
-		-- already aligned to the structure.
-		centreZ = 1.065,
-	},
 
 	parts = {
 		-- Density 87. Engine, mount, propeller and cowling - the heaviest
@@ -1592,6 +1533,69 @@ function Cessna172.runTests(): (boolean, { any })
 		"All three control axes are driven",
 		axes.pitch and axes.roll and axes.yaw,
 		string.format("pitch=%s roll=%s yaw=%s", tostring(axes.pitch ~= nil), tostring(axes.roll ~= nil), tostring(axes.yaw ~= nil))
+	)
+
+	--[[
+		9. The aeroplane is the size of the published aeroplane -----------------
+
+		THE SHELL IS WHAT A PILOT SEES AND MEASURES, so it is the shell that has
+		to be 8.28 x 11.00 x 2.72 m. The first version measured 8.45 x 10.50 x
+		2.92 - three errors in three different directions, which is why there is
+		no single scale factor to correct and why each axis is fixed in the part
+		layout instead.
+
+		Computed from the same numbers the builder reads, with each part's
+		rotation folded in exactly as createPart folds it, so this cannot drift
+		from what is actually built. The STRUCTURAL boxes are deliberately
+		excluded: they are the physics, they are invisible, and §31 forbids
+		tidying one to match the skin. The tail box still tops out 0.13 m above
+		the fin, which is why the whole-model envelope reads 2.85 m.
+	]]
+	local skinMin = Vector3.new(math.huge, math.huge, math.huge)
+	local skinMax = -skinMin
+	for _, s in SKIN do
+		local cf = CFrame.new(s.position)
+			* (if s.rotation
+				then CFrame.Angles(math.rad(s.rotation.X), math.rad(s.rotation.Y), math.rad(s.rotation.Z))
+				else CFrame.identity)
+		for x = -1, 1, 2 do
+			for y = -1, 1, 2 do
+				for z = -1, 1, 2 do
+					local c = cf * Vector3.new(x * s.size.X / 2, y * s.size.Y / 2, z * s.size.Z / 2)
+					skinMin = skinMin:Min(c)
+					skinMax = skinMax:Max(c)
+				end
+			end
+		end
+	end
+	local envelope = skinMax - skinMin
+
+	-- A centimetre. Tighter than any dimension a pilot could judge by eye, and
+	-- loose enough to survive the trigonometry on the raked fin leading edge.
+	local TOL = 0.01
+	local published = {
+		{ "Span", envelope.X, 11.00 },
+		{ "Height", envelope.Y, 2.72 },
+		{ "Length", envelope.Z, 8.28 },
+	}
+	for _, d in published do
+		record(
+			string.format("%s matches the published 172S", d[1]),
+			math.abs(d[2] - d[3]) <= TOL,
+			string.format("%.3f m (published %.2f, tolerance %.2f)", d[2], d[3], TOL)
+		)
+	end
+
+	--[[
+		The aeroplane stands on its wheels, so its height is only the published
+		height if the bottom of the envelope IS the wheel contact plane. Measure
+		it, or a fin lowered to hit 2.72 m against a sunken undercarriage would
+		pass the check above while sitting wrong on the runway.
+	]]
+	record(
+		"The shell's lowest point is the wheel contact plane",
+		math.abs(skinMin.Y - -1.15) <= TOL,
+		string.format("%.3f m (wheels centred -0.95, 0.40 m diameter)", skinMin.Y)
 	)
 
 	local passCount = 0

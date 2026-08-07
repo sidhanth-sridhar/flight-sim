@@ -8,6 +8,8 @@
 
 **All 790 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
 
+🟨 **GRAYBOXING (§44):** all aircraft/cockpit 3D modeling is postponed until the first version of the game with all of its features is done. Existing geometry stays as the graybox; **airport design is feature work and happens BEFORE the 3D modeling pass**; the cockpit 3D work in §42/§43 is parked. The screen panel remains the live instrument set.
+
 🛋️ **THE SEAT CAME DOWN AND THE COCKPIT WENT IN (§39).** `PilotSeat` is structural, so it was a pilot decision: pan **0.63 → 0.30 m above the cabin floor**, headroom **0.60 → 0.93 m**, so a seated avatar clears the roof. **Mass, assemblies and static margin unchanged; the CoM moved 0.3 mm.** 38 massless interior decorations went in — panel, seats, yokes, pedals, throttle, trim wheel, switches — and **the six-pack now mounts on a real `PanelBoard` via `SixPack.mountOnPart`, with no drawing code changed** (§19, waiting since Phase 2). ⚠️ **The eye did NOT follow the seat down** — it is held at y 0.80 by a larger `EYE_OFFSET`, because riding the seat down would put it below the glareshield. ⚠️ **`UIController` still drives the SCREEN panel; nothing wires the 3D one to a flying aircraft yet**, and the seated avatar is not rigged — see §39.
 
 ⌨️ **PITCH TRIM NOSE-DOWN MOVED H → J, BECAUSE H WAS ALREADY THE HUD (§38).** Two actions on one key means the pilot cannot tell why a control is dead. ⚠️ **The guard caught this the whole time and it was read past** — `InputController` was reporting **109/110**, not the 110/110 quoted in earlier sessions, because the clash arrived in an uncommitted edit after those runs. Read the failing check, not the aggregate.
@@ -2754,3 +2756,15 @@ Also this session: the **glareshield slab over the instruments is gone** (it was
 Hold the right mouse button while flying and the pilot's head turns; release and it eases back to forward. ⚠️ **The cursor is LOCKED IN PLACE for the duration.** The cursor *is* the yoke (§6g), so a drag-to-look that let the pointer travel would haul the controls across their range while the pilot was only looking around — the exact failure §7 warns about. `LockCurrentPosition` freezes the pointer, the yoke keeps its deflection, and the deltas still arrive. `Shutdown` hands the cursor back, because being left with a frozen pointer is worse than any camera fault. Clamped to ±120° yaw / ±70° pitch and rotation-only, all three pinned by checks.
 
 ⚠️ **NOT HANDS-VERIFIED.** Free look and §42's view-dependent 3D panel wiring are both code-verified only — a real mouse button has never been pressed on them, and boarding through the prompt is still not reachable from a script. Treat both as unproven.
+
+---
+
+## 44. Grayboxing: all aircraft/cockpit 3D modeling postponed until the feature-complete v1 (2026-08-06)
+
+**Decision (pilot):** ALL aircraft/cockpit 3D modeling is postponed until the first version of the game with all of its features is done. The project runs in **GRAYBOX mode** from here.
+
+- **Keep the existing geometry as-is** — the lofted Cessna exterior, the cockpit interior, the 38 decorations, the closed white cabin (§43) — it is the graybox. No further 3D modeling, no 3D polish, no sight-line tuning, no tangible-instrument visuals, no avatar-rigging visuals until v1 is feature-complete.
+- **The §42 parked cockpit work stays parked**: the working yoke/throttle (inert decorations still), §42's UNVERIFIED view-dependent 3D panel wiring (written, never seen working — the 3D board stays blank), and the seated avatar (still blocked on §35). Right-button free-look is done (§43) and supersedes the old T free-look idea. The **screen panel remains the live instrument set**.
+- **Airport design happens BEFORE the 3D modeling pass** (pilot, 2026-08-06) — airports are feature work, not part of the postponed 3D pass.
+- **New features build on the graybox**: whatever a feature needs visually uses the geometry that exists or a graybox placeholder — never a modeling detour.
+- **Phase order from here:** the feature phases first — 4b (flight tablet) → 4c (172S systems) → 5 (weather + jet) → 6 (audio, damage, persistence, tutorial) → the remaining feature phases, **including airport design** — then the **3D modeling pass at the very end**.

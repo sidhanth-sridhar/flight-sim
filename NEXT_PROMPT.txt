@@ -1,68 +1,45 @@
-CONTINUATION PROMPT — fine-tune the sight line (slightly left, a touch lower, look up a bit more), then wire the tangible instruments and make the yoke and throttle real working controls.
+MORE TASKS — the v1 feature set, in order. Full scope for each is in HANDOFF §14.
 
-You are continuing work on a Roblox flight sim in C:\Users\sidha\OneDrive\Documentos\MyRobloxGame.
-Read HANDOFF.md first — it is the truth (§40/§41 are the last cockpit sessions). Commit style: short
-imperative messages; the hook strips Co-Authored-By; do not commit unless the user asks. Keep this
-file LEAN. Be economical with your own output — the pilot's session budget is limited.
+TASK 1 — Phase 4b: the flight tablet. Departure/destination pickers on the AirportService
+registry, distance/bearing to destination, aircraft picker on Aircraft/Registry.luau. ⚠️ Decide
+with the pilot FIRST: a picker cannot be a clickable UI while flying (cursor-is-the-yoke, §6g/§7)
+and a key cannot choose among airports — so either a modal state that releases the yoke, or
+ground-only use. Build only after the decision.
 
-CURRENT STATE — §41, 790/790 green, physics unchanged (1,111.0 kg, one assembly). Task A done:
-- Eye dropped to the avatar's real seated height — y 0.61 (EYE_OFFSET.y 0.98 → 0.79); the dashboard
-  group went down 0.116 m with it; a 16° down gaze holds the horizon and the whole board (panel
-  board +4.5..−32.2°, yoke −11.8..−31.1°, cowl top +12.4° — slightly up over it).
-- NO exterior geometry changed (the cowl-deck remodel wasn't needed). Occlusion set shrank to
-  Cabin/Fuselage04/Fuselage05 — the windscreen and both wings are visible again; the board,
-  glareshield and yoke are never enclosed.
+TASK 2 — Phase 4c: the missing 172S systems (HANDOFF §14): rudder trim (tab on the rudder, like
+§37's TrimTab), fuel selector (LEFT/BOTH/RIGHT/OFF), mixture, magnetos/keyed start, master/avionics/
+electrical, the POH engine gauges (oil pressure/temp, fuel flow), cabin environment, and lights
+that actually switch. Switches are keyboard-bound (decision 2026-08-06) — the key drives the state,
+the 3D part mirrors it. Controls contract (six fields) unchanged; anything that splits the fuel
+tank or changes engine behaviour re-verifies §4.
 
-➡️ PILOT FEEDBACK ON THE VIEW (fix this first): still a bit TOO HIGH and it still looks DOWN —
-not ideal. And the view should be SLIGHTLY MORE TO THE LEFT. Do: shift the eye left toward the
-pilot seat (from x −0.10 toward −0.30 — §40's WingLeft blocker was measured at the old high eye;
-re-check it at the new y 0.61, where the wing no longer reaches, and re-run the "outer wings are
-NOT hidden" check), drop the eye a touch more, and raise the gaze a bit above 16° so it reads
-clearly as sitting in the left seat looking slightly UP over the cowl. Move the dashboard with the
-eye if you lower it again. No exterior-geometry changes; keep the cockpitEyePosition split so
-hideForCockpit never carries the pitch.
+TASK 3 — Phase 5: weather. Wind layers (crosswind landings exist by construction), turbulence
+(Dryden/Karman, seed-deterministic — same seed, same flight), the wind-shear/microburst gate
+(~150 ft AGL, 90 kt approach — survivable but hard), temperature + QNH presets, then the jet
+aircraft last. §4/§31: nothing that moves mass or aero without re-verifying.
 
-====================================================================
-NEXT — TANGIBLE INSTRUMENTS + WORKING YOKE/THROTTLE
-====================================================================
-Task B is still NOT done, bluntly: the 3D board is blank in flight. SixPack.mountOnPart is built
-and tested, UIController still drives the SCREEN panel, and nothing wires the 3D set to a flying
-aircraft — the dials in the last two verification shots were driven by hand. Wire it:
-- The six dials render LIVE on the 3D board from the same state the screen panel reads (airspeed,
-  attitude, altitude, heading, VSI, tach). View-dependence (decided 2026-08-06, unimplemented):
-  cockpit/first-person = 3D panel live + screen panel OFF; chase/free = screen panel live + 3D
-  off. Only while flying. First person with the screen OFF is what makes the instruments tangible.
-- Then the YOKE and THROTTLE must be working controls, not decorations: the 3D yoke and throttle
-  lever move with (and drive) the same physics the cursor yoke does — yanking the yoke pulls the
-  ailerons/elevator, the throttle lever moves the RPM — so the cockpit controls are real, tangible
-  devices the pilot can see act on the aeroplane.
-- ⚠️ hideForCockpit must not hide the board or its dials. Verify in Studio Play (Client datamodel):
-  cockpit view = live dials + screen panel gone; move the yoke/throttle and watch the aircraft AND
-  the 3D controls respond; chase view returns the screen panel and drops the 3D set.
+TASK 4 — Phase 6: audio (engine from RPM, wind over the panel, stall horn), damage (marks the
+aeroplane, never silently invalidates §4), persistence (DataStore behind AircraftService),
+tutorial (the gates as an in-game syllabus).
 
-====================================================================
-THEN — STILL OPEN
-====================================================================
-- T free-look: T still toggles Cockpit ↔ Chase. Give T cockpit free-look (right-drag orbit, §7;
-  eye position anchor stays, only orientation moves, eases back). Update viewCount/VIEWS/
-  toggleViews + the assertions pinning T — stale fails loudly. V still cycles. (§40 item 1.)
-- Seated avatar: still blocked on §35's seat-weld measurement; solve that first, then the decided
-  rigging recipe.
+TASK 5 — Phase 7: the world grows — more airports in the registry, buildings and scenery
+(collidable world objects, not aircraft parts), runway and apron detail (PAPI/VASI, signage,
+holding points). This is the airport-design work.
 
-Constraints that must stay green: Controls contract (six fields) unchanged; every interior part a
-massless decoration — nothing moves mass or aero (§31); mass-budget and one-assembly checks stay
-green; hideForCockpit is the mechanism — work with it, never fight it. Phase 4b (flight tablet) is
-NEXT after the interior; Phase 4c systems and Phase 5 (weather) are planned later — do NOT build
-them now.
+TASK 6 — Phase 8: UI depth — main menu/pause/settings/flight log, the interactive moving map
+(grows out of the tablet picker), new cockpit indicators (wet compass, trim, flap, gear, breakers,
+G-meter), the pilot's HUD.
 
-====================================================================
-TRAPS
-====================================================================
-HANDOFF.md = truth. Edit only files under src/ (Rojo syncs one-way files->Studio). runTests() in
-Studio Play (Client datamodel; server suites in Server), not headless — no Luau CLI. Give the
-services a few seconds: AircraftService reports 33/35 if run the instant Play starts, 35/35
-otherwise (§33). require caches per Studio session — full Studio restart to clear; Edit's cache is
-the one that lies, Play gets a clean one. Rojo reconnects after a serve restart. No Co-Authored-By
-(hook strips it). Structural boxes are the physics and the skin matches the box — never the reverse
-(§31). Set Studio Game Settings -> Avatar -> Rig Type = R6 if not already. UNTRACKED (do not sweep
-into a commit): progress_journal.txt and opencode.json.
+TASK 7 — Phase 9: ATC — deterministic server-side tower state machine first (clearance → taxi →
+line up → takeoff → handoff), optional LLM layer via HttpService with the key server-side only.
+
+TASK 8 — Phase 10: airliners — 737/747/A320/A350 definitions through the same definition → builder
+→ registry path as the 172.
+
+TASK 9 — Phase 11: the ocean, a carrier (catapult/arresting gear, moving deck) and the fighter
+definition; gate = a carrier circuit — launch, transit, bolter, trap.
+
+Phase 12 (mesh/3D polish) is the postponed 3D pass — last, after all of the above.
+
+Work the tasks in order. Stop when the pilot's session budget runs out; report what is done and
+what is next.

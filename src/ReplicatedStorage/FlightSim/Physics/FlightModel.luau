@@ -870,10 +870,21 @@ function FlightModel.runTests(): (boolean, { any })
 
 	local wingLeftArm = state.surfaces[1].arm
 	local wingRightArm = state.surfaces[2].arm
+	--[[
+		⚠️ TOLERANCED, NOT EXACT, AND THE TOLERANCE IS PHYSICAL. The arms are
+		measured from the CENTRE OF MASS, and the pilot's seat sits in the left
+		seat (§39), so the centre of mass is 0.27 mm off the centreline by
+		design - 1 kg of seat at 0.30 m against 1,111 kg. An exact mirror test
+		fails on that, having proved nothing.
+
+		1 mm is far below anything aerodynamic: it is 0.04% of the 2.75 m arm,
+		and a real asymmetry - a wing panel defined on the wrong side - would be
+		off by whole metres.
+	]]
 	record(
 		"Wing arms are mirrored about the centreline",
-		math.abs(wingLeftArm.X + wingRightArm.X) < 1e-6,
-		string.format("left x=%.3f, right x=%+.3f", wingLeftArm.X, wingRightArm.X)
+		math.abs(wingLeftArm.X + wingRightArm.X) < 1e-3,
+		string.format("left x=%.3f, right x=%+.3f (sum %.5f m)", wingLeftArm.X, wingRightArm.X, wingLeftArm.X + wingRightArm.X)
 	)
 	--[[
 		The thrust line sits BELOW the centre of mass on a high-wing Cessna -

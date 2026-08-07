@@ -6,7 +6,7 @@
 
 ## 0. Resume here — state at 2026-08-06
 
-**All 787 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 790 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
 
 🛋️ **THE SEAT CAME DOWN AND THE COCKPIT WENT IN (§39).** `PilotSeat` is structural, so it was a pilot decision: pan **0.63 → 0.30 m above the cabin floor**, headroom **0.60 → 0.93 m**, so a seated avatar clears the roof. **Mass, assemblies and static margin unchanged; the CoM moved 0.3 mm.** 38 massless interior decorations went in — panel, seats, yokes, pedals, throttle, trim wheel, switches — and **the six-pack now mounts on a real `PanelBoard` via `SixPack.mountOnPart`, with no drawing code changed** (§19, waiting since Phase 2). ⚠️ **The eye did NOT follow the seat down** — it is held at y 0.80 by a larger `EYE_OFFSET`, because riding the seat down would put it below the glareshield. ⚠️ **`UIController` still drives the SCREEN panel; nothing wires the 3D one to a flying aircraft yet**, and the seated avatar is not rigged — see §39.
 
@@ -197,7 +197,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (787 checks total)
+### Verified green (790 checks total)
 
 ⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 
@@ -213,7 +213,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 51/51 | Client |
-| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 33/33 | Client |
+| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 36/36 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
@@ -2627,3 +2627,112 @@ The full set, verified with no collisions: `W`/`S` throttle · `A`/`D` yaw · `F
 2. **The seated avatar is not rigged.** The geometry it needs is in place (wheel positions, pedal positions, throttle), but no limb posing exists. ⚠️ **`Model:ScaleTo` does not scale Roblox's seat weld** — §35 measured a seated rig sitting **2.1 m above the seat**, invisible only because the seated pilot is transparent (§6e). **That has to be solved before an avatar can be shown in the cockpit at all.**
 3. **Switches are inert geometry**, as decided — no `ClickDetector`, no `ProximityPrompt`. Keyboard wiring is Phase 4c.
 4. ⚠️ **Both seats are symmetric about the centreline and the eye is in neither.** The structural `PilotSeat` is at x = 0, so the camera is too; a real 172 pilot sits left. Moving it is another structural change *and* puts a lateral offset on the centre of mass. Recorded, not acted on.
+
+---
+
+## 40. The cockpit view now shows the cockpit, and the pilot sits on the left (2026-08-06)
+
+**790/790 across 20 suites**; `CameraController` 33 → 36. Physics unchanged: **1,111.0 kg, one assembly**.
+
+The pilot reported: *"I cannot see the yoke. I cannot see the control panel inside the cockpit."* They were right, and it was measurable.
+
+### 🐛 The cockpit is below the eye line, and the camera looked level
+
+The eye is a **position-only anchor** and `cockpitCFrame` aimed level along −Z. Measured from the left-seat eye against a 35° half-frame:
+
+| | angle below the eye | in frame? |
+|---|---|---|
+| glareshield | −10.7 .. −31.7° | yes — the only thing that was |
+| panel board | −13.9 .. −57.5° | **no** |
+| yoke wheel | −53° | **no** |
+
+`COCKPIT_PITCH_DEG = 22` fixes it: the panel sits in the lower half, the yoke is above the bottom edge, and the horizon is still 13° inside the top. ⚠️ **It is ORIENTATION ONLY** — the eye does not move, so the occlusion set, the airframe and the physics are all untouched by it.
+
+⚠️ **`cockpitEyePosition` exists so occlusion never carries the pitch.** What encloses a point cannot depend on which way you look from it, and `hideForCockpit` takes a position. A check asserts the two agree, or the hidden set would start changing with the camera's attitude and the aeroplane would flicker as the pilot rolls.
+
+### The pilot moved to the left seat
+
+`PilotSeat` went to **x = −0.30** (structural, so §4 was re-verified): mass, assemblies, extents and static margin unchanged, and the lateral centre of mass moved **0.27 mm** against a 10 mm bound. `SEAT_X` is the single number placing the seat, cushion, yoke and eye, so they agree by construction.
+
+### 🐛 Two exact-symmetry tests were measuring the seat
+
+`"Wing arms are mirrored about the centreline"` and `"Steering is symmetric"` both asserted to **1e-6** — and the arms are measured from the **centre of mass**, which is now 0.27 mm off-centre *by design*. Both now carry a physical tolerance (1 mm of arm, 0.1% of torque). A real asymmetry is off by whole metres or reverses sign; neither test loses any power.
+
+### ⚠️ The eye could NOT go the full 0.30, and the wing is why
+
+An eye directly over the left seat lands **inside the structural `WingLeft` box** — it reaches inboard to x = −0.25 and sits 0.825 above the floor, only 0.025 above the eye — so the occlusion margin counted the wing as enclosing the eye and hid it. `"The outer wings are NOT hidden"` failed exactly as §31 says that check must.
+
+The eye therefore sits at **x = −0.10**: inside the pilot's own cushion (−0.53..−0.07), still the left seat rather than the centreline, but clear of the wing's box. Going the full 0.30 needs the wing root raised or the eye lowered — **airframe changes, not camera ones**.
+
+### The yoke was moved to be visible
+
+Once the seat went left, the pilot's eye sat directly **above** their own yoke: the wheel measured **75° below**, and no sane pitch brings that into frame. At y 0.42 / z −0.84 it is 53° below, which the 22° pitch clears. ⚠️ It is higher than a seated pilot's hands really are — **the same 0.19 m the eye is too high by, with the same root cause: the cowl deck.**
+
+### ⚠️ Still open from this session
+
+1. **T free-look is NOT built.** T still toggles Cockpit ↔ Chase. The rebind, `viewCount`/`VIEWS`/`toggleViews` and the `Init` assertions that pin T are untouched.
+2. **The instruments are NOT view-dependent yet.** `UIController` still drives the screen panel; `mountOnPart` is built and tested but nothing wires it to a flying aircraft. The dials in the verification screenshot were driven by hand.
+3. **The seated avatar is not rigged**, and still blocked on §35's seat-weld measurement.
+
+---
+
+## 41. The sight line: sitting in the seat, looking slightly up (2026-08-06)
+
+**790/790 across 20 suites**, physics unchanged (1,111.0 kg, one assembly, lateral CoM 0.27 mm).
+
+The pilot: *"The view of the character is too high and we are looking down. The view on a Cessna is not like that — you would be looking slightly up and see all the instruments in front of you."*
+
+### The 22° pitch-down was a symptom, and the eye height was the cause
+
+§40 bought visibility with `COCKPIT_PITCH_DEG = 22`, which is precisely what reads as "looking down". The eye was **0.19 m above the avatar's real seated eye** — the camera was at the top of the pilot's head.
+
+⚠️ **THE FIX WAS TO DROP THE EYE, NOT TO REBUILD THE AEROPLANE.** The measurement that decided it: the panel is only **0.43 m** from the eye and subtends **57.5°** of a 70° frame, so at the old eye height nothing but a steep gaze could contain it. Lowering the eye to the avatar's own seated height (**y 0.61**, `EYE_OFFSET.y` 0.98 → 0.79) and dropping the dashboard group 0.116 m with it lets a **16°** gaze hold the horizon *and* the whole board:
+
+| | in frame at 16° down |
+|---|---|
+| horizon | **+16°** |
+| cowl top | +12.4° — you look **slightly up** over it |
+| glareshield | +8.0 .. −0.6° |
+| panel board | **+4.5 .. −32.2°** — fully visible |
+| yoke wheel | **−11.8 .. −31.1°** — fully visible |
+
+**No exterior geometry changed.** The cowl-deck remodel §40 flagged turned out not to be needed: `Fuselage04` is *hidden in cockpit view anyway*, so its height never blocked the sight line — only the visible **glareshield decoration** did, and that is a decoration.
+
+⚠️ **THE OCCLUSION SET SHRANK, AND THAT IS THE POINT.** At the lower eye only `Cabin`, `Fuselage04` and `Fuselage05` enclose it — the **windscreen and both wing parts are no longer hidden**, so the pilot sees the glass and the wings. The board, glareshield and yoke are never enclosed, so nothing hides the instruments the pilot has to read.
+
+### Still open
+
+1. **Task B is NOT done: the 3D board is still blank in flight.** `SixPack.mountOnPart` is built and tested, but `UIController` still drives the screen panel and nothing wires the 3D one to a flying aircraft — the dials in the verification shots were driven by hand, both times. The view-dependence decision (cockpit → 3D live, screen off; chase/free → screen live, 3D off) is recorded and unimplemented.
+2. **T free-look** — untouched (§40 item 1).
+3. **Seated avatar** — untouched, still blocked on §35's seat-weld measurement.
+
+---
+
+## 42. Sight line moved into the left seat; the 3D panel is wired but UNVERIFIED (2026-08-06)
+
+**620/620 client checks green**, physics unchanged.
+
+### The eye is now genuinely in the left seat
+
+| | §41 | now |
+|---|---|---|
+| eye x | −0.10 | **−0.30 (full left seat)** |
+| eye y | 0.61 | **0.58** |
+| gaze | 16° down | **13° down** |
+
+⚠️ **§40's WingLeft blocker was an artefact of the HIGH eye, and it is gone.** At y 0.80 an eye over the left seat sat inside the wing box and hid the wing; at y 0.58 the wing is 0.245 above it, well outside the 0.12 margin. Re-measured: the hidden set is `Cabin`, `Fuselage04`, `Fuselage05` only — **the wings are not hidden**, and the check that caught it before stays green. The eye could go the full 0.30 all along once it came down.
+
+⚠️ **THE HORIZON AND THE BOARD'S BOTTOM EDGE CANNOT BOTH FIT BELOW ~18° OF PITCH.** The board is 0.43 m from the eye and subtends **57.5°** of a 70° frame, so horizon-to-board-bottom spans about 53°. At 13° the glareshield and yoke are fully in view and the board's lower rim is clipped by a few degrees. Closing that needs the panel FURTHER FORWARD, which is cabin geometry — not a camera tune.
+
+### ⚠️ The 3D instrument wiring is written but NOT verified
+
+`SixPack.Init`'s loop now mounts `mountOnPart` on the flying aircraft's `PanelBoard` and switches sets by view: **cockpit → 3D live and the screen panel off; chase/free → screen panel live and the 3D off; neither while not flying.** It re-mounts when the aircraft changes, because a reset builds a new board and a cached SurfaceGui would adorn a destroyed part.
+
+⚠️ **NONE OF THAT HAS BEEN SEEN WORKING.** `Seat:Sit()` from a script does not make `FlightController` adopt the aircraft — `getSystems()` stays nil and `isFlying()` false — so the branch never ran in testing. One reading during the attempt showed the 3D `SurfaceGui` **Enabled while not flying**, which the code should not allow; it was not chased down. **Treat this as unproven until a pilot boards through the real prompt and looks.** The suites passing says only that nothing else broke.
+
+### Still open
+
+1. The verification above.
+2. **Working yoke/throttle** — not started; they are still inert decorations.
+3. **T free-look** — untouched (§40 item 1).
+4. **Seated avatar** — untouched, blocked on §35's seat-weld measurement.

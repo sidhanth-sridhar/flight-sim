@@ -1,153 +1,68 @@
-CONTINUATION PROMPT — make the 3D yoke and 3D panel visible from the cockpit, add the pilot/copilot side offset, then finish the interior wiring and the seated avatar.
+CONTINUATION PROMPT — fine-tune the sight line (slightly left, a touch lower, look up a bit more), then wire the tangible instruments and make the yoke and throttle real working controls.
 
 You are continuing work on a Roblox flight sim in C:\Users\sidha\OneDrive\Documentos\MyRobloxGame.
-Read HANDOFF.md first — it is the source of truth. Commit style: short imperative messages; the
-commit-msg hook strips Co-Authored-By trailers, so do not add one. Do not commit unless the user
-asks. Keep this file LEAN — do not re-add sections for work already recorded in HANDOFF.
+Read HANDOFF.md first — it is the truth (§40/§41 are the last cockpit sessions). Commit style: short
+imperative messages; the hook strips Co-Authored-By; do not commit unless the user asks. Keep this
+file LEAN. Be economical with your own output — the pilot's session budget is limited.
 
-CURRENT STATE: all suites green. Re-fly cleared (§36/§37): the 1.55 m R6 pilot feels right, the
-head-centre orbit pivots seamlessly, the trim tab rides the elevator. The interior build session
-(2026-08-06) then delivered:
-- Seat lowered ~0.4 m (structural PilotSeat moved; §4 re-verified and green).
-- EYE_OFFSET raised 0.65 → 0.98 in CameraController to hold the eye at the verified 0.80. ⚠️ This
-  is a DELIBERATE deviation from "the eye follows the seat": at the new seat height the eye would
-  land at y 0.47, below the 0.695 glareshield — you would look at the back of the panel. The
-  consequence is that the camera sits ~0.19 m ABOVE the avatar's own eyes, and that gap is the
-  COWL DECK: Fuselage04 (glareshield) tops out 1.075 m above the cabin floor where a real 172's
-  is ~0.75 m. Closing that means lowering the loft's shoulder, which changes the EXTERIOR profile
-  — the pilot's call, not an assumption.
-- Interior in: 38 massless decorations — floor, two seats, panel board, glareshield, breakers,
-  two yokes with wheels and grips, four pedals, throttle/mixture, trim wheel, fuel selector, six
-  switches and a magneto key. Physics identical to before (massless by construction, §31).
-- Panel board station is set by the RAKED WINDScreen, not eye distance: z −0.98, tops out just
-  under the glass, 0.43 m ahead and 27° below the eye.
-- Six-pack on a real panel via SixPack.mountOnPart — no drawing code changed (§19's promise). The
-  board is 0.96 × 0.472 m because that is the frame's 2.0333:1 aspect; any other shape renders
-  every dial as an oval with no error, so a check pins the aspect.
+CURRENT STATE — §41, 790/790 green, physics unchanged (1,111.0 kg, one assembly). Task A done:
+- Eye dropped to the avatar's real seated height — y 0.61 (EYE_OFFSET.y 0.98 → 0.79); the dashboard
+  group went down 0.116 m with it; a 16° down gaze holds the horizon and the whole board (panel
+  board +4.5..−32.2°, yoke −11.8..−31.1°, cowl top +12.4° — slightly up over it).
+- NO exterior geometry changed (the cowl-deck remodel wasn't needed). Occlusion set shrank to
+  Cabin/Fuselage04/Fuselage05 — the windscreen and both wings are visible again; the board,
+  glareshield and yoke are never enclosed.
 
-⚠️ NOT DONE — two parts of item 4 are open, said plainly:
-1. UIController still drives the SCREEN panel. mountOnPart is built and tested, but nothing wires
-   it to a flying aircraft — the gauges in the previous screenshot were driven by hand. It also
-   needs the pilot's call on whether the screen panel stays alongside the 3D one.
-2. The seated avatar is NOT rigged. The geometry it needs is placed, but there is a BLOCKER
-   first: Model:ScaleTo does not scale Roblox's seat weld — §35 measured a seated rig 2.1 m above
-   the seat, invisible only because the seated pilot is transparent. That has to be solved before
-   an avatar can appear in the cockpit at all.
-
-➡️ THE PILOT'S NEW REPORT (2026-08-06): "I cannot see the yoke. I cannot see the control panel
-inside the cockpit — the 3D designed one, not a UI type of thing. And I want an offset to the side
-depending on whether I am the pilot or the copilot."
+➡️ PILOT FEEDBACK ON THE VIEW (fix this first): still a bit TOO HIGH and it still looks DOWN —
+not ideal. And the view should be SLIGHTLY MORE TO THE LEFT. Do: shift the eye left toward the
+pilot seat (from x −0.10 toward −0.30 — §40's WingLeft blocker was measured at the old high eye;
+re-check it at the new y 0.61, where the wing no longer reaches, and re-run the "outer wings are
+NOT hidden" check), drop the eye a touch more, and raise the gaze a bit above 16° so it reads
+clearly as sitting in the left seat looking slightly UP over the cowl. Move the dashboard with the
+eye if you lower it again. No exterior-geometry changes; keep the cockpitEyePosition split so
+hideForCockpit never carries the pitch.
 
 ====================================================================
-NEXT TASK A — THE COCKPIT VIEW MUST SHOW THE 3D YOKE AND THE 3D PANEL
+NEXT — TANGIBLE INSTRUMENTS + WORKING YOKE/THROTTLE
 ====================================================================
-Diagnose, do not trust the story: the cockpit eye is a position-only anchor — the camera looks
-LEVEL along the aircraft's -Z. The panel is 0.43 m ahead and 27° BELOW the eye, so it sits at or
-under the bottom of the view; the yoke is lower still, behind the glareshield. Because the cursor
-is the yoke (§6g) there is no mouse-look to glance down — a real pilot lowers their eyes, this
-camera cannot. The eye is also ~0.19 m above the avatar's real eyes (EYE_OFFSET 0.98 vs the seated
-eye), so the view reads as from the top of the head, looking over the cowl.
-
-Fix options — decide with the pilot, and remember only the CAMERA moves; nothing physical changes:
-1. Pitch the cockpit view down so the panel and yoke sit in frame. The camera is already scripted
-   in cockpit view (CameraController.solve / cockpitCFrame); a fixed downward pitch is the
-   analogue of the eye-height a real pilot has over the glareshield. Reconcile it with the 27° /
-   0.43 m panel station.
-2. Optionally drop the eye back onto the avatar's real eyes and carry the visibility with the
-   pitch instead — that kills the 0.19 m head-height gap. ⚠️ BUT check hideForCockpit at the new
-   eye: the interior lives INSIDE solid boxes, and hideForCockpit hides whatever ENCLOSES the
-   eye — a lower eye may sit inside the panel board or the glareshield and hide exactly the parts
-   you are trying to see. Work with the containment, not around it.
-3. The glareshield / cowl-deck height (Fuselage04 topping at 1.075 vs a real 0.75) is what blocks
-   the panel. Lowering the loft's shoulder is an EXTERIOR-profile change — the pilot's call.
-
-⚠️ hideForCockpit hides whatever encloses the eye. Verify that hiding the enclosing boxes does NOT
-also hide the yoke, the panel board, or the instruments you are meant to see.
-
-➡️ PILOT ADDITION (2026-08-06): **DELETE the T view-toggle bind and give that key FREE-LOOK
-inside the cockpit.** T currently toggles Cockpit ↔ Chase (InputController.DEFAULTS.toggleViews,
-camera viewCount/VIEWS and the CameraController.Init assertions that pin it). Remove that meaning:
-T now enters/exits cockpit FREE-LOOK — the pilot stays in the cockpit view but can look around
-(head movement) instead of being locked level. Use the Free-view exception already proven: Roblox's
-Custom camera orbits on RIGHT-drag and the yoke reads cursor POSITION, not buttons, so the two
-cannot collide (§7). The eye POSITION anchor stays put; only orientation moves, and it eases back
-to forward on release. Update viewCount/VIEWS/toggleViews and every assertion that depends on T
-being a view toggle — a stale count or a stale toggle test must fail loudly, not silently. V still
-cycles the three views; only T changes meaning.
-
-➡️ PILOT ADDITION (2026-08-06): **THE TWO SETS OF INSTRUMENTS ARE VIEW-DEPENDENT, NOT
-ALONGSIDE.** There are two instrument sets today — the 3D panel (SixPack.mountOnPart on the panel
-board) and the screen panel (UIController's ScreenGui). They must NOT both show. Wire the live set
-to the VIEW: in FIRST-PERSON (Cockpit) view the 3D panel is the live set and the screen panel is
-disabled; in THIRD-PERSON (Chase/Free) the screen panel is the live set and the 3D panel is
-disabled — the 3D dials are unreadable from chase distance, and the screen dials are exactly the
-third-person instruments. This RESOLVES the open "does the screen panel stay alongside" question:
-both exist, but only the one the current view can read is shown, and only while flying. Wire
-mountOnPart so the six-pack renders live on the 3D board in cockpit view (it is hand-driven today).
-
-Verify in Studio Play (Client datamodel): spawn, sit, cycle to Cockpit (V/T). Confirm the 3D yoke
-and the 3D panel (six-pack dials on the board) are visible, and that what you see is NOT the screen
-panel. In chase view the screen panel comes back; in cockpit view it is gone.
+Task B is still NOT done, bluntly: the 3D board is blank in flight. SixPack.mountOnPart is built
+and tested, UIController still drives the SCREEN panel, and nothing wires the 3D set to a flying
+aircraft — the dials in the last two verification shots were driven by hand. Wire it:
+- The six dials render LIVE on the 3D board from the same state the screen panel reads (airspeed,
+  attitude, altitude, heading, VSI, tach). View-dependence (decided 2026-08-06, unimplemented):
+  cockpit/first-person = 3D panel live + screen panel OFF; chase/free = screen panel live + 3D
+  off. Only while flying. First person with the screen OFF is what makes the instruments tangible.
+- Then the YOKE and THROTTLE must be working controls, not decorations: the 3D yoke and throttle
+  lever move with (and drive) the same physics the cursor yoke does — yanking the yoke pulls the
+  ailerons/elevator, the throttle lever moves the RPM — so the cockpit controls are real, tangible
+  devices the pilot can see act on the aeroplane.
+- ⚠️ hideForCockpit must not hide the board or its dials. Verify in Studio Play (Client datamodel):
+  cockpit view = live dials + screen panel gone; move the yoke/throttle and watch the aircraft AND
+  the 3D controls respond; chase view returns the screen panel and drops the 3D set.
 
 ====================================================================
-NEXT TASK B — PILOT/COPILOT SIDE OFFSET
+THEN — STILL OPEN
 ====================================================================
-The structural PilotSeat is at x = 0; the interior's two visual seats are symmetric about the
-centreline, and the eye is in NEITHER. Real 172: pilot LEFT, copilot RIGHT.
-- Move the STRUCTURAL PilotSeat to x ≈ −0.30. Structural change — re-verify §4: mass, CoM still
-  laterally centred (|x| < 0.01; 1 kg at 0.30 m moves it ~0.0003 m — passes), static margin, ONE
-  assembly, and the whole Cessna172 suite.
-- Give the eye (CameraController.EYE_OFFSET) the matching lateral X so the camera sits over the
-  pilot seat — the eye must sit in the OCCUPIED seat.
-- Add the copilot seat at x ≈ +0.30 as a visual position now (occupied by a second player's
-  avatar in Phase 13; no generic stand-in, right seat empty in single-player). When a copilot
-  boards, each player's eye follows their OWN seat.
-- Re-verify the occlusion checks at the new eye (it now sits inside the pilot-side cabin).
+- T free-look: T still toggles Cockpit ↔ Chase. Give T cockpit free-look (right-drag orbit, §7;
+  eye position anchor stays, only orientation moves, eases back). Update viewCount/VIEWS/
+  toggleViews + the assertions pinning T — stale fails loudly. V still cycles. (§40 item 1.)
+- Seated avatar: still blocked on §35's seat-weld measurement; solve that first, then the decided
+  rigging recipe.
 
-====================================================================
-THEN — THE TWO OPEN PARTS OF ITEM 4
-====================================================================
-- Wire mountOnPart to the flying aircraft: the live six-pack renders on the 3D panel board while
-  the pilot is flying (UIController currently drives the screen panel). ✅ THE PILOT'S CALL IS MADE
-  (2026-08-06): the two sets are VIEW-DEPENDENT, not alongside — first-person shows the 3D panel
-  and hides the screen panel; third-person shows the screen panel and hides the 3D one (see the
-  NEXT TASK A additions). Wire them to the view.
-- Seated avatar rigging: solve the ScaleTo-does-not-scale-the-seat-weld blocker first (§35's 2.1 m
-  measurement; the seated pilot is transparent today, which is the only reason it is unseen).
-  Then rig the player's OWN avatar (decided 2026-08-06): positioned in the pilot seat, hands grip
-  the yoke, feet reach the rudder pedals, one arm on the throttle, driven by the SAME control
-  signals as the surfaces (SurfaceAnimation-style), neutralised (massless, non-collidable) while
-  seated. ONE recipe shared with the copilot seat — both seats, same rigging.
-
-Constraints that must stay green: the Controls contract (six fields) must not change; physics
-identical (every interior part is a massless decoration — nothing may move mass or aero, §31); the
-mass-budget and one-assembly checks stay green unchanged; hideForCockpit is the mechanism that
-makes an interior inside solid boxes visible — work with it, never fight it.
-
-Phase 4b (flight tablet) is NEXT after the interior — blocked on it. Phase 4c (missing 172S
-systems: rudder trim, fuel selector, mixture, magnetos, master/electrical, engine gauges, cabin
-environment, lights) is scoped in HANDOFF §14 but planned after 4b/5 — do NOT build it now.
-Phase 5 (weather) after that.
+Constraints that must stay green: Controls contract (six fields) unchanged; every interior part a
+massless decoration — nothing moves mass or aero (§31); mass-budget and one-assembly checks stay
+green; hideForCockpit is the mechanism — work with it, never fight it. Phase 4b (flight tablet) is
+NEXT after the interior; Phase 4c systems and Phase 5 (weather) are planned later — do NOT build
+them now.
 
 ====================================================================
-PROJECT TRAPS TO RESPECT
+TRAPS
 ====================================================================
-HANDOFF.md = truth. Edit only files under src/ (Rojo syncs one-way files->Studio). runTests()
-suites run in Studio Play mode (Client datamodel; server suites in Server datamodel), not headless
-— no Luau CLI installed, do not invent one. ⚠️ Give the services a few seconds to start before
-believing a server-suite failure: AircraftService reports 33/35 if run the instant Play starts and
-35/35 otherwise (§33). require caches per Studio session — full Studio restart, not Play restart,
-to clear; Edit's cache is the one that lies, Play gets a clean one. The Rojo plugin reconnects
-manually after a rojo serve restart. The Controls contract (six fields) must not change. Do not
-add Co-Authored-By (hook strips it). Structural boxes are the physics and the skin exists to match
-the box — never the reverse (§31), and §33's dimension fix touched decorations ONLY.
-
-⚠️ SET Studio -> Game Settings -> Avatar -> Rig Type = R6 if it is not already. PlayerService
-makes R6 true from code, but the Studio setting is the belt to its braces and lives outside the
-repo.
-
-⚠️ UNTRACKED AND NOT MINE (do not sweep into a commit): progress_journal.txt and opencode.json.
-
-CREDITS.md still attributes the Sketchfab mesh that was purged. Left in place deliberately rather
-than deleted — removing an attribution is the pilot's call, and the mesh is deferred, not
-abandoned. Delete it if the mesh is not coming back.
+HANDOFF.md = truth. Edit only files under src/ (Rojo syncs one-way files->Studio). runTests() in
+Studio Play (Client datamodel; server suites in Server), not headless — no Luau CLI. Give the
+services a few seconds: AircraftService reports 33/35 if run the instant Play starts, 35/35
+otherwise (§33). require caches per Studio session — full Studio restart to clear; Edit's cache is
+the one that lies, Play gets a clean one. Rojo reconnects after a serve restart. No Co-Authored-By
+(hook strips it). Structural boxes are the physics and the skin matches the box — never the reverse
+(§31). Set Studio Game Settings -> Avatar -> Rig Type = R6 if not already. UNTRACKED (do not sweep
+into a commit): progress_journal.txt and opencode.json.

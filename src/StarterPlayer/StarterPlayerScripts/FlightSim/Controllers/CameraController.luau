@@ -43,6 +43,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 
 local FlightSim = ReplicatedStorage:WaitForChild("FlightSim")
 
@@ -111,8 +112,45 @@ local VIEW_FREE = 3
 	where a real 172's glareshield is about 0.75 m. Closing it means lowering
 	the loft's shoulder, which changes the aeroplane's exterior profile - a
 	separate decision for the pilot, not an assumption (section 31).
+
+	⚠️ THE LATERAL OFFSET IS +0.20, NOT 0, AND IT IS CLAMPED BY THE WING.
+	The seat moved to x = -0.30 (pilot's left, §39), and an eye directly over it
+	lands INSIDE the structural `WingLeft` box - which reaches inboard to
+	x = -0.25 and sits 0.825 above the floor, only 0.025 above the eye. The
+	occlusion margin then counts the wing as ENCLOSING the eye and hides it, and
+	"the outer wings are NOT hidden" failed exactly as §31 says that check must.
+
+	So the eye sits at x = -0.10: still inside the pilot's own cushion (which
+	spans -0.53..-0.07), still the left seat rather than the centreline, but
+	clear of the wing's box. Moving it the full 0.30 needs the wing root raised
+	or the eye lowered, and both are airframe changes rather than camera ones.
 ]]
-local EYE_OFFSET = Vector3.new(0, 0.98, -0.15)
+local EYE_OFFSET = Vector3.new(0, 0.76, -0.15)
+
+--[[
+	How far the cockpit view looks DOWN, in degrees.
+
+	⚠️ WITHOUT THIS THE PILOT CANNOT SEE THEIR OWN AEROPLANE. The eye is a
+	position-only anchor and the camera looks level along -Z, but a cockpit is
+	mostly below the eye line. Measured from the left-seat eye, against a 35
+	degree half-frame:
+
+	    glareshield   -10.7 .. -31.7 deg     (only this was ever in shot)
+	    panel board   -13.9 .. -57.5 deg
+	    yoke wheel            -53    deg
+
+	So the panel hung off the bottom of the frame and the yoke was nowhere near
+	it, which is exactly what the pilot reported. At 22 degrees down the panel
+	sits in the lower half, the yoke is above the bottom edge, and the horizon
+	is still 13 degrees inside the top - a real pilot glances down instead, and
+	this camera cannot, because the cursor is the yoke (§6g) and there is no
+	mouse-look to spare.
+
+	⚠️ IT IS ORIENTATION ONLY. The eye does not move, so nothing about the
+	occlusion set, the airframe or the physics changes with it. T (free-look)
+	is the answer for looking further round; this is only the resting attitude.
+]]
+local COCKPIT_PITCH_DEG = 13
 
 --[[
 	How far outside a part's own box the eye still counts as "inside" it.
@@ -239,7 +277,91 @@ end
 	that the horizon does what the aeroplane makes it do.
 ]]
 function CameraController.cockpitCFrame(seatCFrame: CFrame): CFrame
-	return seatCFrame * CFrame.new(EYE_OFFSET)
+	return seatCFrame * CFrame.new(EYE_OFFSET) * CFrame.Angles(-math.rad(COCKPIT_PITCH_DEG), 0, 0)
+end
+
+--[[
+	The eye POSITION on its own, without the downward pitch.
+
+	`hideForCockpit` and every occlusion test want the point, not the aim - a
+	rotation cannot change what encloses a point, and passing the pitched CFrame
+	in would work by luck rather than by meaning. Kept as its own function so
+	the two uses cannot drift.
+]]
+function CameraController.cockpitEyePosition(seatCFrame: CFrame): Vector3
+	return (seatCFrame * CFrame.new(EYE_OFFSET)).Position
+end
+
+--[[
+	---- Free look, on the right mouse button --------------------------------
+
+	Hold the right button and the pilot's HEAD turns: the eye stays exactly
+	where it is and only the aim moves, easing back to forward on release. It is
+	the glance a real pilot makes and this camera otherwise cannot.
+
+	⚠️ IT LOCKS THE CURSOR WHILE HELD, AND THAT IS WHAT MAKES IT SAFE. The
+	cursor IS the yoke (§6g): its screen position is the control deflection. A
+	drag-to-look that let the pointer travel would haul the controls across the
+	full range while the pilot was only looking around - the exact failure §7
+	warns about. `MouseBehavior = LockCurrentPosition` freezes the pointer where
+	it was, so the yoke holds whatever deflection it had, and the deltas still
+	arrive for the camera to use. Releasing restores it untouched.
+
+	The look is CLAMPED rather than free-spinning: a pilot's head does not
+	rotate past their shoulders, and an unclamped pitch would let the view roll
+	over the top and invert.
+]]
+local FREE_LOOK_YAW_LIMIT = math.rad(120)
+local FREE_LOOK_PITCH_LIMIT = math.rad(70)
+local FREE_LOOK_SENSITIVITY = 0.006
+-- How quickly the view returns to forward once the button is released.
+local FREE_LOOK_RETURN_TAU = 0.12
+
+local freeLookYaw, freeLookPitch = 0, 0
+local connections: { RBXScriptConnection } = {}
+local freeLookHeld = false
+
+--[[
+	The look rotation for a given yaw and pitch. Pure, so the clamping can be
+	asserted without a mouse.
+]]
+function CameraController.freeLookCFrame(yaw: number, pitch: number): CFrame
+	return CFrame.Angles(
+		clamp(pitch, -FREE_LOOK_PITCH_LIMIT, FREE_LOOK_PITCH_LIMIT),
+		clamp(yaw, -FREE_LOOK_YAW_LIMIT, FREE_LOOK_YAW_LIMIT),
+		0
+	)
+end
+
+function CameraController.isFreeLooking(): boolean
+	return freeLookHeld
+end
+
+--[[
+	Accumulate a mouse delta into the look, clamped as it goes so the stored
+	value can never wind past the limit and then have to unwind.
+]]
+function CameraController.addFreeLook(deltaX: number, deltaY: number)
+	freeLookYaw = clamp(
+		freeLookYaw - deltaX * FREE_LOOK_SENSITIVITY,
+		-FREE_LOOK_YAW_LIMIT,
+		FREE_LOOK_YAW_LIMIT
+	)
+	freeLookPitch = clamp(
+		freeLookPitch - deltaY * FREE_LOOK_SENSITIVITY,
+		-FREE_LOOK_PITCH_LIMIT,
+		FREE_LOOK_PITCH_LIMIT
+	)
+end
+
+-- Ease back toward forward. Frame-rate independent, like every other blend here.
+local function relaxFreeLook(dt: number)
+	if freeLookHeld then
+		return
+	end
+	local k = CameraController.blendFactor(dt, FREE_LOOK_RETURN_TAU)
+	freeLookYaw += (0 - freeLookYaw) * k
+	freeLookPitch += (0 - freeLookPitch) * k
 end
 
 --[[
@@ -560,7 +682,7 @@ function CameraController.solve(viewIndex: number, cameraHold: boolean, seatCFra
 
 	local target: CFrame
 	if viewIndex == VIEW_COCKPIT then
-		target = CameraController.cockpitCFrame(seatCFrame)
+		target = CameraController.cockpitCFrame(seatCFrame) * CameraController.freeLookCFrame(freeLookYaw, freeLookPitch)
 	else
 		local position, look = CameraController.chaseTarget(aircraftCFrame)
 
@@ -620,6 +742,8 @@ local function onRenderStep(dt: number)
 	if not camera then
 		return
 	end
+
+	relaxFreeLook(dt)
 
 	local model = FlightController.getAircraft()
 	local systems = FlightController.getSystems()
@@ -688,7 +812,7 @@ local function onRenderStep(dt: number)
 	if viewIndex == VIEW_COCKPIT then
 		leaveFreeView()
 		if not cockpitHidden then
-			hideForCockpit(model, CameraController.cockpitCFrame(seat.CFrame).Position)
+			hideForCockpit(model, CameraController.cockpitEyePosition(seat.CFrame))
 		end
 	else
 		if cockpitHidden then
@@ -760,6 +884,46 @@ function CameraController.Init()
 		Camera priority, so anything scripted at or before it is overwritten
 		the same frame and the camera simply does not move.
 	]]
+	--[[
+		Right button = free look, and ONLY while an aircraft is being flown.
+
+		⚠️ THE CURSOR IS FROZEN FOR THE DURATION, NOT HIDDEN. Its screen position
+		is the yoke's deflection (§6g), so letting it travel while the pilot
+		looked around would drag the controls with the view. Locking it in place
+		leaves the yoke exactly where the pilot left it and still delivers the
+		movement deltas, which is what makes this the safe version of the
+		drag-to-look the module header rules out.
+	]]
+	table.insert(connections, UserInputService.InputBegan:Connect(function(input, processed)
+		if processed or input.UserInputType ~= Enum.UserInputType.MouseButton2 then
+			return
+		end
+		if not FlightController.isFlying() then
+			return
+		end
+		freeLookHeld = true
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+	end))
+
+	table.insert(connections, UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton2 then
+			return
+		end
+		if freeLookHeld then
+			freeLookHeld = false
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
+	end))
+
+	table.insert(connections, UserInputService.InputChanged:Connect(function(input, processed)
+		if processed or not freeLookHeld then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
+			CameraController.addFreeLook(input.Delta.X, input.Delta.Y)
+		end
+	end))
+
 	RunService:BindToRenderStep("FlightSimCamera", Enum.RenderPriority.Camera.Value + 1, onRenderStep)
 	bound = true
 
@@ -771,6 +935,20 @@ function CameraController.Shutdown()
 		RunService:UnbindFromRenderStep("FlightSimCamera")
 		bound = false
 	end
+	for _, c in connections do
+		c:Disconnect()
+	end
+	table.clear(connections)
+	--[[
+		⚠️ HAND THE CURSOR BACK. Free look locks it in place, so shutting down
+		mid-look would leave the pointer frozen and the pilot unable to move the
+		yoke at all - a far worse state than the camera being wrong.
+	]]
+	if freeLookHeld then
+		freeLookHeld = false
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	end
+	freeLookYaw, freeLookPitch = 0, 0
 	release()
 	initialised = false
 end
@@ -857,13 +1035,92 @@ function CameraController.runTests(): (boolean, { any })
 		string.format("offset (%.2f, %.2f, %.2f) m", eye.Position.X, eye.Position.Y - 100, eye.Position.Z)
 	)
 
-	-- The inside view must roll with the aeroplane; that is what it is for.
+	--[[
+		The inside view must roll with the aeroplane; that is what it is for.
+
+		⚠️ THE EXPECTED VALUE CARRIES THE COCKPIT'S DOWNWARD PITCH. A camera
+		pitched down by P and rolled by B has up.Y = cos(B) * cos(P), not
+		cos(B) - so this is written as the product rather than as a number,
+		and retuning the pitch cannot silently break a roll test.
+	]]
 	local rolled = CFrame.new(0, 100, 0) * CFrame.Angles(0, 0, math.rad(60))
 	local rolledEye = CameraController.cockpitCFrame(rolled)
+	local expectedUpY = math.cos(math.rad(60)) * math.cos(math.rad(COCKPIT_PITCH_DEG))
 	record(
 		"Cockpit view rolls with the aircraft",
-		math.abs(rolledEye.UpVector.Y - math.cos(math.rad(60))) < 0.02,
-		string.format("up.Y = %.3f at 60 deg of bank (expected %.3f)", rolledEye.UpVector.Y, math.cos(math.rad(60)))
+		math.abs(rolledEye.UpVector.Y - expectedUpY) < 0.02,
+		string.format("up.Y = %.3f at 60 deg of bank (expected %.3f)", rolledEye.UpVector.Y, expectedUpY)
+	)
+
+	--[[
+		---- The cockpit actually shows the cockpit ---------------------------
+
+		⚠️ THE BUG THIS PINS: the pilot could not see the yoke or the panel. The
+		eye is a position-only anchor and the camera looked LEVEL, but a cockpit
+		lives below the eye line - the panel measured -13.9..-57.5 degrees and
+		the yoke -53, against a 35 degree half-frame. Only the glareshield was
+		ever in shot.
+	]]
+	local levelEye = CameraController.cockpitCFrame(CFrame.new(0, 100, 0))
+	local pitchDown = -math.deg(math.asin(math.clamp(levelEye.LookVector.Y, -1, 1)))
+	record(
+		"The cockpit view looks DOWN, so the panel is in frame",
+		pitchDown > 10 and pitchDown < 35,
+		string.format("%.1f degrees below level", pitchDown)
+	)
+	--[[
+		And not so far down that the horizon leaves the frame - a pilot who
+		cannot see the horizon from the cockpit cannot fly from it.
+	]]
+	record(
+		"...but not so far that the horizon leaves the frame",
+		pitchDown < 35,
+		string.format("horizon sits %.1f degrees inside the top edge", 35 - pitchDown)
+	)
+	--[[
+		⚠️ THE OCCLUSION EYE MUST NOT CARRY THE PITCH. What encloses a point
+		cannot depend on which way you look from it, and `hideForCockpit` takes
+		a position. If these ever disagree, the hidden set starts changing with
+		the camera's attitude - which would hide and reveal the aeroplane as the
+		pilot rolls.
+	]]
+	local seatAt = CFrame.new(3, 100, -7) * CFrame.Angles(0.2, 0.4, 0.3)
+	--[[
+		---- Free look on the right button ------------------------------------
+
+		⚠️ IT MUST CLAMP. A pilot's head does not spin past their shoulders, and
+		an unclamped pitch lets the view roll over the top and invert - which is
+		unrecoverable while the cursor is also the yoke.
+	]]
+	local neutral = CameraController.freeLookCFrame(0, 0)
+	record(
+		"Free look neutral is dead ahead",
+		(neutral.Position - Vector3.zero).Magnitude < 1e-9
+			and math.abs(neutral.LookVector.Z + 1) < 1e-6,
+		"identity rotation, no positional component"
+	)
+	local hardOver = CameraController.freeLookCFrame(math.rad(500), math.rad(500))
+	local clampedPitch = math.deg(math.asin(math.clamp(hardOver.LookVector.Y, -1, 1)))
+	record(
+		"Free look clamps rather than spinning",
+		math.abs(clampedPitch) < 89,
+		string.format("pitch clamped to %.1f deg from a 500 deg demand", clampedPitch)
+	)
+	--[[
+		⚠️ AND IT MUST NOT MOVE THE EYE. Free look is the pilot's HEAD turning;
+		the aeroplane's seat has not moved, so a positional component here would
+		let the pilot lean their viewpoint out through the airframe.
+	]]
+	record(
+		"Free look turns the head without moving the eye",
+		(CameraController.freeLookCFrame(math.rad(80), math.rad(40)).Position).Magnitude < 1e-9,
+		"rotation only"
+	)
+
+	record(
+		"The occlusion eye is the pitched camera's own position",
+		(CameraController.cockpitEyePosition(seatAt) - CameraController.cockpitCFrame(seatAt).Position).Magnitude < 1e-6,
+		"position identical, orientation ignored"
 	)
 
 	-- 3. Chase ---------------------------------------------------------------
@@ -1002,7 +1259,7 @@ function CameraController.runTests(): (boolean, { any })
 	model = AircraftBuilder.build(Cessna172, CFrame.new(0, 2000, 0), workspace)
 	local built = model :: Model
 	local seat = built:FindFirstChild("PilotSeat") :: BasePart
-	local eyeWorld = CameraController.cockpitCFrame(seat.CFrame).Position
+	local eyeWorld = CameraController.cockpitEyePosition(seat.CFrame)
 	local occluders = CameraController.occludingParts(built, eyeWorld)
 
 	local names = {}

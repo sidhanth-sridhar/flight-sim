@@ -742,10 +742,20 @@ function GroundHandling.runTests(): (boolean, { any })
 	)
 
 	local _, tSteerLeft = GroundHandling.computeForces(state, onGround(5), dt, controlsWith({ yaw = -1 }), 0)
+	--[[
+		⚠️ TOLERANCED AGAINST THE TORQUE, NOT EXACT. The pilot sits in the left
+		seat (§39), which puts the centre of mass 0.27 mm off the centreline, so
+		the two steering torques differ in the fifth significant figure. An
+		exact test fails on a quarter of a millimetre of seat.
+
+		0.1% of the commanded torque is the bound: a real asymmetry - a steering
+		sign error, or a wheel on the wrong side - reverses it or doubles it.
+	]]
 	record(
 		"Steering is symmetric",
-		abs(-tSteerLeft.Y + yawRight) < 1e-6,
-		string.format("right %+.0f vs left %+.0f N*m", yawRight, -tSteerLeft.Y)
+		abs(-tSteerLeft.Y + yawRight) < abs(yawRight) * 1e-3,
+		string.format("right %+.0f vs left %+.0f N*m (%.3f%% apart)",
+			yawRight, -tSteerLeft.Y, abs(-tSteerLeft.Y + yawRight) / abs(yawRight) * 100)
 	)
 
 	-- Authority must fade with speed, and be gone by the fade speed.

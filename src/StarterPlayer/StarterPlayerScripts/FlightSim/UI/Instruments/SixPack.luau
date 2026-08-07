@@ -575,6 +575,57 @@ function SixPack.Init()
 		edge caught between redraws. That is a real difference from the debug
 		HUD, which does - and the reason the loop offers both.
 	]]
+	--[[
+		---- The two instrument sets are VIEW-DEPENDENT, never both ------------
+
+		There are two panels: this ScreenGui, and the six-pack mounted on the
+		cockpit's own `PanelBoard` (`mountOnPart`). Showing both at once is what
+		makes neither feel real - the pilot reported the instruments as "not a
+		device that is tangible inside the cockpit", and a screen overlay on top
+		of a 3D panel is exactly that.
+
+		So each view gets the set it can actually read:
+
+		  Cockpit (first person)  3D board LIVE, screen panel OFF
+		  Chase / Free            screen panel LIVE, 3D board OFF
+
+		The 3D dials are unreadable from chase distance, and the screen dials
+		ARE the third-person instrument set. Turning the screen off in first
+		person is the half that makes the cockpit tangible.
+
+		⚠️ MOUNTED LAZILY, AND RE-MOUNTED WHEN THE AIRCRAFT CHANGES. The board
+		only exists once an aeroplane has been built, and a reset builds a new
+		one - a cached SurfaceGui would then be adorned to a destroyed part and
+		silently render nothing.
+	]]
+	local CameraController = require(script.Parent.Parent.Parent.Controllers.CameraController)
+	local COCKPIT_VIEW = table.find(CameraController.VIEWS, "Cockpit") or 1
+
+	local boardSurface: SurfaceGui? = nil
+	local boardGauges: { [string]: any }? = nil
+	local boardModel: Model? = nil
+
+	local function mountBoard(model: Model?): boolean
+		if model == boardModel and boardSurface and boardSurface.Parent then
+			return boardGauges ~= nil
+		end
+		if boardSurface then
+			boardSurface:Destroy()
+		end
+		boardSurface, boardGauges, boardModel = nil, nil, model
+		local board = model and model:FindFirstChild("PanelBoard")
+		if not board or not board:IsA("BasePart") then
+			return false
+		end
+		local ok, surface, _, gaugesBuilt = pcall(SixPack.mountOnPart, board)
+		if not ok then
+			warn("[FlightSim:HUD] could not mount the cockpit panel: " .. tostring(surface))
+			return false
+		end
+		boardSurface, boardGauges = surface, gaugesBuilt
+		return true
+	end
+
 	registration = Instrument.register(function(dt: number)
 		local telemetry = FlightController.getTelemetry()
 		local flying = telemetry ~= nil and FlightController.isFlying()
@@ -583,14 +634,28 @@ function SixPack.Init()
 			if gui.Enabled then
 				gui.Enabled = false
 			end
+			if boardSurface then
+				boardSurface.Enabled = false
+			end
 			return
 		end
 
-		if not gui.Enabled then
-			gui.Enabled = true
+		local systems = FlightController.getSystems()
+		local inCockpit = systems ~= nil and systems.viewIndex == COCKPIT_VIEW
+		local boardReady = inCockpit and mountBoard(FlightController.getAircraft())
+
+		if gui.Enabled == boardReady then
+			gui.Enabled = not boardReady
+		end
+		if boardSurface then
+			boardSurface.Enabled = boardReady
 		end
 
-		SixPack.render(built, telemetry, dt)
+		if boardReady and boardGauges then
+			SixPack.render(boardGauges, telemetry, dt)
+		else
+			SixPack.render(built, telemetry, dt)
+		end
 	end)
 
 	Instrument.startLoop()

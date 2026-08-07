@@ -504,7 +504,7 @@ Cessna172.limits = {
 local WHITE = Color3.fromRGB(240, 240, 243)
 local TRIM = Color3.fromRGB(38, 88, 168)
 local DARK = Color3.fromRGB(38, 38, 42)
-local GLASS = Color3.fromRGB(140, 170, 195)
+local GLASS = Color3.fromRGB(205, 220, 230)
 local METAL = Color3.fromRGB(165, 168, 175)
 local RUBBER = Color3.fromRGB(26, 26, 28)
 
@@ -628,8 +628,8 @@ add({
 	position = Vector3.new(0, 0.695, -0.825),
 	rotation = Vector3.new(-27.8, 0, 0),
 	color = GLASS,
-	transparency = 0.55,
-	reflectance = 0.2,
+	transparency = 0.88,
+	reflectance = 0.05,
 	material = Enum.Material.Glass,
 })
 addPair({
@@ -637,8 +637,8 @@ addPair({
 	size = Vector3.new(0.03, 0.36, 1.30),
 	position = Vector3.new(0.585, 0.58, 0.05),
 	color = GLASS,
-	transparency = 0.55,
-	reflectance = 0.2,
+	transparency = 0.88,
+	reflectance = 0.05,
 	material = Enum.Material.Glass,
 })
 addPair({
@@ -646,8 +646,8 @@ addPair({
 	size = Vector3.new(0.03, 0.26, 0.52),
 	position = Vector3.new(0.535, 0.56, 1.02),
 	color = GLASS,
-	transparency = 0.55,
-	reflectance = 0.2,
+	transparency = 0.88,
+	reflectance = 0.05,
 	material = Enum.Material.Glass,
 })
 
@@ -1071,25 +1071,70 @@ add({
 	    cabin half-width                       x = +-0.575
 	    cockpit eye                            y = +0.800, z = -0.550
 
-	⚠️ BOTH SEATS ARE SYMMETRIC ABOUT THE CENTRELINE, AND THE PILOT'S EYE IS
-	NOT IN EITHER OF THEM. The structural `PilotSeat` sits at x = 0, so the
-	camera does too - a real 172 pilot sits in the left seat. Moving it is
-	another structural change AND puts a lateral offset on the centre of mass,
-	so it is a decision for the pilot rather than an assumption. Recorded, not
-	acted on.
+	THE PILOT FLIES FROM THE LEFT SEAT, as in a real 172. `SEAT_X` is the one
+	number that places it: the structural `PilotSeat` is at -SEAT_X, so the
+	cushion, the back, the yoke and the cockpit eye all land in the same seat
+	without any of them restating the offset. The right seat is the copilot's
+	and stays empty in single-player - a second player's avatar occupies it
+	(Phase 13), never a generic stand-in.
 ]]
 local LEATHER = Color3.fromRGB(48, 44, 42)
 local PANEL_FACE = Color3.fromRGB(32, 32, 34)
 local KNOB_BLACK = Color3.fromRGB(20, 20, 22)
-local SEAT_X = 0.29
+local SEAT_X = 0.30
 
--- The floor the seats and pedals stand on, so the cabin has a bottom to it
--- rather than the pilot's feet hanging over the structural box's edge.
+--[[
+	---- The cabin enclosure -------------------------------------------------
+
+	⚠️ THE COCKPIT HAS NO WALLS WITHOUT THESE, AND THE REASON IS hideForCockpit.
+	The fuselage sides ARE `Cabin`, `Fuselage04` and `Fuselage05`, and those are
+	exactly the boxes that enclose the eye and are hidden from the inside. Hide
+	them and the cabin becomes open air - the pilot reported looking straight
+	out of the left side.
+
+	So the interior gets its own SHELL: thin panels standing just inside the
+	structural boxes. They are thin and offset, so they never enclose the eye
+	and are never hidden - which is the whole trick. Measured against the eye at
+	(-0.30, 0.58, -0.55): the side walls sit 0.24 m away against a 0.14 m
+	containment reach, and the headliner 0.22 m above it.
+
+	Everything here is a massless decoration like the rest of the interior, so
+	the enclosure cannot touch the mass budget or the aerodynamics (§31).
+]]
 add({
 	name = "CabinFloor",
 	size = Vector3.new(1.06, 0.04, 1.80),
 	position = Vector3.new(0, -0.380, -0.05),
 	color = Color3.fromRGB(58, 56, 54),
+})
+-- Side walls, floor up to the window sill. The side windows (WindowSide,
+-- y 0.40..0.76) carry on above them, so the pilot still sees out sideways.
+addPair({
+	name = "CabinWall",
+	size = Vector3.new(0.035, 0.78, 1.90),
+	position = Vector3.new(0.555, 0.010, -0.100),
+	color = Color3.fromRGB(96, 92, 88),
+})
+-- Headliner. 0.22 m above the eye, so it roofs the cabin without enclosing it.
+add({
+	name = "CabinRoof",
+	size = Vector3.new(1.10, 0.04, 1.90),
+	position = Vector3.new(0, 0.800, -0.100),
+	color = Color3.fromRGB(108, 104, 100),
+})
+-- Firewall ahead of the pedals, and the bulkhead behind the seats, so the
+-- enclosure is closed fore and aft rather than being two loose walls.
+add({
+	name = "Firewall",
+	size = Vector3.new(1.06, 0.72, 0.04),
+	position = Vector3.new(0, -0.020, -1.140),
+	color = Color3.fromRGB(96, 92, 88),
+})
+add({
+	name = "RearBulkhead",
+	size = Vector3.new(1.06, 1.14, 0.04),
+	position = Vector3.new(0, 0.200, 0.870),
+	color = Color3.fromRGB(96, 92, 88),
 })
 
 -- ---- Seats --------------------------------------------------------------
@@ -1141,28 +1186,30 @@ addPair({
 	and sits 0.43 m ahead of the eye and 27 degrees below it - which is where a
 	panel belongs. The first attempt put it at z = -0.62, only 0.07 m ahead of
 	the eye: directly under the pilot's chin, and invisible from the seat.
+
+	⚠️ AND IT IS 0.48 m WIDE, NOT 0.96. The first board put four dials across
+	0.96 m, which is a 0.24 m instrument - a real 172's are 3.125 inches, about
+	0.08 m, so they were three times oversized and the pilot said so. At 0.48 m
+	each dial is 0.12 m: still generous, but it reads as an instrument cluster
+	rather than a billboard, and at 0.43 m from the eye it subtends a comfortable
+	15 degrees.
+
+	Halving it also fixed the framing problem §42 recorded: a 0.236 m board
+	subtends 30 degrees instead of 57, so the horizon and the whole board now
+	fit together without a steep gaze.
 ]]
 add({
 	name = "PanelBoard",
-	size = Vector3.new(0.96, 0.472, 0.05),
-	position = Vector3.new(0, 0.340, -0.980),
+	size = Vector3.new(0.48, 0.236, 0.05),
+	position = Vector3.new(-0.300, 0.300, -0.980),
 	color = PANEL_FACE,
 	material = Enum.Material.SmoothPlastic,
-})
--- The hood over the panel that keeps sun off the glass, and the visual line
--- that reads as "cockpit" from the pilot's seat. Kept under the 0.634 glass
--- line at its own station.
-add({
-	name = "GlareShield",
-	size = Vector3.new(1.04, 0.04, 0.20),
-	position = Vector3.new(0, 0.600, -0.930),
-	color = PANEL_FACE,
 })
 -- Circuit breakers: a column strip on the right of the panel, as on the 172S.
 add({
 	name = "BreakerPanel",
-	size = Vector3.new(0.16, 0.36, 0.04),
-	position = Vector3.new(0.560, 0.330, -0.975),
+	size = Vector3.new(0.11, 0.22, 0.04),
+	position = Vector3.new(0.060, 0.300, -0.975),
 	color = Color3.fromRGB(44, 44, 46),
 })
 
@@ -1175,34 +1222,40 @@ add({
 	moving geometry. The seated avatar's hands are meant to grip the wheel, so
 	the wheel's position is the thing that has to be right.
 
-	The wheel sits 0.13 m ahead of the eye's station and 0.49 m below it, which
-	is where a seated pilot's hands fall: shoulders are about 0.43 m above the
-	pan (y 0.35) and the arms reach forward, not down. The column then runs
-	forward into the base of the panel.
+	⚠️ THE WHEEL WAS RAISED AND PUSHED FORWARD SO IT IS IN SHOT. Once the seat
+	moved to the left the pilot's eye sat directly ABOVE their own yoke - the
+	wheel measured 75 degrees below the eye, straight down, and no sane camera
+	pitch brings that into a 35-degree half-frame. At y 0.42 / z -0.84 it is
+	53 degrees below, which the cockpit view's downward pitch clears.
+
+	It is higher than a seated pilot's hands would really be (shoulders are
+	about y 0.35). That is the SAME 0.19 m the cockpit eye is too high by, and
+	it has the same root cause - the cowl deck. When that is lowered, the eye
+	and this wheel both come down together.
 ]]
 addPair({
 	name = "YokeColumn",
-	size = Vector3.new(0.055, 0.055, 0.30),
-	position = Vector3.new(SEAT_X, 0.285, -0.820),
-	rotation = Vector3.new(-10, 0, 0),
+	size = Vector3.new(0.055, 0.055, 0.26),
+	position = Vector3.new(SEAT_X, 0.290, -0.930),
+	rotation = Vector3.new(-14, 0, 0),
 	color = KNOB_BLACK,
 })
 addPair({
 	name = "YokeWheel",
 	size = Vector3.new(0.30, 0.045, 0.045),
-	position = Vector3.new(SEAT_X, 0.310, -0.680),
+	position = Vector3.new(SEAT_X, 0.310, -0.840),
 	color = KNOB_BLACK,
 })
 addPair({
 	name = "YokeGripLeft",
 	size = Vector3.new(0.05, 0.055, 0.12),
-	position = Vector3.new(SEAT_X - 0.145, 0.310, -0.655),
+	position = Vector3.new(SEAT_X - 0.145, 0.310, -0.815),
 	color = KNOB_BLACK,
 })
 addPair({
 	name = "YokeGripRight",
 	size = Vector3.new(0.05, 0.055, 0.12),
-	position = Vector3.new(SEAT_X + 0.145, 0.310, -0.655),
+	position = Vector3.new(SEAT_X + 0.145, 0.310, -0.815),
 	color = KNOB_BLACK,
 })
 
@@ -1284,17 +1337,17 @@ add({
 local SWITCH_Y = 0.150
 local SWITCH_Z = -0.958
 for index, switch in {
-	{ name = "SwitchMaster", x = -0.400, color = Color3.fromRGB(200, 30, 30) },
-	{ name = "SwitchBeacon", x = -0.330, color = Color3.fromRGB(220, 220, 225) },
-	{ name = "SwitchNav", x = -0.260, color = Color3.fromRGB(220, 220, 225) },
-	{ name = "SwitchStrobe", x = -0.190, color = Color3.fromRGB(220, 220, 225) },
-	{ name = "SwitchLanding", x = -0.120, color = Color3.fromRGB(220, 220, 225) },
-	{ name = "SwitchPitotHeat", x = -0.050, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchMaster", x = -0.430, color = Color3.fromRGB(200, 30, 30) },
+	{ name = "SwitchBeacon", x = -0.385, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchNav", x = -0.340, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchStrobe", x = -0.295, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchLanding", x = -0.250, color = Color3.fromRGB(220, 220, 225) },
+	{ name = "SwitchPitotHeat", x = -0.205, color = Color3.fromRGB(220, 220, 225) },
 } do
 	local _ = index
 	add({
 		name = switch.name,
-		size = Vector3.new(0.03, 0.055, 0.025),
+		size = Vector3.new(0.022, 0.04, 0.022),
 		position = Vector3.new(switch.x, SWITCH_Y, SWITCH_Z),
 		color = switch.color,
 	})
@@ -1303,7 +1356,7 @@ end
 add({
 	name = "MagnetoSwitch",
 	size = Vector3.new(0.06, 0.06, 0.03),
-	position = Vector3.new(-0.470, SWITCH_Y, SWITCH_Z),
+	position = Vector3.new(-0.475, SWITCH_Y, SWITCH_Z),
 	shape = "Cylinder",
 	rotation = Vector3.new(0, 90, 0),
 	color = METAL,
@@ -1476,10 +1529,21 @@ Cessna172.model = {
 				carries 1 kg of 1,111, so the centre of mass moves by less than
 				a millimetre, and §4's figures were re-verified after the move
 				rather than assumed.
+
+				⚠️ AND IT SITS ON THE LEFT, AT x = -0.30 (pilot's decision,
+				2026-08-06). A 172 is flown from the left seat. It used to be on
+				the centreline, which put the cockpit eye between the two visual
+				seats - in neither of them. `SEAT_X` below is the same 0.30, so
+				the structural seat, the left cushion, the left yoke and the eye
+				all agree by construction rather than by coincidence.
+
+				A lateral offset on a STRUCTURAL part moves the centre of mass
+				sideways: 1 kg at 0.30 m against 1,111 kg is 0.00027 m, which is
+				a quarter of a millimetre and is asserted to stay under 0.01.
 			]]
 			name = "PilotSeat",
 			size = Vector3.new(0.55, 0.20, 0.55),
-			position = Vector3.new(0, -0.18, -0.40),
+			position = Vector3.new(-0.30, -0.18, -0.40),
 			mass = 1,
 			color = Color3.fromRGB(60, 55, 50),
 			className = "VehicleSeat",

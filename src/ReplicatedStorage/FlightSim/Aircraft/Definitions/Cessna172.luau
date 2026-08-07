@@ -1105,7 +1105,7 @@ add({
 	name = "CabinFloor",
 	size = Vector3.new(1.06, 0.04, 1.80),
 	position = Vector3.new(0, -0.380, -0.05),
-	color = Color3.fromRGB(58, 56, 54),
+	color = Color3.fromRGB(206, 203, 198),
 })
 -- Side walls, floor up to the window sill. The side windows (WindowSide,
 -- y 0.40..0.76) carry on above them, so the pilot still sees out sideways.
@@ -1113,14 +1113,14 @@ addPair({
 	name = "CabinWall",
 	size = Vector3.new(0.035, 0.78, 1.90),
 	position = Vector3.new(0.555, 0.010, -0.100),
-	color = Color3.fromRGB(96, 92, 88),
+	color = Color3.fromRGB(232, 230, 226),
 })
 -- Headliner. 0.22 m above the eye, so it roofs the cabin without enclosing it.
 add({
 	name = "CabinRoof",
 	size = Vector3.new(1.10, 0.04, 1.90),
 	position = Vector3.new(0, 0.800, -0.100),
-	color = Color3.fromRGB(108, 104, 100),
+	color = Color3.fromRGB(240, 238, 234),
 })
 -- Firewall ahead of the pedals, and the bulkhead behind the seats, so the
 -- enclosure is closed fore and aft rather than being two loose walls.
@@ -1128,13 +1128,52 @@ add({
 	name = "Firewall",
 	size = Vector3.new(1.06, 0.72, 0.04),
 	position = Vector3.new(0, -0.020, -1.140),
-	color = Color3.fromRGB(96, 92, 88),
+	color = Color3.fromRGB(232, 230, 226),
 })
 add({
 	name = "RearBulkhead",
 	size = Vector3.new(1.06, 1.14, 0.04),
 	position = Vector3.new(0, 0.200, 0.870),
-	color = Color3.fromRGB(96, 92, 88),
+	color = Color3.fromRGB(232, 230, 226),
+})
+
+--[[
+	⚠️ THE DOOR POSTS CLOSE THE GAP THE WALLS COULD NOT.
+
+	The side walls run floor-to-sill and the side windows carry on above them,
+	but between the windscreen's edge and the window's leading edge there was
+	nothing at all - the pilot reported looking straight out of the left side,
+	and after the walls went in that forward quarter was still open sky.
+
+	These are the A-pillar and the window frame: the posts either side of the
+	glass, plus the sill capping the wall below it. Thin and hard against the
+	cabin side, so like the walls they never enclose the eye and are never
+	hidden by hideForCockpit.
+]]
+addPair({
+	name = "DoorPostFront",
+	size = Vector3.new(0.05, 0.46, 0.07),
+	position = Vector3.new(0.545, 0.560, -0.640),
+	color = Color3.fromRGB(232, 230, 226),
+})
+addPair({
+	name = "DoorPostRear",
+	size = Vector3.new(0.05, 0.46, 0.07),
+	position = Vector3.new(0.545, 0.560, 0.700),
+	color = Color3.fromRGB(232, 230, 226),
+})
+addPair({
+	name = "WindowSill",
+	size = Vector3.new(0.05, 0.05, 1.42),
+	position = Vector3.new(0.545, 0.380, 0.030),
+	color = Color3.fromRGB(232, 230, 226),
+})
+-- The upper rail, tying the posts into the headliner so the frame is closed.
+addPair({
+	name = "WindowRail",
+	size = Vector3.new(0.05, 0.05, 1.42),
+	position = Vector3.new(0.545, 0.770, 0.030),
+	color = Color3.fromRGB(232, 230, 226),
 })
 
 -- ---- Seats --------------------------------------------------------------

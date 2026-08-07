@@ -2736,3 +2736,21 @@ The pilot: *"The view of the character is too high and we are looking down. The 
 2. **Working yoke/throttle** — not started; they are still inert decorations.
 3. **T free-look** — untouched (§40 item 1).
 4. **Seated avatar** — untouched, blocked on §35's seat-weld measurement.
+
+---
+
+## 43. The cabin is closed, in white (2026-08-06)
+
+**623/623 green**, physics unchanged (1,111.0 kg, one assembly, 11.000 × 2.850 × 8.280). 128 parts.
+
+The interior shell is now white — walls, headliner, floor, firewall and rear bulkhead — and the **door posts, window sill and window rail** close the forward-left quadrant that the walls alone could not. The walls run floor-to-sill and the side glass carries on above them; between the windscreen's edge and the window's leading edge there had been nothing at all, which is what the pilot kept seeing straight out of.
+
+Also this session: the **glareshield slab over the instruments is gone** (it was `GlareShield`, and it read as a black bar across the panel), and the **glass is natural** — 0.55 transparency / 0.2 reflectance / a heavy blue tint was why it looked like a coloured slab rather than glass; it is now 0.88 / 0.05 and near-neutral.
+
+⚠️ **Every one of these is a massless decoration, so the enclosure cannot touch the mass budget** — and, like the walls, each is thin and hard against the cabin side so it never encloses the eye and is never taken by `hideForCockpit`. The hidden set is still exactly `Cabin`, `Fuselage04`, `Fuselage05`.
+
+### Right-button free look
+
+Hold the right mouse button while flying and the pilot's head turns; release and it eases back to forward. ⚠️ **The cursor is LOCKED IN PLACE for the duration.** The cursor *is* the yoke (§6g), so a drag-to-look that let the pointer travel would haul the controls across their range while the pilot was only looking around — the exact failure §7 warns about. `LockCurrentPosition` freezes the pointer, the yoke keeps its deflection, and the deltas still arrive. `Shutdown` hands the cursor back, because being left with a frozen pointer is worse than any camera fault. Clamped to ±120° yaw / ±70° pitch and rotation-only, all three pinned by checks.
+
+⚠️ **NOT HANDS-VERIFIED.** Free look and §42's view-dependent 3D panel wiring are both code-verified only — a real mouse button has never been pressed on them, and boarding through the prompt is still not reachable from a script. Treat both as unproven.

@@ -1,45 +1,43 @@
-MORE TASKS — the v1 feature set, in order. Full scope for each is in HANDOFF §14.
+ TASK 1 — Phase 4b: the flight tablet. Departure/destination pickers on the AirportService
+  registry, distance/bearing to destination, aircraft picker on Aircraft/Registry.luau. ⚠️ Decide
+  with the pilot FIRST: a picker cannot be a clickable UI while flying (cursor-is-the-yoke, §6g/§7)
+  and a key cannot choose among airports — so either a modal state that releases the yoke, or
+  ground-only use. Build only after the decision.
 
-TASK 1 — Phase 4b: the flight tablet. Departure/destination pickers on the AirportService
-registry, distance/bearing to destination, aircraft picker on Aircraft/Registry.luau. ⚠️ Decide
-with the pilot FIRST: a picker cannot be a clickable UI while flying (cursor-is-the-yoke, §6g/§7)
-and a key cannot choose among airports — so either a modal state that releases the yoke, or
-ground-only use. Build only after the decision.
+  TASK 2 — Phase 4c: the missing 172S systems (HANDOFF §14): rudder trim (tab on the rudder, like
+  §37's TrimTab), fuel selector (LEFT/BOTH/RIGHT/OFF), mixture, magnetos/keyed start, master/avionics/
+  electrical, the POH engine gauges (oil pressure/temp, fuel flow), cabin environment, and lights
+  that actually switch. Switches are keyboard-bound (decision 2026-08-06) — the key drives the state,
+  the 3D part mirrors it. Controls contract (six fields) unchanged; anything that splits the fuel
+  tank or changes engine behaviour re-verifies §4.
 
-TASK 2 — Phase 4c: the missing 172S systems (HANDOFF §14): rudder trim (tab on the rudder, like
-§37's TrimTab), fuel selector (LEFT/BOTH/RIGHT/OFF), mixture, magnetos/keyed start, master/avionics/
-electrical, the POH engine gauges (oil pressure/temp, fuel flow), cabin environment, and lights
-that actually switch. Switches are keyboard-bound (decision 2026-08-06) — the key drives the state,
-the 3D part mirrors it. Controls contract (six fields) unchanged; anything that splits the fuel
-tank or changes engine behaviour re-verifies §4.
+  TASK 3 — Phase 5: weather. Wind layers (crosswind landings exist by construction), turbulence
+  (Dryden/Karman, seed-deterministic — same seed, same flight), the wind-shear/microburst gate
+  (~150 ft AGL, 90 kt approach — survivable but hard), temperature + QNH presets, then the jet
+  aircraft last. §4/§31: nothing that moves mass or aero without re-verifying.
 
-TASK 3 — Phase 5: weather. Wind layers (crosswind landings exist by construction), turbulence
-(Dryden/Karman, seed-deterministic — same seed, same flight), the wind-shear/microburst gate
-(~150 ft AGL, 90 kt approach — survivable but hard), temperature + QNH presets, then the jet
-aircraft last. §4/§31: nothing that moves mass or aero without re-verifying.
+  TASK 4 — Phase 6: audio (engine from RPM, wind over the panel, stall horn), damage (marks the
+  aeroplane, never silently invalidates §4), persistence (DataStore behind AircraftService),
+  tutorial (the gates as an in-game syllabus).
 
-TASK 4 — Phase 6: audio (engine from RPM, wind over the panel, stall horn), damage (marks the
-aeroplane, never silently invalidates §4), persistence (DataStore behind AircraftService),
-tutorial (the gates as an in-game syllabus).
+  TASK 5 — Phase 7: the world grows — more airports in the registry, buildings and scenery
+  (collidable world objects, not aircraft parts), runway and apron detail (PAPI/VASI, signage,
+  holding points). This is the airport-design work.
 
-TASK 5 — Phase 7: the world grows — more airports in the registry, buildings and scenery
-(collidable world objects, not aircraft parts), runway and apron detail (PAPI/VASI, signage,
-holding points). This is the airport-design work.
+  TASK 6 — Phase 8: UI depth — main menu/pause/settings/flight log, the interactive moving map
+  (grows out of the tablet picker), new cockpit indicators (wet compass, trim, flap, gear, breakers,
+  G-meter), the pilot's HUD.
 
-TASK 6 — Phase 8: UI depth — main menu/pause/settings/flight log, the interactive moving map
-(grows out of the tablet picker), new cockpit indicators (wet compass, trim, flap, gear, breakers,
-G-meter), the pilot's HUD.
+  TASK 7 — Phase 9: ATC — deterministic server-side tower state machine first (clearance → taxi →
+  line up → takeoff → handoff), optional LLM layer via HttpService with the key server-side only.
 
-TASK 7 — Phase 9: ATC — deterministic server-side tower state machine first (clearance → taxi →
-line up → takeoff → handoff), optional LLM layer via HttpService with the key server-side only.
+  TASK 8 — Phase 10: airliners — 737/747/A320/A350 definitions through the same definition → builder
+  → registry path as the 172.
 
-TASK 8 — Phase 10: airliners — 737/747/A320/A350 definitions through the same definition → builder
-→ registry path as the 172.
+  TASK 9 — Phase 11: the ocean, a carrier (catapult/arresting gear, moving deck) and the fighter
+  definition; gate = a carrier circuit — launch, transit, bolter, trap.
 
-TASK 9 — Phase 11: the ocean, a carrier (catapult/arresting gear, moving deck) and the fighter
-definition; gate = a carrier circuit — launch, transit, bolter, trap.
+  Phase 12 (mesh/3D polish) is the postponed 3D pass — last, after all of the above.
 
-Phase 12 (mesh/3D polish) is the postponed 3D pass — last, after all of the above.
-
-Work the tasks in order. Stop when the pilot's session budget runs out; report what is done and
-what is next.
+  Work the tasks in order. Stop when the pilot's session budget runs out; report what is done and
+  what is next.commit and push after

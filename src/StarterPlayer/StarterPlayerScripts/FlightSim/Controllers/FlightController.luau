@@ -1522,7 +1522,28 @@ function FlightController.runTests(): (boolean, { any })
 	pad.Anchored = true
 	pad.Parent = workspace
 
-	local model = AircraftBuilder.build(Cessna172, CFrame.new(TEST_ORIGIN + Vector3.new(0, 1.30, 0)), workspace)
+	--[[
+		How high to place the ROOT so the tyres rest on the pad.
+
+		⚠️ DERIVED, NOT TYPED, BECAUSE §45 MOVED THE WHEELS. This was `1.30`,
+		which was the right answer while the wheels sat 0.95 below the datum
+		with a 0.2 radius. §45 scales the gear to 1.778 and 0.374, so 1.30 left
+		the aeroplane hanging above the pad and the gear check measured an
+		aircraft that was airborne - reported as "0 wheels down".
+
+		GroundHandling.runTests() derives the same number the same way, for the
+		same reason. Both follow the definition, so both are right at any scale.
+	]]
+	local rootSpec
+	for _, p in Cessna172.model.parts do
+		if p.name == Cessna172.model.rootPart then
+			rootSpec = p
+		end
+	end
+	local mainWheel = Cessna172.gear.wheels[2]
+	local groundY = (rootSpec :: any).position.Y - (mainWheel.offset.Y - mainWheel.radius)
+
+	local model = AircraftBuilder.build(Cessna172, CFrame.new(TEST_ORIGIN + Vector3.new(0, groundY, 0)), workspace)
 
 	--[[
 		Everything from here to the matching cleanup runs inside a pcall.

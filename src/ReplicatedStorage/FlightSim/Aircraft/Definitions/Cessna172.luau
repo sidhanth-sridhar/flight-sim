@@ -51,6 +51,84 @@ local FIN_AREA = 1.3 -- m^2, vertical tail including rudder
 local FIN_SPAN = 1.5
 local FIN_AR = (FIN_SPAN * FIN_SPAN) / FIN_AREA -- 1.73
 
+-- =========================================================================
+-- VISUAL SCALE (§45)
+-- =========================================================================
+--[[
+	THE AEROPLANE IS DRAWN 1.872x LIFE SIZE. THE AEROPLANE IT FLIES LIKE IS NOT.
+
+	This is the one number that separates what the pilot SEES from what the
+	physics acts on, and the split is deliberate. A real 172 is 8.28 m long and
+	the pilot's R6 rig is 1.55 m tall (§36); parked side by side that reads as
+	a small aeroplane, where the reference screenshots show a plane about ten
+	times the standing pilot's height. The pilot's call was to enlarge the
+	AEROPLANE rather than shrink the pilot - shrinking was already rejected in
+	§36 as child-sized.
+
+		K = target length / published length = 15.5 / 8.28 = 1.8720
+
+	⚠️ WHAT THIS SCALES, AND WHAT IT MUST NEVER SCALE.
+
+	Scaled - all of it appearance or ground contact:
+	  - the 116 `decorations` (the whole modelled skin, incl. the interior)
+	  - the three wheel boxes and `PilotSeat` in `parts`
+	  - `gear.wheels` offsets and radii, so contact follows the wheels
+
+	NOT scaled, and this is the point:
+	  - WING_AREA, WING_SPAN, the aero coefficients, `surfaces`
+	  - the nine mass-bearing structural boxes
+	  - the mass budget
+
+	So the aeroplane still flies on a 16.17 m^2, 11.0 m wing weighing 1,111 kg.
+	The drawn wing is visibly larger than the wing the strip theory acts on,
+	and that mismatch IS the intended look - the same trade every arcade-scale
+	flight game makes, made explicitly and in one place instead of by drift.
+
+	⚠️ WHY THE NINE MASS BOXES ARE EXCLUDED - THIS IS THE WHOLE DESIGN.
+
+	Moment of inertia scales as K^2 for a fixed mass. Scaling the structural
+	boxes was measured before it was written, and it multiplies EVERY axis by
+	exactly 3.50x:
+
+	    axis    real 172S   current        if boxes scaled
+	    pitch      1,825     2,951 (1.62x)   10,341 (5.67x)
+	    yaw        2,667     4,922 (1.85x)   17,249 (6.47x)
+	    roll       1,285     2,535 (1.97x)    8,884 (6.91x)
+
+	§29/§31 already record pitch inertia as too high and UNFIXED, and call
+	closing it a decision point for the pilot rather than an assumption. An
+	aeroplane at 6.9x a real 172's roll inertia rolls like an airliner and
+	would not survive the §9/§14 circuit and landing gates.
+
+	Leaving the boxes alone costs nothing that can be seen - they are invisible
+	(`hideStructuralParts`) and they sit INSIDE the enlarged skin - and it
+	preserves the mass budget, the centre of mass, the static margin and the
+	inertia tensor exactly. §31's rule is inverted here knowingly: normally the
+	skin exists to match the box, and this is the one case where the skin is
+	deliberately allowed to outgrow it.
+
+	⚠️ THERE IS NO DENSITY WORK TO DO, AND THAT SURPRISED THE BRIEF.
+	`parts` specify MASS in kilograms and AircraftBuilder solves for the
+	density each one needs (`density = spec.mass / volume`, AircraftBuilder
+	line 263). Mass is the INPUT, so growing a part cannot change its mass -
+	it lowers the density the builder asks for, moving AWAY from the ceiling of
+	100 rather than toward it. The three wheels and the seat are the only mass
+	parts scaled here and their minimum density falls 16.53 -> 2.52, still far
+	above the 0.01 floor.
+]]
+local AIRCRAFT_SCALE = 15.5 / 8.28 -- 1.8720; see above before changing
+
+--[[
+	Scale a length-valued Vector3 by AIRCRAFT_SCALE.
+
+	Only positions, sizes and hinge offsets go through this. Rotations are
+	ANGLES and are invariant under a uniform scale - passing one through here
+	would silently rake every strut and fin by 87%.
+]]
+local function scaled(v: Vector3): Vector3
+	return v * AIRCRAFT_SCALE
+end
+
 --[[
 	Rigging angles.
 
@@ -315,10 +393,23 @@ Cessna172.engine = {
 Cessna172.gear = {
 	retractable = false,
 
+	--[[
+		⚠️ SCALED WITH THE SKIN (§45), because these are where the aeroplane
+		TOUCHES THE GROUND, not where its mass is. The wheel boxes in `parts`
+		are scaled to match, so the contact points, the collidable wheels and
+		the drawn wheels are all still the same three places.
+
+		This does change the ground handling, honestly and visibly: the
+		wheelbase goes 1.8 -> 3.37 m, so the 10-degree steering limit below now
+		gives a turn radius of 3.37 / tan(10 deg) = 19.1 m rather than 10.2 m.
+		A bigger aeroplane needing more taxiway to turn in is the correct
+		consequence of the resize, not a regression - but it IS a change the
+		pilot will feel on the first taxi, so it is written down here.
+	]]
 	wheels = {
-		{ name = "Nose", offset = Vector3.new(0, -0.95, -1.4), radius = 0.18, steering = true },
-		{ name = "Left", offset = Vector3.new(-1.25, -0.95, 0.4), radius = 0.2, braked = true },
-		{ name = "Right", offset = Vector3.new(1.25, -0.95, 0.4), radius = 0.2, braked = true },
+		{ name = "Nose", offset = scaled(Vector3.new(0, -0.95, -1.4)), radius = 0.18 * AIRCRAFT_SCALE, steering = true },
+		{ name = "Left", offset = scaled(Vector3.new(-1.25, -0.95, 0.4)), radius = 0.2 * AIRCRAFT_SCALE, braked = true },
+		{ name = "Right", offset = scaled(Vector3.new(1.25, -0.95, 0.4)), radius = 0.2 * AIRCRAFT_SCALE, braked = true },
 	},
 
 	--[[
@@ -1513,10 +1604,24 @@ Cessna172.model = {
 			combination, so the aircraft behaves the same on any surface and
 			GroundHandling remains the only thing deciding how tyres behave.
 		]]
+		--[[
+			⚠️ THE FOUR PARTS BELOW ARE THE ONLY STRUCTURAL BOXES §45 SCALES.
+
+			The wheels because they ARE the collision geometry (see the gear
+			block: contact is Roblox's solver against real collidable parts), so
+			an unscaled wheel would leave the enlarged aeroplane sitting 0.83 m
+			into the runway. `PilotSeat` because the pilot has to sit in the
+			enlarged cockpit rather than at the old cabin's scale.
+
+			They carry 7 kg of 1,111 between them, so scaling them moves the
+			centre of mass by about a millimetre and the inertia by ~1.5% -
+			measured, not assumed. The nine boxes that hold the other 1,104 kg
+			are untouched, which is what keeps §4's figures where they are.
+		]]
 		{
 			name = "WheelNose",
-			size = Vector3.new(0.16, 0.40, 0.40),
-			position = Vector3.new(0, -0.95, -1.40),
+			size = scaled(Vector3.new(0.16, 0.40, 0.40)),
+			position = scaled(Vector3.new(0, -0.95, -1.40)),
 			mass = 2,
 			color = Color3.fromRGB(30, 30, 32),
 			shape = "Cylinder",
@@ -1526,8 +1631,8 @@ Cessna172.model = {
 		},
 		{
 			name = "WheelLeft",
-			size = Vector3.new(0.16, 0.40, 0.40),
-			position = Vector3.new(-1.25, -0.95, 0.40),
+			size = scaled(Vector3.new(0.16, 0.40, 0.40)),
+			position = scaled(Vector3.new(-1.25, -0.95, 0.40)),
 			mass = 2,
 			color = Color3.fromRGB(30, 30, 32),
 			shape = "Cylinder",
@@ -1537,8 +1642,8 @@ Cessna172.model = {
 		},
 		{
 			name = "WheelRight",
-			size = Vector3.new(0.16, 0.40, 0.40),
-			position = Vector3.new(1.25, -0.95, 0.40),
+			size = scaled(Vector3.new(0.16, 0.40, 0.40)),
+			position = scaled(Vector3.new(1.25, -0.95, 0.40)),
 			mass = 2,
 			color = Color3.fromRGB(30, 30, 32),
 			shape = "Cylinder",
@@ -1581,8 +1686,8 @@ Cessna172.model = {
 				a quarter of a millimetre and is asserted to stay under 0.01.
 			]]
 			name = "PilotSeat",
-			size = Vector3.new(0.55, 0.20, 0.55),
-			position = Vector3.new(-0.30, -0.18, -0.40),
+			size = scaled(Vector3.new(0.55, 0.20, 0.55)),
+			position = scaled(Vector3.new(-0.30, -0.18, -0.40)),
 			mass = 1,
 			color = Color3.fromRGB(60, 55, 50),
 			className = "VehicleSeat",
@@ -1592,6 +1697,36 @@ Cessna172.model = {
 	-- The modelled skin. Built just below, and massless by construction.
 	decorations = SKIN,
 }
+
+--[[
+	§45: grow the whole drawn aeroplane by AIRCRAFT_SCALE, in one pass.
+
+	⚠️ DONE HERE, ONCE, RATHER THAN BY MULTIPLYING 116 LITERALS.
+
+	Every number in the skin above is written at TRUE 172S SCALE and stays that
+	way, so the file can still be read against a three-view drawing and a
+	future edit does not have to remember to pre-divide. This pass is the only
+	place the visual scale is applied, and deleting it returns the aeroplane to
+	life size - which is exactly the property a scale factor should have.
+
+	It runs AFTER `decorations = SKIN` because that field holds the same table
+	reference, so mutating the entries in place updates both. Rebuilding the
+	list would silently leave `decorations` pointing at the unscaled original.
+
+	⚠️ THE THREE LENGTH FIELDS, AND ONLY THOSE THREE. Enumerated from the live
+	definition rather than assumed: across all 116 entries the only fields
+	carrying a length are `position`, `size` and `hinge.offset`. `rotation` is
+	degrees, `maxDeg` is degrees, `sign` and `mirrorSign` are +/-1, and
+	`reflectance`/`transparency` are fractions - every one of them invariant
+	under a uniform scale, and every one of them wrong if scaled.
+]]
+for _, spec in SKIN do
+	spec.position = scaled(spec.position)
+	spec.size = scaled(spec.size)
+	if spec.hinge and spec.hinge.offset then
+		spec.hinge.offset = scaled(spec.hinge.offset)
+	end
+end
 
 -- =========================================================================
 -- VERIFICATION
@@ -1978,19 +2113,29 @@ function Cessna172.runTests(): (boolean, { any })
 	end
 	local envelope = skinMax - skinMin
 
-	-- A centimetre. Tighter than any dimension a pilot could judge by eye, and
-	-- loose enough to survive the trigonometry on the raked fin leading edge.
-	local TOL = 0.01
+	--[[
+		⚠️ RE-PINNED TO THE PUBLISHED SIZE x AIRCRAFT_SCALE (§45).
+
+		The targets are written as `published * AIRCRAFT_SCALE` rather than as
+		the products, so the published 172S numbers stay visible in the file and
+		the check follows the scale factor automatically. Setting K back to 1
+		restores the original assertions with no edit here.
+
+		The tolerance is scaled with them for the same reason it was a
+		centimetre before: it exists to absorb the trigonometry on the raked fin
+		leading edge, and that error grows with the aeroplane.
+	]]
+	local TOL = 0.01 * AIRCRAFT_SCALE
 	local published = {
-		{ "Span", envelope.X, 11.00 },
-		{ "Height", envelope.Y, 2.72 },
-		{ "Length", envelope.Z, 8.28 },
+		{ "Span", envelope.X, 11.00 * AIRCRAFT_SCALE },
+		{ "Height", envelope.Y, 2.72 * AIRCRAFT_SCALE },
+		{ "Length", envelope.Z, 8.28 * AIRCRAFT_SCALE },
 	}
 	for _, d in published do
 		record(
-			string.format("%s matches the published 172S", d[1]),
+			string.format("%s matches the published 172S x %.4f", d[1], AIRCRAFT_SCALE),
 			math.abs(d[2] - d[3]) <= TOL,
-			string.format("%.3f m (published %.2f, tolerance %.2f)", d[2], d[3], TOL)
+			string.format("%.3f m (target %.3f, tolerance %.3f)", d[2], d[3], TOL)
 		)
 	end
 
@@ -2000,10 +2145,21 @@ function Cessna172.runTests(): (boolean, { any })
 		it, or a fin lowered to hit 2.72 m against a sunken undercarriage would
 		pass the check above while sitting wrong on the runway.
 	]]
+	--[[
+		⚠️ THIS IS THE CHECK THAT PROVES §45 KEPT THE AEROPLANE ON ITS WHEELS.
+
+		The contact plane scales with everything else (-1.15 x K), and it is the
+		reason the three wheel boxes had to be scaled alongside the skin: had
+		they been left at life size, this would read -2.152 against wheels still
+		sitting at -1.15 and the aeroplane would be drawn 1 m into the runway
+		while the physics rested on invisible gear.
+	]]
+	local contactPlane = -1.15 * AIRCRAFT_SCALE
 	record(
 		"The shell's lowest point is the wheel contact plane",
-		math.abs(skinMin.Y - -1.15) <= TOL,
-		string.format("%.3f m (wheels centred -0.95, 0.40 m diameter)", skinMin.Y)
+		math.abs(skinMin.Y - contactPlane) <= TOL,
+		string.format("%.3f m (target %.3f; wheels centred %.3f, %.3f m diameter)",
+			skinMin.Y, contactPlane, -0.95 * AIRCRAFT_SCALE, 0.40 * AIRCRAFT_SCALE)
 	)
 
 	local passCount = 0

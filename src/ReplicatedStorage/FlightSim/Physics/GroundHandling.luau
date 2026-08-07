@@ -570,11 +570,32 @@ function GroundHandling.runTests(): (boolean, { any })
 	pad.Parent = workspace
 
 	--[[
-		Cabin (the root) sits 0.15 above the datum; the wheels sit 0.95 below
-		it with a 0.2 radius. Placing the root 1.30 up therefore puts the tyres
-		exactly on the pad's surface.
+		How high to place the ROOT so the tyres sit exactly on the pad.
+
+		⚠️ DERIVED, NOT TYPED, BECAUSE §45 MOVED THE WHEELS.
+
+		This was `1.30`, reasoned as "Cabin sits 0.15 above the datum; the
+		wheels sit 0.95 below it with a 0.2 radius". All three of those numbers
+		were correct at life size and two of them changed when §45 scaled the
+		gear - the wheels are now 1.778 below the datum with a 0.374 radius, so
+		1.30 left the whole aeroplane hanging a metre above the pad and EVERY
+		wheel reported airborne. That is what "0 wheels detected" looked like,
+		and it silently emptied sixteen checks rather than failing one.
+
+		Computing it from the definition means the rig follows the aeroplane:
+		it is right at any scale, including 1.
 	]]
-	local GROUND_Y = 1.30
+	local rootSpec
+	for _, p in Cessna172.model.parts do
+		if p.name == Cessna172.model.rootPart then
+			rootSpec = p
+		end
+	end
+	assert(rootSpec, "root part missing from the definition")
+
+	local mainWheel = Cessna172.gear.wheels[2]
+	local wheelBottomDatum = mainWheel.offset.Y - mainWheel.radius
+	local GROUND_Y = rootSpec.position.Y - wheelBottomDatum
 	local model = AircraftBuilder.build(Cessna172, CFrame.new(TEST_ORIGIN + Vector3.new(0, GROUND_Y, 0)), workspace)
 	local state = GroundHandling.new(model, Cessna172)
 
@@ -808,22 +829,45 @@ function GroundHandling.runTests(): (boolean, { any })
 
 		A steered wheel turns the aircraft about the Ackermann centre, so the
 		steady turn radius is wheelbase / tan(steering angle). Asserted against
-		the geometry rather than against whatever the code produces, and the
-		target is a real one: a 172 turns on a taxiway in about 10 m.
+		the geometry rather than against whatever the code produces.
 
 		Before the change this was 207 m, measured live at 12 kt with full pedal.
+
+		⚠️ §45 IS THE ONE PLACE THIS PROJECT KNOWINGLY LEAVES THE REAL AEROPLANE.
+
+		The wheelbase was 1.8 m and the turn radius about 10 m, both real 172
+		figures. §45 draws the aeroplane at 15.5 / 8.28 = 1.8720x and scales the
+		gear with it, because the wheels are where it TOUCHES THE GROUND - had
+		they been left at life size the enlarged aeroplane would be drawn a
+		metre into the runway, standing on invisible gear.
+
+		So the wheelbase is now 3.37 m and the taxi turn radius 19.1 m. That is
+		not a regression and it cannot be tuned away: an aeroplane drawn 87%
+		larger needs 87% more taxiway to turn in, and any other answer would
+		have the visible wheels sliding sideways across the pavement.
+
+		⚠️ THE RATIO IS WHAT IS REAL NOW, NOT THE ABSOLUTE. Both bounds are
+		expressed against the scale, so they still assert a 172's PROPORTIONS -
+		a wheelbase that is 22% of the aeroplane's length - and would still
+		catch the 207 m bug. Setting §45's factor back to 1 restores the
+		original real-world figures with no edit here.
 	]]
+	local GEAR_SCALE = 15.5 / 8.28 -- §45; see Cessna172.AIRCRAFT_SCALE
+
 	local nose, mainZ
 	for _, w in Cessna172.gear.wheels do
 		if w.steering then nose = w.offset.Z else mainZ = w.offset.Z end
 	end
 	local wheelbase = abs(mainZ - nose)
 	local turnRadius = wheelbase / math.tan(Cessna172.gear.steeringAngle)
-	checkRange("Geometric turn radius matches a real 172", turnRadius, 8, 14, "m")
+	checkRange(
+		"Geometric turn radius is a real 172's, scaled",
+		turnRadius, 8 * GEAR_SCALE, 14 * GEAR_SCALE, "m"
+	)
 	record(
-		"Wheelbase is the real figure",
-		wheelbase > 1.4 and wheelbase < 2.2,
-		string.format("%.2f m nose to mains", wheelbase)
+		"Wheelbase is the real figure, scaled",
+		wheelbase > 1.4 * GEAR_SCALE and wheelbase < 2.2 * GEAR_SCALE,
+		string.format("%.2f m nose to mains (%.2f m at life size)", wheelbase, wheelbase / GEAR_SCALE)
 	)
 
 	-- 9. Numerical safety ----------------------------------------------------

@@ -69,30 +69,90 @@ local CONTAINER_NAME = "Aircraft"
 --[[
 	How high an aircraft's origin sits when its tyres are resting on the ground.
 
-	1.30 m, derived in GroundHandling.runTests() for a surface whose top face is
-	y = 0. Spawning higher means the aircraft free-falls before anyone reaches
-	it; spawning lower means Roblox resolves the interpenetration by launching
-	it. This is a fact about the 172's gear geometry, which is why it lives here
-	with the aircraft rather than with the tarmac.
+	Spawning higher means the aircraft free-falls before anyone reaches it;
+	spawning lower means Roblox resolves the interpenetration by launching it.
+	This is a fact about the aircraft's gear geometry, which is why it lives
+	here with the aircraft rather than with the tarmac.
 
-	WHERE aircraft park is now AirportService's answer, not this module's. They
-	sit on the apron, facing runway 36. The old constant was CFrame.new(0, 1.30,
-	-30) - 30 m south of the world origin on a bare baseplate, offset only to
-	keep clear of Workspace.SpawnLocation, whose 12 x 12 m pad the aeroplane
-	would otherwise have rested on top of. The apron makes that moot: it is 300 m
-	from the origin and nothing else is on it.
+	⚠️ THIS WAS THE HARDCODED 1.30 THAT §45 BROKE, AND IT IS WHY THE AEROPLANE
+	FELL THROUGH THE MAP.
+
+	1.30 was correct while the wheels sat 0.95 below the datum with a 0.2
+	radius. §45 scaled the gear to 1.778 and 0.374, putting the tyres 2.302 m
+	below the root - so a root spawned only 1.30 m up left every wheel 1.0 m
+	UNDERNEATH the apron. The comment above had already predicted exactly what
+	happens next, and it happened: Roblox resolved a metre of interpenetration
+	against a 1,111 kg assembly the only way it can.
+
+	The three test rigs were fixed to derive this and this one was missed,
+	because it is the only copy on the LIVE spawn path rather than in a suite -
+	so every check still passed while the game itself was broken.
+
+	Derived now, from the same geometry the wheels are built from.
+
+	WHERE aircraft park is AirportService's answer, not this module's. They sit
+	on the apron, facing runway 36.
 ]]
-local SPAWN_HEIGHT = 1.30
+local function gearHeightOf(definition: any): number
+	local rootSpec
+	for _, p in definition.model.parts do
+		if p.name == definition.model.rootPart then
+			rootSpec = p
+		end
+	end
+	assert(rootSpec, "definition has no root part")
+
+	-- The LOWEST wheel, not the first: a taildragger's geometry is not the
+	-- 172's, and the aeroplane rests on whichever tyre reaches furthest down.
+	local lowest = math.huge
+	for _, w in definition.gear.wheels do
+		lowest = math.min(lowest, w.offset.Y - w.radius)
+	end
+	return rootSpec.position.Y - lowest
+end
 
 --[[
 	Lateral spacing between parked aircraft, in metres.
 
-	The 172's span is 11.0 m, so 18 m leaves a comfortable 7 m between wingtips.
 	Two aircraft spawned into the same space do not politely overlap - Roblox
 	resolves the penetration explosively, and the first thing either pilot sees
 	is their aeroplane cartwheeling.
+
+	⚠️ ALSO BROKEN BY §45, AND FOR THE SAME REASON. This was 18 m, reasoned as
+	"the 172's span is 11.0 m, so 18 m leaves a comfortable 7 m between
+	wingtips". §45 draws the span at 20.59 m, so 18 m of spacing had the
+	wingtips OVERLAPPING by 2.6 m - the explosive case the paragraph above
+	describes, waiting for a second player.
+
+	Derived from the drawn span, keeping the original 18/11 proportion so the
+	gap between wingtips stays comfortable at any scale.
 ]]
-local SPAWN_SPACING = 18
+local WINGTIP_CLEARANCE_FACTOR = 18 / 11 -- the original 172 figures
+
+local function spanOf(definition: any): number
+	local minX, maxX = math.huge, -math.huge
+	for _, s in definition.model.decorations do
+		minX = math.min(minX, s.position.X - s.size.X / 2)
+		maxX = math.max(maxX, s.position.X + s.size.X / 2)
+	end
+	return maxX - minX
+end
+
+--[[
+	⚠️ TAKEN FROM THE DEFAULT AIRCRAFT, NOT PER-DEFINITION, AND THAT IS A LIMIT.
+
+	The apron slot layout has to be one fixed grid - `slotIsClear` asks whether
+	a patch of tarmac is free before it knows what is going to park on it - so
+	the spacing cannot depend on the aeroplane being spawned. The 172 is the
+	only aircraft, so this is faithful today.
+
+	When a second aircraft with a different span or different gear arrives, both
+	of these become properties the SLOT carries rather than module constants, and
+	the grid is sized to the largest. Flagged rather than pre-built.
+]]
+local DEFAULT_DEFINITION = Registry.get(Registry.DEFAULT_ID)
+local SPAWN_HEIGHT = gearHeightOf(DEFAULT_DEFINITION)
+local SPAWN_SPACING = spanOf(DEFAULT_DEFINITION) * WINGTIP_CLEARANCE_FACTOR
 
 --[[
 	How often the position sanity check runs, in seconds.
@@ -1043,6 +1103,36 @@ function AircraftService.runTests(): (boolean, { any })
 			root.Position.Y, root.Position.Y - AirportService.SURFACE_Y, AirportService.SURFACE_Y)
 	)
 
+	--[[
+		⚠️ THE ONE ABOVE IS CIRCULAR, AND THAT IS WHY THE AEROPLANE SPAWNED
+		UNDERGROUND WITH EVERY SUITE GREEN.
+
+		It compares the spawn against `SPAWN_HEIGHT` - the very constant that
+		was wrong - so it passed happily while the tyres sat a metre below the
+		apron. A test that restates its subject cannot fail with it.
+
+		This one asks the question the constant exists to answer, from the
+		other side: DO THE WHEELS TOUCH THE TARMAC. It measures the built
+		model's actual collidable geometry against the actual surface and never
+		mentions SPAWN_HEIGHT, so it is independent of anything the spawn path
+		believes about itself.
+
+		Tolerance is a centimetre either way: resting ON the surface, not
+		hovering above it and not buried in it.
+	]]
+	local lowestWheel = math.huge
+	for _, p in a:GetDescendants() do
+		if p:IsA("BasePart") and p.CanCollide and not p.Massless then
+			lowestWheel = math.min(lowestWheel, p.Position.Y - p.Size.Y / 2)
+		end
+	end
+	record(
+		"The wheels rest ON the surface, measured not assumed",
+		math.abs(lowestWheel - AirportService.SURFACE_Y) < 0.01,
+		string.format("lowest collidable point %.3f m vs surface %.3f m (%+.3f m)",
+			lowestWheel, AirportService.SURFACE_Y, lowestWheel - AirportService.SURFACE_Y)
+	)
+
 	-- 4b. Parked at the airport, not at the old origin -----------------------
 	--[[
 		The three things that have to be true of a real spawned aircraft once the
@@ -1154,7 +1244,9 @@ function AircraftService.runTests(): (boolean, { any })
 	record(
 		"A second aircraft is parked clear of the first",
 		math.abs(separation.X) >= SPAWN_SPACING - 0.01,
-		string.format("%.1f m apart (spacing %d m)", separation.Magnitude, SPAWN_SPACING)
+		-- %.1f, not %d: the spacing is derived from the drawn span now and is
+		-- not an integer, and string.format("%d", 33.7) is an error in Luau.
+		string.format("%.1f m apart (spacing %.1f m)", separation.Magnitude, SPAWN_SPACING)
 	)
 
 	local slotA = (active[a] :: Record).slot

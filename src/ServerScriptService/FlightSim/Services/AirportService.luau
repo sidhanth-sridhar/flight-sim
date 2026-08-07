@@ -1135,20 +1135,62 @@ local function buildRunwayEnd(runway: Runway, parent: Instance)
 	local right = dir:Cross(Vector3.yAxis).Unit
 
 	--[[
-		Threshold bars: eight stripes across the width, 1.8 m wide and 22.5 m
-		long, starting 6 m in. The count is what a 23 m runway carries in the
-		real marking tables, and a pilot reads the number of stripes as the
-		runway's width - so it is not a free choice.
+		Threshold bars, 1.8 m wide and 30 m long, starting 6 m in.
+
+		⚠️ THE COUNT IS NOT A FREE CHOICE AND IT IS NOT A CONSTANT. A pilot
+		reads the NUMBER OF STRIPES as the runway's width - that is the entire
+		purpose of the marking - so it has to be derived from the width rather
+		than typed. ICAO Annex 14 fixes the table:
+
+		    18 m ->  4 stripes
+		    23 m ->  6
+		    30 m ->  8
+		    45 m -> 12
+		    60 m -> 16
+
+		This was hardcoded to 8 against a 23 m runway, which told every pilot
+		on approach that they were landing on 30 m of pavement. Deriving it
+		means Ridge's 18 m strip and any runway added later are right for free.
 	]]
-	local STRIPE_COUNT = 8
 	local STRIPE_WIDTH = 1.8
-	local STRIPE_LENGTH = 22.5
-	local STRIPE_GAP = 1.0
+	local STRIPE_LENGTH = 30
+	local STRIPE_GAP = 1.8
+
+	local STRIPE_TABLE = {
+		{ width = 18, count = 4 },
+		{ width = 23, count = 6 },
+		{ width = 30, count = 8 },
+		{ width = 45, count = 12 },
+		{ width = 60, count = 16 },
+	}
+
+	--[[
+		Nearest entry, not an interpolation. The table is a set of discrete
+		legal markings - a 26 m runway is marked as one of these, never with
+		seven stripes.
+	]]
+	local STRIPE_COUNT = STRIPE_TABLE[1].count
+	local bestGap = math.huge
+	for _, entry in STRIPE_TABLE do
+		local gap = math.abs(entry.width - runway.width)
+		if gap < bestGap then
+			STRIPE_COUNT, bestGap = entry.count, gap
+		end
+	end
+
+	--[[
+		The centre gap carries the centreline, so the two inner stripes are
+		pushed apart by one extra pitch rather than meeting in the middle.
+		Without this the centreline paint runs straight through the bars.
+	]]
 	local pitch = STRIPE_WIDTH + STRIPE_GAP
+	local half = STRIPE_COUNT / 2
 	local spanStart = -((STRIPE_COUNT - 1) * pitch) / 2
 
 	for i = 0, STRIPE_COUNT - 1 do
-		local lateral = spanStart + i * pitch
+		-- Half the stripes each side, shifted out to leave the centreline clear.
+		local centreShift = if i < half then -STRIPE_GAP / 2 else STRIPE_GAP / 2
+		local lateral = spanStart + i * pitch + centreShift
 		local centre = threshold + dir * (6 + STRIPE_LENGTH / 2) + right * lateral
 		marking(
 			string.format("Threshold%s_%d", runway.id, i),

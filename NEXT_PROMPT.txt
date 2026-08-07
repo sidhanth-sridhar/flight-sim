@@ -1,4 +1,18 @@
- TASK 1 — Phase 4b: the flight tablet. Departure/destination pickers on the AirportService
+ TASK 0 — ⚠️ FLY THE RESIZED AEROPLANE (§45). The 172 is now drawn 1.872x life size and has NOT
+  been flown. All 799 static checks pass, but §9/§14 are flown, not written. Taxi it first: the
+  wheelbase went 1.80 -> 3.37 m and the taxi turn radius 10.2 -> 19.1 m, so it needs noticeably
+  more room to turn. Then takeoff, circuit, landing. If the handling is wrong, K lives in ONE
+  place — Cessna172.AIRCRAFT_SCALE — and setting it to 1 returns the aeroplane to life size with
+  no other edit.
+
+  TASK 0b — AIRPORT WIDENING, the §45 knock-on. NOT part of §45 and deliberately not fixed there.
+  The aeroplane now spans 20.59 m against a 23 m runway (0.90x) and a 15 m taxiway that is NARROWER
+  THAN THE AIRCRAFT. Runway/taxiway/apron very likely need widening to keep the landing and taxi
+  feel. This is airport design = feature work per §44, so it belongs with TASK 5 (Phase 7) rather
+  than with the resize. Decide with the pilot whether to widen the existing field or treat the
+  narrow runway as intended difficulty.
+
+  TASK 1 — Phase 4b: the flight tablet. Departure/destination pickers on the AirportService
   registry, distance/bearing to destination, aircraft picker on Aircraft/Registry.luau. ⚠️ Decide
   with the pilot FIRST: a picker cannot be a clickable UI while flying (cursor-is-the-yoke, §6g/§7)
   and a key cannot choose among airports — so either a modal state that releases the yoke, or

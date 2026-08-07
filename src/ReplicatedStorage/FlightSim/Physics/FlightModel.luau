@@ -873,18 +873,39 @@ function FlightModel.runTests(): (boolean, { any })
 	--[[
 		⚠️ TOLERANCED, NOT EXACT, AND THE TOLERANCE IS PHYSICAL. The arms are
 		measured from the CENTRE OF MASS, and the pilot's seat sits in the left
-		seat (§39), so the centre of mass is 0.27 mm off the centreline by
-		design - 1 kg of seat at 0.30 m against 1,111 kg. An exact mirror test
-		fails on that, having proved nothing.
+		seat (§39), so the centre of mass is off the centreline BY DESIGN - 1 kg
+		of seat against 1,111 kg. An exact mirror test fails on that, having
+		proved nothing.
 
-		1 mm is far below anything aerodynamic: it is 0.04% of the 2.75 m arm,
-		and a real asymmetry - a wing panel defined on the wrong side - would be
-		off by whole metres.
+		⚠️ THE TOLERANCE FOLLOWS THE SEAT, AND §45 MOVED THE SEAT. The offset is
+		seat mass x seat offset / total mass, and §45 scaled the seat's x from
+		0.30 to 0.5616 so the pilot sits in the left seat of the ENLARGED
+		cockpit. The designed asymmetry therefore went 0.27 -> 0.51 mm, and the
+		measured sum - which is twice it - went 0.54 -> 1.01 mm, tripping a
+		tolerance that had been typed as a flat 1 mm.
+
+		Derived from the definition now, so it states the reasoning instead of
+		restating one of its outputs: anything at or below the asymmetry the
+		seat is KNOWN to cause passes, and anything above it is a real fault. A
+		wing panel defined on the wrong side would be off by whole metres.
 	]]
+	local seatSpec
+	for _, p in Cessna172.model.parts do
+		if p.name == "PilotSeat" then
+			seatSpec = p
+		end
+	end
+	-- Twice the CoM offset the seat alone produces, with 2x headroom for the
+	-- other small asymmetries and for floating point.
+	local designedAsymmetry = if seatSpec
+		then 4 * seatSpec.mass * math.abs(seatSpec.position.X) / state.mass
+		else 1e-3
+
 	record(
 		"Wing arms are mirrored about the centreline",
-		math.abs(wingLeftArm.X + wingRightArm.X) < 1e-3,
-		string.format("left x=%.3f, right x=%+.3f (sum %.5f m)", wingLeftArm.X, wingRightArm.X, wingLeftArm.X + wingRightArm.X)
+		math.abs(wingLeftArm.X + wingRightArm.X) < designedAsymmetry,
+		string.format("left x=%.3f, right x=%+.3f (sum %.5f m, seat allows %.5f)",
+			wingLeftArm.X, wingRightArm.X, wingLeftArm.X + wingRightArm.X, designedAsymmetry)
 	)
 	--[[
 		The thrust line sits BELOW the centre of mass on a high-wing Cessna -

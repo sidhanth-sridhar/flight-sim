@@ -2768,3 +2768,169 @@ Hold the right mouse button while flying and the pilot's head turns; release and
 - **Airport design happens BEFORE the 3D modeling pass** (pilot, 2026-08-06) — airports are feature work, not part of the postponed 3D pass.
 - **New features build on the graybox**: whatever a feature needs visually uses the geometry that exists or a graybox placeholder — never a modeling detour.
 - **Phase order from here:** the feature phases first — 4b (flight tablet) → 4c (172S systems) → 5 (weather + jet) → 6 (audio, damage, persistence, tutorial) → the remaining feature phases, **including airport design** — then the **3D modeling pass at the very end**.
+
+---
+
+## 45. The aeroplane is drawn 1.872× life size, and the physics is not (2026-08-07)
+
+**799/799 across 20 suites** (was 790; +9 new checks). `CameraController` 36 → 45, every other suite unchanged in count.
+
+### The decision
+
+**Pilot's call:** the 172 read too small beside the 1.55 m R6 pilot (§36). Enlarge the **aeroplane**; do not shrink the pilot — shrinking was already rejected in §36 as child-sized.
+
+```
+K = target length / published length = 15.5 / 8.28 = 1.8720
+```
+
+| | published 172S | drawn at K | measured on the built model |
+|---|---|---|---|
+| length | 8.28 | 15.50 | **15.500** |
+| span | 11.00 | 20.59 | **20.592** |
+| height | 2.72 | 5.09 | **5.092** |
+| wing root / underside | 0.96 / 0.85 | 1.80 / 1.59 | **1.797 / 1.591** |
+
+### ⚠️ Only the SKIN, the GEAR and the SEAT scale. The nine mass boxes do not.
+
+This is the whole design, and it was measured before it was chosen. Moment of inertia goes as K² at fixed mass, so scaling the structural boxes multiplies **every axis by exactly 3.50×**:
+
+| axis | real 172S | current | if the boxes had scaled |
+|---|---|---|---|
+| pitch | 1,825 | 2,951 (1.62×) | 10,341 (**5.67×**) |
+| yaw | 2,667 | 4,922 (1.85×) | 17,249 (**6.47×**) |
+| roll | 1,285 | 2,535 (1.97×) | 8,884 (**6.91×**) |
+
+§29/§31 already record pitch inertia as too high and **unfixed**, and call closing it a decision point for the pilot rather than an assumption. An aeroplane at 6.9× a real 172's roll inertia rolls like an airliner and would not survive the §9/§14 gates. So the nine boxes holding 1,104 of the 1,111 kg were left alone.
+
+**Scaled:** the 116 `decorations` (whole skin including the interior), the three wheel boxes, `PilotSeat`, and `gear.wheels` offsets and radii.
+
+**Not scaled:** `WING_AREA` 16.17, `WING_SPAN` 11.0, the aero coefficients, `surfaces`, the mass budget, the nine mass boxes.
+
+The drawn wing is visibly larger than the wing the strip theory acts on. **That mismatch is the intended look**, made explicitly in one place instead of by drift.
+
+⚠️ §31's rule is inverted here **knowingly**: normally the skin exists to match the box. This is the one case where the skin is deliberately allowed to outgrow it.
+
+### The wheels and the seat are the exceptions, and both are forced
+
+- **Wheels** — contact is Roblox's solver against real collidable parts (see the gear block). An unscaled wheel leaves the enlarged aeroplane drawn about a metre into the runway, standing on invisible gear.
+- **PilotSeat** — the pilot has to sit in the enlarged cockpit.
+
+Together they are 7 kg of 1,111, so they move the centre of mass by about a millimetre and the inertia by roughly 1.5%. Measured, not assumed.
+
+### ⚠️ There was no density work to do, and the brief assumed there was
+
+The brief called for adjusting part **densities** after K³ ≈ 6.56× volume growth, and forbade touching `mass` fields. **It is the other way round.** `parts` specify **mass in kilograms** and `AircraftBuilder` solves for the density each one needs (`density = spec.mass / volume`, AircraftBuilder line 263).
+
+Mass is the **input**, so growing a part cannot change its mass — it lowers the density the builder asks for, moving **away** from the ceiling of 100 rather than toward it. Minimum density across the scaled parts fell 16.53 → 2.52, still far above the 0.01 floor. **Nothing needed adjusting and nothing was adjusted.**
+
+### §4's numbers, before and after
+
+| | before | after |
+|---|---|---|
+| assembly mass | 1,111 kg | **1,111 kg** |
+| assemblies | 1 | **1** |
+| centre of mass (datum z) | −0.0601 | **−0.0613** (1.2 mm aft) |
+| static margin | 14.18% MAC | **14.27% MAC** |
+| tail arm | 4.210 m | **4.209 m** |
+
+### Goal ratios against the 1.55 m pilot
+
+| | target | achieved | |
+|---|---|---|---|
+| (a) length / pilot height | ~10× | **10.00×** | ✅ authoritative |
+| (b) head below the wing root | yes | **1.55 < 1.591** | ✅ by 41 mm |
+| (c) pilot width / fuselage width | ~0.5 | **0.23** | ⚠️ soft |
+| (d) pilot height / plane height | ~0.5 | **0.30** | ⚠️ soft |
+
+⚠️ **(c) and (d) cannot be met while (a) is met, and the brief said so in advance.** They are eyeballed from screenshots; (a) is the authoritative target. Hitting 0.5 on either would need K ≈ 1.1–1.4, which breaks both (a) and (b). Recorded as a known, accepted discrepancy — **not a defect to chase.**
+
+### Sight lines are preserved exactly, by construction
+
+The eye scales about the datum by the same K as the cockpit:
+
+```
+measured eye (datum) = (−0.562, 1.086, −1.030)
+÷ K                  = (−0.300,  0.580, −0.550)
+seat + EYE_OFFSET    = (−0.300,  0.580, −0.550)   exact
+```
+
+Every vector from the eye to every skin part is therefore `K ×` the original, so **every angle is unchanged**. `COCKPIT_PITCH_DEG` is an angle and was left alone. Verified live: the eye is still enclosed by `Fuselage04`/`Fuselage05`, and `WingLeft`/`WingCentre` still do not block it.
+
+⚠️ §41's published figures (panel +4.5..−32.2°, yoke −11.8..−31.1°, cowl +12.4°) were **not reproduced numerically** — the part subjects, and whether the 13° gaze tilt is folded in, are not recorded, so the convention could not be matched. The invariance argument above is stronger than a re-measurement would have been, but those specific numbers remain unconfirmed.
+
+### Five assertions were pinned to life size and are now derived
+
+None of these were code faults. All five stated an output instead of the reasoning behind it.
+
+| where | was | now |
+|---|---|---|
+| `Cessna172` envelope | `11.00 / 2.72 / 8.28`, tol 0.01 | `published * AIRCRAFT_SCALE`, tolerance scaled |
+| `Cessna172` contact plane | `−1.15` | `−1.15 * AIRCRAFT_SCALE` |
+| `AircraftBuilder` dimensions | flat ranges | ranges `* VISUAL_SCALE` |
+| `FlightModel` wing mirror | flat 1 mm | derived from the seat's mass × offset |
+| `GroundHandling` / `FlightController` rigs | `GROUND_Y = 1.30` | derived: root − (wheel offset − radius) |
+
+⚠️ **`GROUND_Y = 1.30` was the expensive one.** It hung the aeroplane a metre above the test pad, so every wheel reported airborne and **sixteen GroundHandling checks plus one FlightController check silently measured nothing** rather than failing one. A rig constant that encodes geometry must be derived from the definition, or it dies quietly the next time the geometry moves.
+
+⚠️ `CameraController`'s "the cabin encloses the eye" is **the fifth time the assertion rather than the code was wrong** here. The eye now sits at datum y 1.086 while the unscaled `Cabin` box tops out at 0.90, so the structural box genuinely no longer encloses it — and nothing is lost, because `Cabin` is invisible anyway and the skin panels that *are* seen are hidden correctly. The check now accepts the box **or** the `Fuselage%d` panels over it.
+
+### Camera lengths that had to follow the airframe
+
+`CHASE_DISTANCE` 18 → 33.7, `CHASE_HEIGHT` 5.5 → 10.3, `CHASE_LOOK_AHEAD` 6 → 11.2, `FREE_MIN_ZOOM` 8 → 15.0. An 18 m standoff around a 20.6 m span is a close-up of the cabin.
+
+`AIRCRAFT_VISUAL_SCALE` is **duplicated** in `CameraController` rather than imported — §6h forbids the camera depending on one aircraft definition — and `runTests()` asserts the two agree, so they cannot drift silently.
+
+### ⚠️ Ground handling is where this leaves the real aeroplane, and it cannot be tuned back
+
+| | real 172 | now |
+|---|---|---|
+| wheelbase | 1.80 m | **3.37 m** |
+| taxi turn radius | ~10.2 m | **19.1 m** |
+
+An aeroplane drawn 87% larger needs 87% more taxiway to turn in; any other answer has the visible wheels sliding sideways across the pavement. **This is the one §4 figure that could not be brought back to its published value.**
+
+Both assertions now pin the *ratio* against the scale, so they still assert a 172's proportions and would still catch §12's 207 m bug.
+
+
+### 🐛 The aeroplane fell through the map — `SPAWN_HEIGHT` was a fourth hardcoded 1.30
+
+Reported by the pilot immediately after §45 landed. **`AircraftService.SPAWN_HEIGHT = 1.30`** was the same life-size constant already fixed in the `GroundHandling` and `FlightController` test rigs — and it was missed because it is the only copy on the **live spawn path** rather than in a suite.
+
+With the gear scaled, the tyres hang **2.303 m** below the root, so a root placed 1.30 m up left every wheel **1.0 m underneath the apron**. Its own comment had already predicted the outcome:
+
+> *"spawning lower means Roblox resolves the interpenetration by launching it"*
+
+⚠️ **ALL 799 CHECKS PASSED WHILE THE GAME WAS BROKEN.** The suites derive their own ground height and never call `slotCFrame()`, so nothing tested the number the game actually spawns with. A geometry constant on a live path needs a test that exercises *that* path, not an equivalent one beside it.
+
+Fixed by deriving it, like the rigs: `gearHeightOf(definition)` = root y − (lowest wheel offset − radius). It takes the **lowest** wheel, not the first, so a taildragger is right too.
+
+Verified live: root spawns 2.303 m above the apron, wheel bottoms at **+0.000 m** vs the surface, and after 3 s it has drifted **0.5 mm** at zero velocity.
+
+### 🐛 `SPAWN_SPACING` was broken the same way, and had not been hit yet
+
+18 m, reasoned from the 11.0 m span. The drawn span is 20.59 m, so parked aircraft **overlapped by 2.6 m** — the explosive case its own comment describes, waiting for a second player to spawn. Now `spanOf(definition) * 18/11`, preserving the original wingtip clearance proportion. 33.7 m today.
+
+⚠️ Both are taken from the **default** definition, because `slotIsClear()` has to ask whether a patch of apron is free *before* it knows what will park there. Faithful while the 172 is the only aircraft; when a second arrives with different gear or span, these become properties the **slot** carries and the grid is sized to the largest. Flagged, not pre-built.
+
+### It does NOT phase through terrain — that was a measurement error
+
+Chased on the same report and worth recording so it is not re-chased. An aircraft dropped on bare terrain appeared to sink 0.86 m, and a life-size-gear control variant appeared to sink 0.88 m — which looked like a pre-existing collision fault.
+
+**It was neither.** Measuring the terrain **directly beneath the aircraft** instead of at the drop point shows the height holding at **+2.303 m — exactly the rest height — for six seconds**, with a vertical velocity of 0.03 m/s against 4.38 m/s horizontal.
+
+The aeroplane was **rolling downhill**. Wheel friction is 0 by §6f (`GroundHandling` models grip itself), there is no parking brake, and the terrain has 18 m of relief — so a 172 left on a slope rolls, which is correct. The "sink" was the terrain at the original probe point being higher than the ground it had rolled 14 m down to.
+
+⚠️ **Measure the clearance under the object, not against where it started.** Ground contact on sloping terrain cannot be judged from a fixed reference height.
+### ✅ The scale is signed off (2026-08-07)
+
+**Pilot:** *"sizing is fine, we can keep this scale."* K = 1.8720 is **accepted and settled** — it is no longer an open question, and the ratio discrepancies in (c) and (d) above are accepted with it. Do not re-litigate the factor; if a future change needs the aeroplane at a different size, that is a new decision with a new section.
+
+### ⚠️ NOT DONE: the flight gates have not been re-flown
+
+§9/§14 (taxi, takeoff, circuit, landing) **require a pilot** and are flown, not written. Everything above is static verification. The resized airframe is **unflown**, and the first taxi is where the 19.1 m turn radius and the enlarged ground clearance will actually be judged.
+
+### ⚠️ KNOCK-ON, recorded and NOT fixed here
+
+The 20.59 m span is **0.90× the 23 m runway** — the aeroplane is nearly as wide as the pavement it lands on, and the 15 m taxiway is now **narrower than the aircraft**. Runway, taxiway and apron very likely need widening to keep the landing and taxi feel.
+
+**Airport design is feature work per §44 and is a separate task.** Logged in `NEXT_PROMPT.txt`. Do not fix it as part of this change.

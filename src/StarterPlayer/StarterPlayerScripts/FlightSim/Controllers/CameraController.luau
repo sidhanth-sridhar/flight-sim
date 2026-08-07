@@ -125,7 +125,33 @@ local VIEW_FREE = 3
 	clear of the wing's box. Moving it the full 0.30 needs the wing root raised
 	or the eye lowered, and both are airframe changes rather than camera ones.
 ]]
-local EYE_OFFSET = Vector3.new(0, 0.76, -0.15)
+--[[
+	⚠️ SCALED WITH THE AIRFRAME (§45). THE NUMBERS ABOVE ARE STILL THE TRUE ONES.
+
+	Every measurement in the block above - the 0.695 glareshield, the 0.850 wing
+	underside, the 0.155 m slot the eye lives in - was taken against a life-size
+	172, and they are all still correct AT LIFE SIZE. §45 draws the aeroplane at
+	15.5 / 8.28 = 1.8720x, and the cockpit is part of the skin, so the slot the
+	eye has to sit in moved with it: the glareshield is now at y = 1.301 and the
+	wing underside at y = 1.591.
+
+	The offset is therefore written as the measured value TIMES the scale rather
+	than as the product, so the reasoning above stays readable and a change to
+	§45's factor carries the eye with it instead of stranding it inside the
+	panel. Set AIRCRAFT_VISUAL_SCALE back to 1 and this is the original constant.
+
+	⚠️ IT IS DUPLICATED FROM Cessna172, NOT IMPORTED, AND THAT IS DELIBERATE.
+	§6h's rule is that the camera must not depend on an aircraft definition -
+	requiring Cessna172 here would point the arrow from the camera at one
+	specific aeroplane, which is the same mistake as making InputController
+	require this module. runTests() asserts the two agree, so they cannot drift
+	silently; if a second aircraft ever needs a different factor, this becomes a
+	property the definition supplies rather than a constant either side.
+]]
+local AIRCRAFT_VISUAL_SCALE = 15.5 / 8.28
+
+-- Measured at life size: (0, 0.76, -0.15). See the block above.
+local EYE_OFFSET = Vector3.new(0, 0.76, -0.15) * AIRCRAFT_VISUAL_SCALE
 
 --[[
 	How far the cockpit view looks DOWN, in degrees.
@@ -162,11 +188,22 @@ local COCKPIT_PITCH_DEG = 13
 ]]
 local OCCLUSION_MARGIN = 0.12
 
--- Chase geometry, in metres. The aircraft is 8 m long with a 10.5 m span, so
--- this frames the whole aeroplane with room to see where it is going.
-local CHASE_DISTANCE = 18
-local CHASE_HEIGHT = 5.5
-local CHASE_LOOK_AHEAD = 6
+--[[
+	Chase geometry, in metres, and it SCALES WITH THE AIRFRAME (§45).
+
+	The original three numbers framed an aeroplane 8 m long with a 10.5 m span.
+	§45 draws it at 15.5 m long and 20.6 m across, so holding the camera at 18 m
+	would put a 20.6 m wingspan inside an 18 m standoff - the aeroplane would
+	overflow the frame and the chase view would become a close-up of the cabin.
+
+	Scaling all three keeps the FRAMING identical to what was tuned: the same
+	proportion of the screen filled, from the same relative angle. This is the
+	one place where a length has to follow the visual scale even though nothing
+	about the physics changed.
+]]
+local CHASE_DISTANCE = 18 * AIRCRAFT_VISUAL_SCALE
+local CHASE_HEIGHT = 5.5 * AIRCRAFT_VISUAL_SCALE
+local CHASE_LOOK_AHEAD = 6 * AIRCRAFT_VISUAL_SCALE
 
 --[[
 	Chase smoothing time constant, seconds.
@@ -182,6 +219,70 @@ local CHASE_TAU = 0.14
 -- Without this the cockpit view snaps, because it is otherwise rigid.
 local REACQUIRE_TIME = 0.28
 
+-- =========================================================================
+-- FIELD OF VIEW
+-- =========================================================================
+
+--[[
+	⚠️ FOV DOES NOT FIX SCALE, AND NOTHING HERE PRETENDS IT DOES.
+
+	Angular size depends only on the ratio of size to distance, so a world
+	built at 1 stud = 1 m is correctly scaled at ANY field of view. What FOV
+	changes is how that correct geometry is PERCEIVED - a wide frustum pushes
+	everything toward the vanishing point, shrinking it and collapsing the
+	apparent speed with it. That is a rendering choice, not a unit conversion,
+	and it is the only reason this block exists.
+
+	NOTHING IN THIS SECTION MAY TOUCH THE FLIGHT MODEL. FOV is written to
+	Camera.FieldOfView and read by no one else.
+
+	THE VALUES WERE NEVER SET BEFORE THIS, which is the actual finding: the
+	place ran on Roblox's untouched default of 70 degrees VERTICAL. On a 16:9
+	monitor that is about 101 degrees horizontal - far wider than any real
+	cockpit view, and wide enough that a correctly-sized runway reads as a toy.
+
+	Geometrically "correct" FOV for a 27 inch monitor at 60 cm is roughly 31
+	degrees vertical, which is unusable in practice - so, like every flight
+	sim, this compromises:
+
+	  Cockpit 60 - close to a seated pilot's eye-to-windscreen geometry, so
+	              the panel and the runway read at their true size.
+	  Chase   70 - deliberately left at the wide default. This is the view
+	              that carries the game's look, and narrowing it would change
+	              the feel of the whole simulator for no realism gain, since
+	              there is no real-world eyepoint outside the aeroplane to be
+	              faithful to.
+	  Ground  70 - on foot the camera belongs to Roblox; matching its default
+	              means walking around looks like any other Roblox place.
+]]
+local FOV_COCKPIT = 60
+local FOV_CHASE = 70
+local FOV_FREE = 70
+local FOV_GROUND = 70
+
+--[[
+	FOV blend time constant, seconds. Same 1 - exp(-dt/tau) form as CHASE_TAU,
+	so it is frame-rate independent for the same reason.
+
+	A hard cut on the V key reads as a rendering glitch rather than a change of
+	view. 0.15 s is fast enough to feel immediate and slow enough to be seen.
+]]
+local FOV_TAU = 0.15
+
+--[[
+	⚠️ THE HORIZONTAL CLAMP IS WHAT MAKES ULTRAWIDE SAFE.
+
+	Camera.FieldOfViewMode defaults to Vertical, which holds the vertical angle
+	fixed and lets the horizontal grow with the viewport. That is the right
+	choice - it means a wider monitor SHOWS MORE rather than squashing what is
+	there - but taken literally a 32:9 display would derive about 130 degrees
+	horizontal from the 70 vertical chase view, which is a fisheye.
+
+	So the vertical is reduced, but only far enough to hold the horizontal at
+	this ceiling. On 16:9 and 21:9 nothing here does anything at all.
+]]
+local FOV_MAX_HORIZONTAL = 105
+
 --[[
 	Free view must never reach first person.
 
@@ -190,7 +291,11 @@ local REACQUIRE_TIME = 0.28
 	the controls away with no explanation. Clamping the minimum zoom keeps it
 	out of that state entirely.
 ]]
-local FREE_MIN_ZOOM = 8
+-- The minimum scales with the airframe (§45): 8 m used to stand clear of an
+-- 8 m aeroplane, and on a 15.5 m one it is inside the cabin, which is the exact
+-- first-person state this clamp exists to prevent. The maximum is a view
+-- distance rather than an aircraft dimension, so it stays.
+local FREE_MIN_ZOOM = 8 * AIRCRAFT_VISUAL_SCALE
 local FREE_MAX_ZOOM = 400
 
 --[[
@@ -483,6 +588,55 @@ function CameraController.blendFactor(dt: number, tau: number): number
 end
 
 --[[
+	The vertical FOV a given view should be rendered at.
+
+	Pure, and takes `flying` explicitly rather than asking FlightController, so
+	every combination can be tested without a player or an aeroplane. On foot
+	the view index is irrelevant - the camera is Roblox's - so `flying` is
+	checked first.
+]]
+function CameraController.fovFor(viewIndex: number, flying: boolean): number
+	if not flying then
+		return FOV_GROUND
+	elseif viewIndex == VIEW_COCKPIT then
+		return FOV_COCKPIT
+	elseif viewIndex == VIEW_CHASE then
+		return FOV_CHASE
+	end
+	return FOV_FREE
+end
+
+--[[
+	The same FOV, reduced if this viewport would otherwise be a fisheye.
+
+	Roblox holds the VERTICAL angle and derives the horizontal from the aspect
+	ratio, so the conversion is the standard one:
+
+	    tan(h/2) = tan(v/2) * aspect
+
+	and inverting it gives the vertical that lands exactly on the ceiling. A
+	non-positive or non-finite aspect (a minimised window reports a zero-height
+	viewport) is passed through untouched rather than producing a NaN that
+	would then be written straight into Camera.FieldOfView.
+]]
+function CameraController.clampFov(verticalFov: number, aspect: number): number
+	if aspect ~= aspect or aspect <= 0 or aspect == math.huge then
+		return verticalFov
+	end
+
+	local horizontal = 2 * math.deg(math.atan(math.tan(math.rad(verticalFov / 2)) * aspect))
+	if horizontal <= FOV_MAX_HORIZONTAL then
+		return verticalFov
+	end
+
+	local limited = 2 * math.deg(math.atan(math.tan(math.rad(FOV_MAX_HORIZONTAL / 2)) / aspect))
+
+	-- Roblox rejects anything outside 1..120; the clamp can only ever reduce,
+	-- but the floor keeps a pathological aspect from writing a zero.
+	return clamp(limited, 1, verticalFov)
+end
+
+--[[
 	The held camera, while C is down.
 
 	Position still tracks the aircraft's TRANSLATION, so the pilot is not left
@@ -737,6 +891,34 @@ function CameraController.solve(viewIndex: number, cameraHold: boolean, seatCFra
 	return target
 end
 
+--[[
+	Ease Camera.FieldOfView toward whatever this view asks for.
+
+	⚠️ APPLIED ON EVERY PATH, INCLUDING THE ONES THIS MODULE DOES NOT STEER.
+	Free view and the on-foot camera both hand the CFrame back to Roblox, but
+	FieldOfView is a separate property that Roblox's camera never touches - so
+	leaving those branches out would strand the cockpit's 60 degrees on the
+	pilot the moment they stood up or pressed V, with nothing to put it back.
+
+	The blend is skipped once it is within a twentieth of a degree, so the
+	property stops being written every frame at rest.
+]]
+local function applyFov(camera: Camera, dt: number, flying: boolean)
+	local viewport = camera.ViewportSize
+	local aspect = if viewport.Y > 0 then viewport.X / viewport.Y else 0
+	local target = CameraController.clampFov(CameraController.fovFor(viewIndex, flying), aspect)
+
+	local current = camera.FieldOfView
+	if math.abs(target - current) < 0.05 then
+		if current ~= target then
+			camera.FieldOfView = target
+		end
+		return
+	end
+
+	camera.FieldOfView = current + (target - current) * CameraController.blendFactor(dt, FOV_TAU)
+end
+
 local function onRenderStep(dt: number)
 	local camera = workspace.CurrentCamera
 	if not camera then
@@ -788,6 +970,7 @@ local function onRenderStep(dt: number)
 		end
 
 		frameGroundPilot(character)
+		applyFov(camera, dt, false)
 		return
 	end
 
@@ -831,6 +1014,9 @@ local function onRenderStep(dt: number)
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.CFrame = solved
 	end
+
+	-- After solve(), so a view change and its FOV move together in one frame.
+	applyFov(camera, dt, true)
 end
 
 -- =========================================================================
@@ -853,6 +1039,20 @@ function CameraController.Init()
 	]]
 	baseMinZoom = player.CameraMinZoomDistance
 	baseMaxZoom = player.CameraMaxZoomDistance
+
+	--[[
+		Vertical is already Roblox's default, and it is set here anyway.
+
+		The mode decides what FOV_COCKPIT and FOV_CHASE actually MEAN - under
+		`Diagonal` or `MaxAxis` the same 60 would render a different frustum on
+		every aspect ratio, and clampFov's tan(h/2) = tan(v/2) * aspect would
+		silently be solving the wrong equation. Inheriting a default that the
+		numbers depend on is how a value drifts without anyone changing it.
+	]]
+	local camera = workspace.CurrentCamera
+	if camera then
+		camera.FieldOfViewMode = Enum.FieldOfViewMode.Vertical
+	end
 
 	if #CameraController.VIEWS ~= InputController.DEFAULTS.viewCount then
 		warn(string.format(
@@ -986,6 +1186,89 @@ function CameraController.runTests(): (boolean, { any })
 	local model: Model? = nil
 
 	local body = function()
+
+	--[[
+		0a. The visual scale agrees with the aircraft definition ---------------
+
+		AIRCRAFT_VISUAL_SCALE is duplicated rather than imported, for the §6h
+		reason given where it is declared. This is what stops the duplication
+		becoming a drift: the definition scales the cockpit, this module places
+		the eye inside it, and if the two ever disagree the eye ends up in the
+		panel or outside the windscreen with nothing else to say so.
+
+		Derived from the definition's own envelope rather than from a constant
+		it exports, so it is measuring the aeroplane that was actually built.
+	]]
+	do
+		local skinLength = 0
+		local mn, mx = math.huge, -math.huge
+		for _, s in Cessna172.model.decorations do
+			mn = math.min(mn, s.position.Z - s.size.Z / 2)
+			mx = math.max(mx, s.position.Z + s.size.Z / 2)
+		end
+		skinLength = mx - mn
+		-- The axis-aligned skin length at life size, measured before §45.
+		local LIFE_SIZE_SKIN_LENGTH = 9.180
+		local definitionScale = skinLength / LIFE_SIZE_SKIN_LENGTH
+		record(
+			"Camera's visual scale matches the definition's",
+			math.abs(definitionScale - AIRCRAFT_VISUAL_SCALE) < 0.005,
+			string.format("camera %.4f, definition %.4f", AIRCRAFT_VISUAL_SCALE, definitionScale)
+		)
+	end
+
+	-- 0. Field of view ------------------------------------------------------
+	record(
+		"Cockpit is narrower than chase",
+		CameraController.fovFor(VIEW_COCKPIT, true) < CameraController.fovFor(VIEW_CHASE, true),
+		string.format("cockpit %.0f deg, chase %.0f deg",
+			CameraController.fovFor(VIEW_COCKPIT, true), CameraController.fovFor(VIEW_CHASE, true))
+	)
+
+	--[[
+		On foot the view index is irrelevant - the camera belongs to Roblox, so
+		every view has to report the same ground FOV. Without this, standing up
+		in the cockpit view would leave the pilot walking around at 60 degrees.
+	]]
+	local onFoot = {}
+	for i = 1, #CameraController.VIEWS do
+		table.insert(onFoot, CameraController.fovFor(i, false))
+	end
+	record(
+		"On foot every view reports the same FOV",
+		onFoot[1] == onFoot[2] and onFoot[2] == onFoot[3],
+		string.format("%.0f / %.0f / %.0f deg", onFoot[1], onFoot[2], onFoot[3])
+	)
+
+	-- 16:9 and 21:9 must pass through untouched; only a fisheye is reduced.
+	local wide = CameraController.clampFov(70, 16 / 9)
+	record(
+		"16:9 is not clamped",
+		math.abs(wide - 70) < 1e-6,
+		string.format("%.3f deg, horizontal %.1f deg", wide,
+			2 * math.deg(math.atan(math.tan(math.rad(wide / 2)) * (16 / 9))))
+	)
+
+	local ultra = CameraController.clampFov(70, 32 / 9)
+	local ultraHorizontal = 2 * math.deg(math.atan(math.tan(math.rad(ultra / 2)) * (32 / 9)))
+	record(
+		"32:9 is clamped to the horizontal ceiling",
+		ultra < 70 and math.abs(ultraHorizontal - FOV_MAX_HORIZONTAL) < 0.01,
+		string.format("%.1f deg vertical -> %.1f deg horizontal (ceiling %.0f)",
+			ultra, ultraHorizontal, FOV_MAX_HORIZONTAL)
+	)
+
+	--[[
+		A minimised window reports a zero-height viewport. The aspect is then 0
+		or a NaN, and an unguarded atan would write a NaN into FieldOfView -
+		which Roblox keeps, leaving the camera permanently broken.
+	]]
+	local degenerate = CameraController.clampFov(70, 0)
+	record(
+		"A degenerate viewport does not produce a NaN",
+		degenerate == degenerate and degenerate == 70,
+		string.format("%.1f deg", degenerate)
+	)
 
 	-- 1. Views stay in step with the input layer ---------------------------
 	record(
@@ -1266,7 +1549,9 @@ function CameraController.runTests(): (boolean, { any })
 	local hidesCabin, hidesOuterWing = false, false
 	for _, part in occluders do
 		table.insert(names, part.Name)
-		if part.Name == "Cabin" then
+		-- The cabin the pilot is actually sitting inside: the structural box OR
+		-- the fuselage skin panels drawn over it. See the note below.
+		if part.Name == "Cabin" or part.Name:match("^Fuselage%d+$") then
 			hidesCabin = true
 		end
 		if part.Name == "WingLeft" or part.Name == "WingRight" then
@@ -1274,6 +1559,27 @@ function CameraController.runTests(): (boolean, { any })
 		end
 	end
 
+	--[[
+		⚠️ THE STRUCTURAL `Cabin` BOX NO LONGER ENCLOSES THE EYE, AND THAT IS
+		CORRECT - this is the fifth time the assertion here has been the wrong
+		one rather than the code.
+
+		§45 scales the SKIN and the seat by 1.8720 while deliberately leaving
+		the nine mass-bearing boxes at life size, so the pilot's eye rises with
+		the enlarged cockpit to y = 1.14 in the datum frame while the 1.50 m
+		`Cabin` box still tops out at 0.90. The eye is genuinely outside it now.
+
+		Nothing is lost by that. `Cabin` is invisible either way
+		(`hideStructuralParts`), so hiding it never removed a pixel; what the
+		pilot actually sees around them is the fuselage skin, and `Fuselage04`
+		and `Fuselage05` - the panels either side of the glareshield - are
+		exactly what the occluder now reports.
+
+		So the check asks the question it always meant: DOES THE VIEW HIDE THE
+		CABIN THE PILOT IS SITTING INSIDE. It accepts either the structural box
+		or the skin panels over it, which keeps it true at any visual scale
+		including 1.
+	]]
 	record(
 		"The cabin encloses the eye and is hidden",
 		hidesCabin,

@@ -703,11 +703,22 @@ function AircraftBuilder.runTests(definitionOverride: any?): (boolean, { any })
 		)
 	end
 
-	-- 6. Dimensions --------------------------------------------------------
-	-- Against the real aircraft: 11.0 m span, 8.28 m long, 2.72 m tall.
-	checkRange("Wingspan", m.extents.X, 10.0, 11.5, "m")
-	checkRange("Length", m.extents.Z, 7.5, 9.0, "m")
-	checkRange("Height", m.extents.Y, 2.0, 3.2, "m")
+	--[[
+		6. Dimensions --------------------------------------------------------
+
+		Against the real aircraft: 11.0 m span, 8.28 m long, 2.72 m tall - times
+		§45's visual scale, because `extents` measures the BUILT model and §45
+		draws it at 15.5 / 8.28 = 1.8720x.
+
+		These are deliberately loose bounds ("is it about the right size"), not
+		the exact pins - Cessna172.runTests() holds those to a centimetre and
+		measures the skin with each part's rotation folded in. This one is the
+		coarse net that catches a build going obviously wrong.
+	]]
+	local VISUAL_SCALE = 15.5 / 8.28 -- §45; see Cessna172.AIRCRAFT_SCALE
+	checkRange("Wingspan", m.extents.X, 10.0 * VISUAL_SCALE, 11.5 * VISUAL_SCALE, "m")
+	checkRange("Length", m.extents.Z, 7.5 * VISUAL_SCALE, 9.0 * VISUAL_SCALE, "m")
+	checkRange("Height", m.extents.Y, 2.0 * VISUAL_SCALE, 3.2 * VISUAL_SCALE, "m")
 
 	-- 7. Constraints -------------------------------------------------------
 	local root = model.PrimaryPart :: BasePart

@@ -51,7 +51,16 @@
 		-X  west - the taxiway, the apron and the whole circuit live here
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+
+--[[
+	Required for ONE thing: serving the tablet's registry snapshot over
+	RequestAirportList. Everything else in this file is deliberately network-free
+	and stays that way - the split at the top of the file (data is pure, geometry
+	is not) is what lets the snapshot be built and asserted without a client.
+]]
+local Remotes = require(ReplicatedStorage:WaitForChild("FlightSim").Net.Remotes)
 
 local AirportService = {}
 
@@ -805,6 +814,106 @@ function AirportService.flightPlan(fromId: string, toId: string): FlightPlan?
 	}
 end
 
+-- =========================================================================
+-- THE TABLET'S VIEW OF THE REGISTRY (Phase 4b)
+-- =========================================================================
+
+--[[
+	WHY THIS EXISTS: THIS MODULE IS SERVER-ONLY AND THE TABLET IS NOT.
+
+	Everything above is a pure function of the constants in this file, and a
+	client could answer every one of them itself - if it could see them. It
+	cannot: this module lives in ServerScriptService, which does not replicate.
+	So the tablet gets a SNAPSHOT over RequestAirportList instead, and the
+	client-side answer to "how far is Ridge and which way" is this module's own
+	arithmetic rather than a second copy of it. §25's navigation and §14's
+	"presented rather than new physics" both depend on there being exactly one
+	implementation, and this is how that survives the network boundary.
+
+	NO AIRCRAFT IN HERE, DELIBERATELY. Aircraft/Registry.luau already lives in
+	ReplicatedStorage, so the tablet requires it directly and the aircraft picker
+	costs no network at all. Putting the aircraft list in this payload would have
+	invented a second source of truth for something both sides can already see.
+
+	⚠️ THE PLAN MATRIX IS N-SQUARED, AND THAT IS A DELIBERATE TRADE AT N = 2.
+	Every ordered pair of fields is planned once, here, so the tablet can show a
+	distance and a bearing the instant a destination is picked, with no second
+	round trip and no client-side navigation code. Two airports means two plans.
+	At twenty it would be 380 - still a small payload, but that is the point at
+	which this should become a per-pair request rather than a snapshot. The seam
+	is this function; nothing downstream knows the difference.
+]]
+export type TabletAirport = {
+	id: string,
+	name: string,
+	elevation: number,
+	surface: string,
+	-- The field's position at its own elevation, which is what a distance is
+	-- measured from. AIRPORTS stores origin at y = 0; that would be a lie here.
+	position: Vector3,
+	runways: { string },
+	defaultRunway: string,
+}
+
+export type TabletSnapshot = {
+	airports: { TabletAirport },
+	-- plans[from][to]. nil for from == to, exactly as flightPlan() returns nil.
+	plans: { [string]: { [string]: FlightPlan } },
+}
+
+local tabletSnapshot: TabletSnapshot? = nil
+
+--[[
+	The snapshot, built once and reused.
+
+	Caching is safe because the registry is a module-level constant: no airport
+	is added, moved or re-elevated at run time, and if one ever is, it is a code
+	change and a new server. Rebuilding this for every client that opens the
+	tablet would be pure waste.
+
+	AIRPORTS ARE SORTED BY ID, via airportIds(), and the order matters more than
+	it looks: it is the order the picker draws its buttons in, so an unsorted
+	pairs() walk would shuffle the tablet's list between servers.
+]]
+function AirportService.tabletSnapshot(): TabletSnapshot
+	if tabletSnapshot then
+		return tabletSnapshot
+	end
+
+	local ids = AirportService.airportIds()
+
+	local airports: { TabletAirport } = {}
+	for _, id in ids do
+		local airport = AIRPORTS[id]
+		table.insert(airports, {
+			id = airport.id,
+			name = airport.name,
+			elevation = airport.elevation,
+			surface = airport.surface,
+			position = Vector3.new(airport.origin.X, airport.elevation, airport.origin.Z),
+			-- Copied, not referenced: this table crosses the network and is
+			-- handed to a UI, and nothing outside this module may hold a
+			-- reference that could edit the live registry.
+			runways = table.clone(airport.runways),
+			defaultRunway = airport.defaultRunway,
+		})
+	end
+
+	local plans: { [string]: { [string]: FlightPlan } } = {}
+	for _, from in ids do
+		plans[from] = {}
+		for _, to in ids do
+			local plan = AirportService.flightPlan(from, to)
+			if plan then
+				plans[from][to] = plan
+			end
+		end
+	end
+
+	tabletSnapshot = { airports = airports, plans = plans }
+	return tabletSnapshot :: TabletSnapshot
+end
+
 AirportService.APRON_CENTRE = APRON_CENTRE
 AirportService.APRON_SIZE = Vector2.new(APRON_SIZE_X, APRON_SIZE_Z)
 
@@ -1484,6 +1593,22 @@ end
 
 function AirportService.Init()
 	AirportService.build()
+
+	--[[
+		The tablet's one question, answered from the registry.
+
+		A RemoteFunction rather than an event because the tablet asks once, on
+		open, and needs the answer before it can draw anything - there is no
+		state to push and nothing to subscribe to.
+
+		The player argument is ignored on purpose: the airport registry is the
+		same for everybody, and there is nothing here to scope or to leak. It is
+		named rather than dropped so the signature reads as what Roblox actually
+		passes.
+	]]
+	Remotes.Get("RequestAirportList").OnServerInvoke = function(_player: Player)
+		return AirportService.tabletSnapshot()
+	end
 
 	local runway = AirportService.getRunway(PRIMARY_ID) :: Runway
 	log(
@@ -2466,6 +2591,159 @@ function AirportService.runTests(): (boolean, { any })
 		"No ground beyond the field returns nil rather than a number",
 		AirportService.groundHeightAt(Vector3.new(FIELD_SIZE, 50, FIELD_SIZE)) == nil,
 		"nil past the field edge"
+	)
+
+	-- 6b. The tablet snapshot (Phase 4b) --------------------------------------
+	--[[
+		The payload the tablet is drawn from. These checks matter more than most
+		in this file, because this is the ONE place the registry crosses a
+		process boundary: everything above is asserted against the module the
+		test is running inside, and the tablet never sees that module at all.
+	]]
+	local snapshot = AirportService.tabletSnapshot()
+	local allIds = AirportService.airportIds()
+
+	record(
+		"The snapshot lists every registered airport, in id order",
+		#snapshot.airports == #allIds
+			and snapshot.airports[1].id == allIds[1]
+			and snapshot.airports[#allIds].id == allIds[#allIds],
+		string.format("%d airport(s): %s", #snapshot.airports, (function()
+			local names = {}
+			for _, a in snapshot.airports do
+				table.insert(names, a.id)
+			end
+			return table.concat(names, ", ")
+		end)())
+	)
+
+	--[[
+		THE ONE THAT WOULD BE WRONG SILENTLY. AIRPORTS stores `origin` at y = 0
+		and declares `elevation` separately, so a snapshot that copied origin
+		straight through would put both fields at sea level - and every distance
+		the tablet drew would still look completely plausible, because the error
+		is entirely vertical. §25's Downwind bug was exactly this shape.
+	]]
+	local elevatedOk = true
+	local elevatedDetail = "every field carries its own elevation"
+	for _, a in snapshot.airports do
+		if math.abs(a.position.Y - AirportService.elevationOf(a.id)) > 1e-6 then
+			elevatedOk = false
+			elevatedDetail = string.format("%s at y %.1f, declared %.1f", a.id, a.position.Y, AirportService.elevationOf(a.id))
+		end
+	end
+	record("Each airport's position carries its declared elevation", elevatedOk, elevatedDetail)
+
+	--[[
+		A plan for every ordered pair of DIFFERENT fields, and none for a field
+		to itself - which is flightPlan()'s own contract, carried through rather
+		than re-decided here.
+	]]
+	local expectedPlans = #allIds * (#allIds - 1)
+	local planCount, selfPlans = 0, 0
+	for from, byTo in snapshot.plans do
+		for to in byTo do
+			planCount += 1
+			if from == to then
+				selfPlans += 1
+			end
+		end
+	end
+	record(
+		"Every ordered pair of fields is planned, and no field to itself",
+		planCount == expectedPlans and selfPlans == 0,
+		string.format("%d plan(s), expected %d; %d self-plans", planCount, expectedPlans, selfPlans)
+	)
+
+	--[[
+		The snapshot must BE flightPlan()'s answer, not a paraphrase of it. If
+		these two ever disagree there are two navigation implementations in the
+		project and the tablet is flying the wrong one.
+	]]
+	local direct = AirportService.flightPlan("meadow", "ridge") :: FlightPlan
+	local viaSnapshot = snapshot.plans.meadow.ridge
+	record(
+		"The snapshot's plan is flightPlan()'s own answer",
+		viaSnapshot ~= nil
+			and math.abs(viaSnapshot.distance - direct.distance) < 1e-6
+			and math.abs(viaSnapshot.bearing - direct.bearing) < 1e-6
+			and viaSnapshot.arrivalRunway == direct.arrivalRunway,
+		string.format("%.1f m on %03.0f into %s", viaSnapshot.distance, viaSnapshot.bearing, viaSnapshot.arrivalRunway)
+	)
+
+	--[[
+		And the numbers themselves, against the geometry rather than against the
+		code: Ridge sits 1,600 m east and 200 m south of Meadow, so the leg is
+		sqrt(1600^2 + 200^2) = 1,612 m on a bearing east-of-south-east, 097.
+		Asserted here because a tablet showing a confidently wrong bearing is
+		worse than one showing none.
+	]]
+	checkRange("Meadow to Ridge measures 1,612 m", viaSnapshot.distance, 1612.0, 1613.0, "m")
+	checkRange("...on a true bearing of 097", viaSnapshot.bearing, 96.9, 97.3, "deg")
+	checkRange("...and the way home is the reciprocal, 277", viaSnapshot.reciprocal, 277.0, 277.3, "deg")
+	record(
+		"...climbing 150 m, because Ridge is the higher field",
+		math.abs(viaSnapshot.climb - 150) < 1e-6,
+		string.format("%+.0f m", viaSnapshot.climb)
+	)
+
+	--[[
+		The runway list is a COPY. This payload is handed to a UI on another
+		machine, but it is also handed to this suite and to anything else on the
+		server - and table.clone is the difference between a tablet that draws
+		the registry and a tablet that can edit it.
+	]]
+	local firstAirport = snapshot.airports[1]
+	local registryRunways = (AirportService.getAirport(firstAirport.id) :: any).runways
+	table.insert(firstAirport.runways, "__probe")
+	record(
+		"The snapshot's runway list is a copy, not the registry's own table",
+		#registryRunways ~= #firstAirport.runways,
+		string.format("registry still has %d runway(s) at %s", #registryRunways, firstAirport.id)
+	)
+	table.remove(firstAirport.runways)
+
+	--[[
+		EVERY VALUE HAS TO SURVIVE THE NETWORK. A function or an Instance
+		anywhere in this payload makes RequestAirportList throw at invoke time -
+		on the client, inside a pcall, the first time a pilot opens the tablet,
+		which is about the worst place to discover it. Walked here instead.
+	]]
+	--[[
+		Both spellings of a Vector3 are accepted on purpose: `typeof` reports
+		"Vector3" for the datatype, and Luau's native vector type reports
+		"vector". Which one comes back depends on the engine build, and this
+		check is about what the network can carry, not about which spelling the
+		VM chose today.
+	]]
+	local ALLOWED = { string = true, number = true, boolean = true, table = true, Vector3 = true, vector = true }
+	local badType: string? = nil
+	local function walk(value: any, path: string)
+		if badType then
+			return
+		end
+		local t = typeof(value)
+		if not ALLOWED[t] then
+			badType = string.format("%s is a %s", path, t)
+			return
+		end
+		if t == "table" then
+			for k, v in value do
+				walk(v, path .. "." .. tostring(k))
+			end
+		end
+	end
+	walk(snapshot, "snapshot")
+	record(
+		"Every value in the payload can cross a remote",
+		badType == nil,
+		badType or "only strings, numbers, booleans, tables and Vector3s"
+	)
+
+	record(
+		"The snapshot is built once and cached",
+		AirportService.tabletSnapshot() == snapshot,
+		"same table returned"
 	)
 
 	-- 7. Rebuild is idempotent ------------------------------------------------

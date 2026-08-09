@@ -146,6 +146,18 @@ local lastPointer: Vector2? = nil
 local windowFocused = true
 
 --[[
+	True while the flight tablet is up (Phase 4b), and the third thing after
+	typing and focus loss that releases the yoke.
+
+	IT LIVES HERE RATHER THAN BEING READ FROM TabletController, and the direction
+	is the whole point: TabletController requires this module - for the aircraft,
+	the systems and whether the wheels are down - so this module requiring it
+	back would be a cycle. The tablet PUSHES its state in through
+	setTabletOpen(); nothing here knows the tablet exists beyond this boolean.
+]]
+local tabletOpen = false
+
+--[[
 	Reused every frame rather than reallocated. One small table per frame per
 	aircraft is real collector pressure at 240 fps for no benefit - the input
 	layer reads these numbers immediately and never retains them.
@@ -1038,8 +1050,18 @@ local function startLoop()
 			inverted. Trim is untouched, so a trimmed aircraft keeps its
 			attitude exactly as it would with the pilot's hands off the yoke.
 		]]
+		--[[
+			The tablet's state reaches the input layer here and nowhere else.
+
+			Written every frame rather than on the toggle, because rig.input is
+			rebuilt with every aircraft: an aeroplane adopted while the tablet was
+			open would otherwise start life with a stale false, and the pilot
+			would be clicking a destination with the cursor live on the yoke.
+		]]
+		rig.input.systems.tabletOpen = tabletOpen
+
 		local snapshot
-		if isTyping() or not windowFocused then
+		if isTyping() or not windowFocused or tabletOpen then
 			--[[
 				Both release the yoke rather than freezing it, and both keep
 				trim, so a trimmed aircraft simply flies on hands-off.
@@ -1050,6 +1072,19 @@ local function startLoop()
 				flying at all, and holding full back stick because that is where
 				the cursor happened to be would keep looping the aeroplane while
 				they read something else.
+			]]
+			--[[
+				The tablet joins the other two for the same reason and by the
+				same mechanism (Phase 4b). It is the strongest of the three: not
+				only is the cursor about to be dragged across the screen to
+				click something, the KEYS must be inert too, or picking a
+				destination could not happen without the throttle and the flaps
+				answering the keyboard underneath it.
+
+				This is also what leaves the tablet key itself to be read off
+				InputBegan by TabletController: with a neutral snapshot going in,
+				update() sees no keys at all, so the key that CLOSES the tablet
+				could not be one update() consumes.
 			]]
 			snapshot = InputController.neutralSnapshot()
 		else
@@ -1462,6 +1497,48 @@ end
 -- True only while the pilot is seated and the frame loop is actually running.
 function FlightController.isFlying(): boolean
 	return stepConnection ~= nil
+end
+
+--[[
+	Are the wheels on the ground? (Phase 4b)
+
+	A fourth narrow reader, added for the tablet's gate - one of the two states
+	in which a clickable UI is allowed to exist (see InputController.tabletMayOpen).
+
+	It reports the GEAR's own telemetry rather than comparing altitude against a
+	field elevation, which is the tempting version and is wrong in the way that
+	matters: an aeroplane 0.4 m above the runway on its way down is not on the
+	ground, and one sitting on the grass a hundred metres off the strip is. The
+	gear already answers this every frame, from real wheel contact, because
+	GroundHandling has to.
+
+	False with no aircraft, which is the honest answer to "are ITS wheels down" -
+	the caller asks isFlying() first, and the gate treats not-flying as its own
+	case anyway.
+]]
+function FlightController.isOnGround(): boolean
+	return rig ~= nil and rig.gear.telemetry.onGround == true
+end
+
+--[[
+	Open or close the tablet's hold on the controls (Phase 4b).
+
+	The one writable thing this module exposes, and it is deliberately a boolean
+	rather than a handle: TabletController decides WHETHER the tablet is up - it
+	owns the key, the gate and the UI - and this module decides what that does to
+	the yoke. Neither can reach into the other.
+
+	Taking effect is immediate but not instantaneous, and that is correct: the
+	next frame sends a neutral snapshot and the yoke eases to neutral through the
+	same smoothing every other control change goes through. A yoke that snapped
+	would be a step input into a trimmed aeroplane.
+]]
+function FlightController.setTabletOpen(open: boolean)
+	tabletOpen = open == true
+end
+
+function FlightController.isTabletOpen(): boolean
+	return tabletOpen
 end
 
 --[[

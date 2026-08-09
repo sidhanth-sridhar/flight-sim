@@ -69,6 +69,8 @@ end
 		FlightController   - runs the flight model each frame
 		CameraController   - needs an aircraft to follow
 		UIController       - needs aircraft state to display
+		TabletController   - needs FlightController, both to read the aircraft's
+		                     state for its gate and to hand the yoke back
 		AudioController    - needs engine state
 
 	Names not present yet are skipped silently, so this list can be written
@@ -80,6 +82,7 @@ local CONTROLLER_ORDER = {
 	"FlightController",
 	"CameraController",
 	"UIController",
+	"TabletController",
 	"AudioController",
 }
 

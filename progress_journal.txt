@@ -1,0 +1,339 @@
+PROGRESS JOURNAL
+===============
+
+Project: Roblox flight sim (Cessna 172S). Source of truth = HANDOFF.md.
+
+----------------------------------------------------------------------------
+2026-08-03 (Mon) — Day 1: the simulator's core is built
+----------------------------------------------------------------------------
+- Initial commit. Project scaffolding, README.
+- Cessna 172 definition + aircraft builder + engine model.
+- FlightModel: per-surface strip-theory aerodynamics integrator.
+- GroundHandling: force-based nose-wheel steering, tyres, brakes.
+- InputController + FlightController: the frame loop and controls.
+
+Issues faced:
+- Centre-of-mass frame mismatch: Roblox reports AssemblyCenterOfMass from the
+  root part, the definition measures from a datum — fixed with a DatumOffset
+  attribute.
+- Cylinder volume: Roblox masses cylinders at pi/4 of their box, so wheels
+  came out 21% light — fixed with a SHAPE_VOLUME_FACTOR table.
+- StarterPlayerScripts subtree would not sync: Rojo silently refuses to patch
+  a subtree whose root it did not create. Fixed by deleting the folder in
+  Studio and letting Rojo recreate it.
+- Windmilling RPM read negative on a parked aircraft (forward airspeed drifts
+  negative) — clamped at zero.
+
+----------------------------------------------------------------------------
+2026-08-04 (Tue) — Day 2: Phase 1 signed off, Phase 2 instruments begun
+----------------------------------------------------------------------------
+- PTFS-style free-cursor yoke; walk speed raised to 7 m/s.
+- CameraController: cockpit / chase / free views on V and C.
+- Debug HUD; seated pilot hidden; reset aircraft on Backspace; T toggles
+  first/third person.
+- Phase 1 gate flown and signed off (taxi, takeoff, turns, stall, landing).
+- Ground effect modelled (induced-drag reduction near the ground).
+- AirportService: runway 18/36, taxiway, apron.
+- Tailplane rigged to lift + wider trim so it trims hands-off.
+- Nose-wheel steering fixed: taxi turn radius 207 m -> 19 m.
+- Yoke inset bug fixed; HUD shows attitude, peak alpha, stall marks.
+- Gauge framework (dial-as-spec), then the six-pack on real telemetry.
+- Tachometer + fuel gauge; H toggles the HUD; panel split ready for 3D.
+- Replaced the baseplate with terrain; airport lifted onto it at 250 m.
+- Phases 5 and 6 planned; Phase 4 refined for realism.
+
+Issues faced:
+- Tyres glued to the runway: wheel friction 0.6 combined with the runway to
+  ~0.45, more than static thrust could break (needs < 0.255). Fixed with
+  friction 0 / frictionWeight 100 — the sim's own GroundHandling does the grip.
+- The yoke was biased nose-up by the GUI inset: GetMouseLocation() reports in
+  the full viewport space while the viewport included the top bar. The pointer
+  was NOT being reduced by the inset. One-line fix; measured top/bottom/centre
+  = -1.000 / +0.000 / +1.000.
+- Boarding a spawned aircraft threw it across the apron: displacement
+  12.32 m -> 7.84 m -> 0.000 m across three fixes (spawn slot on the pad,
+  Pilot/Aircraft collision groups, seated pilot made fully non-collidable).
+- Tailplane rigged the wrong way round — the 172 trims with a LIFTING tail
+  (CG aft of wing AC). It was untrimmable in every configuration; fixed by
+  flipping STAB_INCIDENCE and widening trim range.
+- Nosewheel steering: a sideways force on a straight-pointing wheel does not
+  steer — the mains cancel it (1,300 N·m -> 207 m turn radius). The wheel now
+  steers by being aimed (10 degrees) before grip acts.
+- AoA readout looked stuck: alpha was correct, but attitude wasn't shown
+  beside it and alpha had no peak capture. HUD now shows ATT, bank, peak alpha.
+- Terrain blending issues at the second airport: nearest-pad blending gave a
+  45.8 m cliff; 64 m blocks gave a 21.5 m staircase. Fixed with weighted
+  blending and 16 m blocks.
+- Grass was burying the runway: metre-tall blades grew through the pavement.
+  Terrain.Decoration doesn't exist, so the ground is Grass tinted green.
+- Test harness faults cost real time: throttle left at 0 (idle glide),
+  airspeed force-held (+50 m/s climb), pitch inertia guessed at 1825 vs 4922.
+
+----------------------------------------------------------------------------
+2026-08-05 (Wed) — Day 3: Phase 3 world, altitude hold, pilot scale, Phase 4
+----------------------------------------------------------------------------
+- Terrain fitted to multiple airport pads; Ridge Strip added; spawn at the
+  nearest aerodrome; flight plans between airports.
+- Altitude hold (R) built, damped, cursor-immune; porpoise fixed and
+  signed off at 125.1 kt.
+- Pilot scaled to 1.75 m via Model:ScaleTo (R15 scale values do nothing).
+- Cessna exterior modelled (78 parts, lofted fuselage, moving control
+  surfaces, spinning prop); physics untouched (still 1,111 kg).
+- Instruments made to read like instruments: ASI position error, magnetic
+  DI, baro-set altimeter. 743/743 tests green.
+- Imported the Sketchfab Cessna mesh and wired it in as a visual shell.
+
+Issues faced:
+- Altitude hold porpoising (112-118 kt limit cycle) and slamming the nose
+  down when engaged in a climb. Fixed with an airspeed-scheduled gain and an
+  inner vertical-speed loop.
+- R15 scale NumberValues did nothing (rig moved 0.00 studs) — the "fix"
+  printed what it asked for, not what it did. The real answer was
+  Model:ScaleTo(); Humanoid has no ScaleTo.
+- Pilot scaling measured mid-pose: the Animate script eases limbs for ~1 s,
+  so mid-pose readings scaled the pilot to 1.41/1.69 m instead of 1.75.
+  Now waits for two agreeing readings.
+- A duplicate part name silently detached the tailplane and lost 20 kg —
+  only a measurement caught it.
+- Ailerons deflected backwards, and the first test asserted the wrong sign.
+- The Edit session's require cache lied twice (reported ailerons still
+  backwards after they were fixed). Play gets a clean cache, Edit does not.
+- Altitude hold still drifts slowly up/down while engaged — accepted as
+  realism by the pilot, deliberately NOT "fixed" to a dead-flat hold.
+
+----------------------------------------------------------------------------
+2026-08-06 (Thu) — Day 4: mesh purged, scale factors fixed, tuning
+----------------------------------------------------------------------------
+- The imported mesh was "weird" and the fitted scale abnormal — purged ALL
+  mesh-shell code from AircraftBuilder and Cessna172. Deferred, not
+  abandoned; will be re-decided from scratch later.
+- The pre-mesh 78-part shell model is the exterior again
+  (exteriorFromMesh = false).
+- Cessna dimensions fixed in the part layout to the published 172S size:
+  8.28 x 11.00 x 2.72 m, with an envelope test in Cessna172.runTests().
+- Character WALK_SPEED 7 -> 20 m/s and JUMP_HEIGHT -> 4 m (it's a sim;
+  footspeed doesn't matter).
+- Scale targets pinned for next work: pilot 1.75 x 0.5 m, Cessna
+  8.28 x 11.00 x 2.72 m.
+
+Issues faced:
+- Mesh shell sat wrong on the aeroplane and the fitted scale was abnormal —
+  decided to purge rather than debug (deferred to a later stage).
+- Could not control the plane in one session — cause not yet diagnosed
+  (unresolved, parked).
+- Also today (out of project): opencode "token not provided" — the auth.json
+  stored the token in a legacy plain-string format the current version
+  silently drops; rewritten to the object form {type:api, key:...}.
+
+----------------------------------------------------------------------------
+2026-08-06 (Thu) — Day 4 (continued): pilot scale, cockpit interior, seats
+----------------------------------------------------------------------------
+- Pilot re-scaled to 1.55 m (from 1.75); the camera pivots on the head
+  centre so the orbit is seamless; the trim tab hinges to the elevator and
+  rides with it. Re-fly cleared (§36/§37).
+- Seat decision (pilot): structural PilotSeat lowered ~0.4 m AND shifted left
+  for the two-seat 172 layout — pilot LEFT, copilot right, shared centre
+  pedestal; the copilot gets its own yoke/throttle and panel reach.
+- Interior build: 38 massless decorations (floor, 2 seats, panel board,
+  glareshield, breakers, 2 yokes, 4 pedals, throttle/mixture, trim wheel,
+  fuel selector, 6 switches, magneto key). Physics identical (§31).
+- Six-pack mounts on the real panel board via SixPack.mountOnPart — no
+  drawing code changed (§19's promise). Board 0.96 x 0.472 m at z -0.98,
+  set by the raked windscreen; aspect 2.0333:1 pinned by a check.
+- The cockpit now shows the cockpit (§40): COCKPIT_PITCH_DEG = 22 frames the
+  panel and yoke; cockpitEyePosition splits the position so hideForCockpit
+  never carries the pitch (no flicker on roll). 790/790 green, Camera 36/36.
+- PilotSeat moved to x = -0.30 (structural, §4 re-verified; lateral CoM moved
+  0.27 mm vs a 10 mm bound). SEAT_X is the single number placing seat,
+  cushion, yoke and eye.
+- Eye at x = -0.10, not -0.30: a full offset lands inside the structural
+  WingLeft box and the occluder hides the left wing; -0.10 is inside the
+  pilot's cushion, clear of the wing. Yoke raised to 53 deg below the eye
+  (was 75) so the 22 deg pitch clears it.
+- Two symmetry tests (wing arms, steering) asserted to 1e-6 were measuring
+  the seat's centrelines; they now carry a physical tolerance (1 mm of arm,
+  0.1% of torque) — a real asymmetry is off by whole metres.
+
+Pilot's new reports (written into NEXT_PROMPT.txt):
+- (a) The view reads as too high / looking down. A Cessna pilot looks
+  slightly UP over the cowl with the whole dashboard — instruments,
+  switches, levers, yoke — in front of them. This demands a geometry fix:
+  close the 0.19 m eye gap and/or lower the cowl deck (the pilot's call).
+- (b) No TANGIBLE flight instruments inside the cockpit — the six-pack the
+  pilot sees is still the screen panel; the 3D board is blank. Wire
+  mountOnPart live, view-dependent with the screen panel (first-person =
+  3D panel, third-person = screen panel), only while flying.
+- Still open: T free-look (T still toggles views), avatar rigging (blocked).
+
+Issues faced:
+- EYE_OFFSET 0.65 -> 0.98 holds the eye at y 0.80, deliberately 0.19 m ABOVE
+  the avatar's real seated eyes — riding the seat down lands it at 0.47,
+  under the 0.695 glareshield. Root cause: the cowl deck (Fuselage04 tops
+  1.075 m vs a real 172's ~0.75). Closing it means lowering the loft's
+  shoulder — an exterior-profile change the pilot has now called for.
+- Model:ScaleTo does not scale Roblox's seat weld — a seated rig sat 2.1 m
+  above the seat, unseen only because the seated pilot is transparent (§35).
+  Still blocks avatar rigging.
+- A lower cockpit eye sits INSIDE the glareshield/panel boxes, and
+  hideForCockpit hides whatever encloses the eye — the sight-line fix must
+  keep the cockpitEyePosition split so the hidden set never changes with the
+  camera's attitude (flicker on roll).
+
+----------------------------------------------------------------------------
+2026-08-06 (Thu) — Day 4 (continued): the sight line, Task A done (§41)
+----------------------------------------------------------------------------
+- Task A done: the 22 deg pitch-down was a SYMPTOM — the cause was the eye
+  0.19 m above the avatar's real seated eye. Dropped the eye to y 0.61
+  (EYE_OFFSET.y 0.98 -> 0.79) and the dashboard group 0.116 m with it; a 16
+  deg down gaze holds the horizon AND the whole board (panel +4.5..-32.2,
+  yoke -11.8..-31.1, cowl top +12.4 - slightly up over it).
+- NO exterior geometry changed - the cowl-deck remodel was NOT needed.
+  Fuselage04 is hidden in cockpit view anyway; only the glareshield
+  DECORATION blocked the sight line.
+- Bonus: the occlusion set shrank. At the lower eye only Cabin, Fuselage04,
+  Fuselage05 enclose it - the windscreen and both wings are visible again;
+  the board, glareshield and yoke are never enclosed.
+- Task B NOT done, bluntly: the 3D board is still BLANK in flight. mountOnPart
+  is built and tested but nothing wires it to a flying aircraft - the dials
+  were hand-driven in BOTH verification shots. View-dependence (cockpit = 3D
+  live + screen off; chase/free = screen live + 3D off) is recorded,
+  unimplemented. T free-look and avatar rigging still untouched.
+
+Pilot's new feedback (written into NEXT_PROMPT.txt):
+- View still a bit TOO HIGH and still looks DOWN; and it should be slightly
+  MORE TO THE LEFT (toward the pilot seat; WingLeft blocker was measured at
+  the old high eye - re-check at y 0.61). Drop the eye a touch more, raise
+  the gaze a bit above 16 deg.
+- Then the main work: TANGIBLE instruments (wire the live six-pack) and the
+  YOKE and THROTTLE as working controls - the 3D yoke/throttle move with and
+  drive the same physics as the cursor yoke, so the cockpit controls are real
+  devices the pilot can see act on the aeroplane.
+
+----------------------------------------------------------------------------
+2026-08-06 (Thu) — Day 4 (continued): cockpit 3D work parked, Phase 4b begun
+----------------------------------------------------------------------------
+- Decision (pilot): leave ALL the cockpit 3D design for now - the sight-line
+  fine-tuning (left/lower/look up), tangible instruments, working
+  yoke/throttle, T free-look, and the seated avatar are PARKED, not abandoned
+  (recorded in HANDOFF §42). The simulator is flyable with the screen panel;
+  that is the priority for the remaining session budget.
+- Next task moved to Phase 4b (flight tablet): choose an aircraft and a
+  destination from inside the aeroplane - departure/destination pickers on
+  the AirportService registry, distance/bearing to the destination, aircraft
+  picker on Aircraft/Registry.luau.
+- The tablet is the first input-absorbing feature: cursor-is-the-yoke means it
+  cannot be a clickable UI while flying. The keyboard-bind decision covers
+  switches (key flips state) but not a picker - must decide modal-state-vs-
+  ground-only with the pilot BEFORE building, not during.
+
+----------------------------------------------------------------------------
+2026-08-06 (Thu) — Day 4 (continued): GRAYBOXING decided
+----------------------------------------------------------------------------
+- Decision (pilot): postpone ALL aircraft/cockpit 3D modeling until the first
+  version of the game with all of its features is done - GRAYBOX mode
+  (recorded in HANDOFF §44). Existing geometry (Cessna exterior, cockpit
+  interior, closed white cabin) stays as-is and IS the graybox.
+- Airport design is EXCLUDED from the postponement - airports are feature work
+  and happen BEFORE the 3D modeling pass.
+- The §42 parked cockpit work stays parked: working yoke/throttle (inert),
+  UNVERIFIED 3D panel wiring (screen panel stays the live instrument set),
+  seated avatar (blocked on §35). Right-button free-look is done (§43) and
+  supersedes the T free-look idea.
+- New features use existing geometry or graybox placeholders - never a
+  modeling detour. Order: 4b tablet -> 4c systems -> 5 weather+jet -> 6
+  audio/damage/persistence/tutorial -> remaining feature phases incl. airport
+  design -> 3D modeling pass at the very end.
+- Housekeeping: removed a duplicate §42 (my earlier "parked" section) so
+  HANDOFF numbers are clean again.
+
+
+----------------------------------------------------------------------------
+2026-08-09 (Sun) — Day 5: Phase 4b, the flight tablet
+----------------------------------------------------------------------------
+881/881 across 22 suites (was 799). +82 checks. Two new suites.
+
+THE DECISION (asked before building, as HANDOFF 14 required)
+- The open question was modal-releases-the-yoke vs ground-only. The pilot
+  chose NEITHER: the tablet works ON THE GROUND or WITH ALTITUDE HOLD
+  ENGAGED.
+- That is the better answer and it costs nothing: section 28 already made
+  the mode on R ignore the cursor completely, so with it engaged the pilot's
+  hands are off the controls by construction. No new modal state, no new
+  hand-off, nothing to tune.
+
+BUILT
+- UI/Tablet/Tablet.luau - the screen panel (graybox, section 44) and every
+  pure decision: default selection, the from/to swap rule, the plan lookup,
+  the exact rows a pilot reads. 32 checks.
+- Controllers/TabletController.luau - the key, the gate, the remotes, the
+  lifecycle. 9 own checks, 41 aggregate. Added to CONTROLLER_ORDER (the
+  bootstrap only scans Controllers/).
+- AirportService.tabletSnapshot() - airports plus every ordered pair's
+  flightPlan(), served over RequestAirportList. The tablet LOOKS UP
+  navigation, it never recomputes it. 11 new checks.
+- AircraftService.evaluateFlightRequest() + the StartFlight handler -
+  validates an untrusted payload and spawns at the CHOSEN departure field.
+  19 new checks.
+- InputController.tabletMayOpen() - the pilot's rule as a pure function, all
+  four states asserted. systems.tabletOpen added (NOT a Controls field - the
+  six-field contract is untouched). M is the key. 11 new checks.
+
+THE GATE IS RE-CHECKED EVERY FRAME, and that closes a real hole
+- Open the tablet on the take-off roll (legal, wheels down), then do nothing:
+  the throttle is a lever and holds, so the aeroplane flies itself off and is
+  airborne, hand-flying, yoke released, clickable panel on screen.
+- So it is a CONDITION, not an event. Heartbeat re-checks; the moment it
+  fails the tablet closes itself and says why. Verified live - shut within
+  0.3 s of the wheels leaving.
+
+THREE BUGS, AND ONLY ONE WAS FINDABLE BY TESTING
+1. My test fixture said Meadow departs on 36 (its default). The live answer
+   is 18 - bestRunwayFor picks the runway pointing at the destination, and
+   Ridge is south as well as east. The fixture is read off a live remote now.
+2. STARTING A FLIGHT FROM A FIELD YOU ARE NOT AT LEFT THE PILOT BEHIND.
+   Every unit test passed; the feature was broken. The aeroplane parked at
+   Ridge perfectly and the pilot stayed at Meadow 1.6 km away - and WORKSPACE
+   STREAMING IS ON, so their client held the model shell with 0 of its 128
+   parts, which looks exactly like a silent spawn failure. Only flying it
+   found this. The pilot travels with the flight now.
+3. AND THE FIRST FIX BURIED THEM 2.3 m INSIDE THE HILLSIDE. The standing
+   height was measured by raycasting down from the character's root via
+   groundHeightAt - which excludes the Aircraft folder AND NOTHING ELSE. The
+   ray starts at the top of the R6 torso and hit the pilot's OWN HEAD, giving
+   a standing height of -2.3 m. They fell through the world, died, and
+   respawned at the wrong airport with a fresh aeroplane. Derived from
+   Model:GetBoundingBox() now.
+
+VERIFIED LIVE (real keypresses, real bootstrap, real remotes)
+- Tablet builds DISABLED, so a closed tablet absorbs no cursor travel.
+- Populated at startup; summary matches the pure suite exactly.
+- StartFlight Ridge->Meadow: aeroplane on Ridge's slot, pilot beside it,
+  stable, all 128 parts streamed.
+- M on the ground -> opens. Lifted -> shuts itself with the reason. R at
+  altitude -> opens again.
+
+HOUSEKEEPING
+- Section 4's table had three stale rows (CameraController 36->45 from
+  section 45, SixPack 48->53, InstrumentError 24->23). Corrected by running
+  each suite rather than by inheriting the row - the old figures summed to
+  877 against a measured 881.
+
+NOT BUILT, DELIBERATELY
+- No live distance-to-run from the aircraft's position: it needs a heading on
+  the client, which would be a SECOND implementation of headingOf. Section 14
+  already homes the moving map in Phase 8, on this same snapshot.
+- FlightEvent is still unwired - the tablet starts a flight, it does not yet
+  follow one.
+
+----------------------------------------------------------------------------
+NEXT
+----------------------------------------------------------------------------
+Pilot flies the tablet (the five hand-tests in section 46) before Phase 4c
+starts - the test-gate rule. Then 4c (172S systems: rudder trim, fuel
+selector, mixture, mags, electrical, engine gauges, lights), then 5 (weather
++ jet), then 6, then the remaining feature phases incl. airport design, then
+the 3D modeling pass at the very end.
+
+Still open, unchanged: pitch-inertia decision point; and section 45's
+knock-on that the 20.59 m span is 0.90x the 23 m runway and wider than the
+15 m taxiway - airport design is feature work and a separate task.

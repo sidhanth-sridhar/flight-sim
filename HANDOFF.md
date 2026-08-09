@@ -4,9 +4,13 @@
 
 ---
 
-## 0. Resume here — state at 2026-08-06
+## 0. Resume here — state at 2026-08-09
 
-**All 790 checks green across 20 suites.** Sixteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 881 checks green across 22 suites.** Eighteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+
+📱 **THE FLIGHT TABLET IS IN, AND PHASE 4b'S OPEN DECISION IS CLOSED (§46).** ⚠️ **The pilot's answer was neither option §14 wrote down.** Not "modal, releases the yoke anywhere" and not "ground only", but **on the ground OR with altitude hold engaged** — and the second half costs nothing, because §28 already made the mode on R ignore the cursor entirely, so the pilot's hands are off the controls by construction and a clickable panel takes nothing away. **M opens it** (free since the absolute yoke retired MouseModeToggle). Departure/destination pickers and an aircraft picker, with distance, bearing, climb and cruise altitude presented from `AirportService.flightPlan()` — **a lookup, never a second implementation.** ⚠️ **The gate is re-checked EVERY FRAME, not just on open**: opened during the take-off roll it is legal, and thirty seconds later the aeroplane is airborne on trim with a clickable panel over the windscreen — so it closes itself and says why. Verified live: opens seated on the ground, **slams shut the instant the wheels leave**, opens again with R engaged.
+
+🐛 **STARTING A FLIGHT FROM A FIELD YOU ARE NOT AT KILLED THE PILOT, AND ONLY FLYING IT FOUND THAT (§46).** Every unit test passed and the feature was still broken: `StartFlight` parked the aeroplane at Ridge exactly right and left the pilot on Meadow's apron 1.6 km away — with **workspace streaming ON**, holding the model's shell and **0 of its 128 parts**, which from the apron is indistinguishable from the spawn having failed silently. So the pilot now travels with the flight. ⚠️ **The first fix then buried them 2.3 m inside the hillside**: the standing height was measured with `AirportService.groundHeightAt`, which excludes the *Aircraft* folder **and nothing else** — the ray starts at the top of the R6 torso and hit the pilot's **own head**, giving a standing height of **−2.3 m**. It is derived from the rig's bounding box now.
 
 🟨 **GRAYBOXING (§44):** all aircraft/cockpit 3D modeling is postponed until the first version of the game with all of its features is done. Existing geometry stays as the graybox; **airport design is feature work and happens BEFORE the 3D modeling pass**; the cockpit 3D work in §42/§43 is parked. The screen panel remains the live instrument set.
 
@@ -199,9 +203,10 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (790 checks total)
+### Verified green (881 checks total)
 
-⚠️ `UIController.runTests()` runs **all four** UI suites — `DebugHud`, `Instrument`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
+⚠️ `UIController.runTests()` runs **all five** UI suites — `DebugHud`, `Instrument`, `InstrumentError`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
+⚠️ `TabletController.runTests()` does the same for the tablet: `Tablet` plus its own 9. `TabletController.runOwnTests()` is the 9 alone.
 
 | Module | Path | Checks | Datamodel |
 |---|---|---|---|
@@ -213,18 +218,22 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 24/24 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 110/110 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 121/121 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 51/51 | Client |
-| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 36/36 | Client |
+| `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 45/45 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
-| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 48/48 | Client |
-| `InstrumentError` | `StarterPlayer/.../FlightSim/UI/Instruments/InstrumentError.luau` | 24/24 | Client |
+| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 53/53 | Client |
+| `InstrumentError` | `StarterPlayer/.../FlightSim/UI/Instruments/InstrumentError.luau` | 23/23 | Client |
 | `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 (aggregate 181) | Client |
-| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 35/35 | **Server** |
+| `Tablet` | `StarterPlayer/.../FlightSim/UI/Tablet/Tablet.luau` | 32/32 | Client |
+| `TabletController` | `StarterPlayer/.../FlightSim/Controllers/TabletController.luau` | 9/9 (aggregate 41) | Client |
+| `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 54/54 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
-| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 98/98 | **Server** |
+| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 109/109 | **Server** |
 | `PlayerService` | `ServerScriptService/FlightSim/Services/PlayerService.luau` | 14/14 | **Server** |
+
+⚠️ `CameraController` (36 → 45, §45), `SixPack` (48 → 53) and `InstrumentError` (24 → 23) were **stale in this table** and were corrected on 2026-08-09 by running each suite rather than by inheriting the row. The old figures summed to 877 against a measured 881.
 
 ```lua
 require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()   -- Server datamodel
@@ -704,6 +713,8 @@ Real T presses on a seated pilot, camera distance from the aircraft measured eac
 - **A Play restart DOES load edited modules — the "you must restart Studio" claim is a myth.** Entering Play creates a fresh DataModel with a clean module cache. Verified directly (§29) after the belief had already cost real time. What *is* cached separately is the **Command Bar**: `require()` there returns a **second copy** of a module, so a controller's `rig` is `nil` and `getSystems()`/`isFlying()` tell you nothing about the running aircraft. Observe the real one through side effects — GUI `Enabled` state, console output.
 - **The test harness has been wrong more often than the code — five times in three sessions.** Terrain written outside `Terrain.MaxExtents`; `Engine.start()` never called; throttle left at 0.000 because `IC.update()` derives it from held keys; pitch inertia *guessed* at 1825 kg·m² when the model has **4922**; and airspeed force-held in a way that broke the energy balance and produced +50 m/s of climb. **Print the entry condition** — speed, vertical speed, throttle, thrust, attitude — and read it before believing anything downstream of it.
 - **Assert inside the range the law is defined for.** Three assertions have now failed on *correct* code because the input was outside it: a heading error of exactly 180° (where the shortest turn is genuinely ambiguous), a gain-schedule check at 187 kt (past Vne, where the floor legitimately takes over), and a clamp check whose command `pitchLimit` had already cut. Say in the test why the range was chosen.
+- **`AirportService.groundHeightAt` excludes the `Aircraft` folder AND NOTHING ELSE — including the character you are asking about.** Measuring "how high does this rig stand" by raycasting down from the character's own root starts the ray at `root + 1 m`, which on the R6 pilot is exactly the top of the torso, so it hits the pilot's **own head** at 253.25 instead of the apron at 250.00. The standing height came out **−2.3 m** and the pilot was placed 2.3 m inside a hillside, fell through the world, died, and respawned at the wrong airport with a fresh aeroplane. **Derive a rig's dimensions from the rig** — `Model:GetBoundingBox()` — not from a ray fired out of it. See §46.
+- **WORKSPACE STREAMING IS ON in this place, and it changes what "the aircraft spawned correctly" means.** A model 1.6 km from the player replicates as a **shell with 0 of its 128 parts**, and `model.PrimaryPart` is `nil` on the client while being perfectly correct on the server. So a client-side check of a distant aeroplane proves nothing, and teleporting a character into an unstreamed region drops them through the ground. `Player:RequestStreamAroundAsync(position)` before the move is the documented fix; it yields, which is free inside a `RemoteFunction` handler the client is already waiting on. This was never noticed before because nothing had ever put a player and their aeroplane at *different* aerodromes.
 - **Every derivative term tried on the altitude loop has made it worse — three so far (§29).** Any derivative here is taken on a signal that already lags the elevator by the time the nose moves and the wing answers, which at this model's pitch inertia is most of a second, so it arrives *in phase* with the motion instead of against it. A regression test pins the loop's shape; if you are about to add a fourth, read §29 first.
 
 ---
@@ -1045,9 +1056,11 @@ The seated avatar (scope item 5) is part of this realism pass, with one extra ru
 
 **How to test the seated avatar.** Same shape as the rest of the phase: pure functions of state. The rigged avatar's limb angles are a function of the same control values that drive the surfaces — assert the hands sit on the yoke at neutral, move with stick deflection, and migrate to the throttle/flap lever when those are commanded; the feet track rudder. The character stays neutralised (massless, non-collidable) while seated, so the existing mass-budget and one-assembly checks must stay green unchanged (§31, §6d). **Both seats get the same recipe (2026-08-06, pilot):** the rigging is written once and applied to whichever player sits where — assert it drives the left seat's pilot and the right seat's copilot identically, and that each seat's hands reach its own yoke/throttle at neutral.
 
-### Phase 4b — Flight tablet
+### Phase 4b — Flight tablet ✅ BUILT, 2026-08-09 — see §46
 
 **Goal:** choose an aircraft and a destination without leaving the aeroplane.
+
+⚠️ **The decision this section demanded be made "before building it, not during" was made on 2026-08-09, and it is neither of the two options written below.** The pilot's answer: **on the ground OR with altitude hold engaged.** §46 has the build and the reasoning.
 
 - Departure and destination pickers reading the Phase 3 airport registry.
 - Distance and bearing to destination, which is `AirportService` navigation data presented rather than new physics.
@@ -2934,3 +2947,98 @@ The aeroplane was **rolling downhill**. Wheel friction is 0 by §6f (`GroundHand
 The 20.59 m span is **0.90× the 23 m runway** — the aeroplane is nearly as wide as the pavement it lands on, and the 15 m taxiway is now **narrower than the aircraft**. Runway, taxiway and apron very likely need widening to keep the landing and taxi feel.
 
 **Airport design is feature work per §44 and is a separate task.** Logged in `NEXT_PROMPT.txt`. Do not fix it as part of this change.
+
+---
+
+## 46. The flight tablet (2026-08-09, Phase 4b built)
+
+**881/881 across 22 suites** (was 799; +82 new checks). `InputController` 110 → 121, `AirportService` 98 → 109, `AircraftService` 35 → 54, plus two new suites: `Tablet` 32 and `TabletController` 9 (aggregate 41). Three stale rows in §4's table were corrected by measurement at the same time.
+
+### The decision, which was the whole reason this needed asking
+
+§14 said the tablet needed "either a modal state that releases the yoke, or to be usable only on the ground", and to decide before building. **The pilot chose neither:**
+
+> **On the ground, or with altitude hold engaged.**
+
+That is a better answer than either option offered, and the reason is §28. While the mode on R is engaged, `InputController.update()` already **ignores the cursor entirely** — `rawPitch` and `rawRoll` are zeroed — and the augmentation holds the wings, the heading and the altitude. So in that state the pilot's hands are off the controls *by construction*. A clickable panel takes nothing from them, and there is no new modal state, no new hand-off, and nothing to tune. The only mode in this project that flies the aeroplane for you is exactly the mode in which a cursor is free to be a cursor.
+
+On the ground the argument is simpler: a parked aeroplane does not care where the elevator is. And "not flying at all" — standing on the apron, or after bending one — is allowed too, which is what the tablet is mostly for.
+
+The rule is one pure function, `InputController.tabletMayOpen(flying, onGround, altitudeHold)`, asserted in all four states. **The single `false` in that table is the whole safety property: nothing clickable can ever appear while the cursor is the yoke.**
+
+### ⚠️ The gate is a CONDITION, not an event, and that closes a real hole
+
+Checking it only on open is not enough, and this is not defensive programming — it is a reachable way to hurt the pilot:
+
+> Open the tablet during the take-off roll. Legal: the wheels are down. Now do nothing. The throttle is a lever and **holds its setting** with the keys neutral, so the aeroplane keeps accelerating, rotates on trim, and is airborne and hand-flying with the yoke released and a clickable panel over the windscreen.
+
+So `TabletController` re-evaluates the gate on **Heartbeat**, and the moment it stops being true the tablet closes itself and says why. Three boolean reads a frame. **Verified live**: opened seated on the ground, the aeroplane was lifted, and the panel was shut within 0.3 s with the message on screen.
+
+### What was built
+
+| Piece | Where | Does |
+|---|---|---|
+| `Tablet` | `UI/Tablet/Tablet.luau` | The panel and every pure decision — default selection, the swap rule, the plan lookup, the exact rows a pilot reads |
+| `TabletController` | `Controllers/TabletController.luau` | The key, the gate, the round trips, the lifecycle |
+| `tabletSnapshot()` | `AirportService` | The registry and every flight plan, as one payload |
+| `evaluateFlightRequest()` | `AircraftService` | Validates a flight plan from an untrusted client |
+| `tabletMayOpen()` | `InputController` | The pilot's rule, as a pure function |
+
+**M opens it.** M was free precisely because §6g's absolute yoke retired `MouseModeToggle`, and it is a long way from the left-hand flight cluster — which matters for a key that hands the controls over. It is read off `InputBegan` by the controller, **not** by `update()`: the third action wired that way after `ResetAircraft` and `ToggleHud`, and for the same reason every time — `update()` only runs while an aircraft is being flown, and the point of this key is planning a flight with no aeroplane at all. It is also the *only* way the closing press can work, because an open tablet is feeding `update()` a snapshot with no keys in it.
+
+**The Controls contract is untouched.** `tabletOpen` is `state.systems`, in the style §6c pins by test. It is the odd one out in that table and the file says so: it is an *input* to `update()` rather than a decision `update()` made, because the tablet has to work with no aircraft.
+
+### The arrow between the two controllers points one way
+
+`TabletController` requires `FlightController` — for the aircraft, the systems and whether the wheels are down. So `FlightController` must not require it back. The tablet **pushes** its state in through `setTabletOpen()`, and `FlightController` knows nothing about the tablet beyond one boolean. It then sends `neutralSnapshot()` while the tablet is up — the identical path §6g built for typing, so trim is kept and **a trimmed aeroplane flies on hands-off while the pilot plans.** A new reader, `isOnGround()`, reports the **gear's own telemetry** rather than comparing altitude against a field elevation: an aeroplane 0.4 m above the runway on its way down is not on the ground, and one on the grass a hundred metres off the strip is.
+
+### Navigation is presented, never recomputed
+
+`AirportService.tabletSnapshot()` sends the airports **and every ordered pair's `flightPlan()`**, so the tablet's answer to "how far and which way" is that module's own arithmetic rather than a second copy that can drift. `Tablet.planFor()` is a **lookup**. There is deliberately no heading arithmetic on the client at all.
+
+- **No aircraft in the payload.** `Aircraft/Registry.luau` is in ReplicatedStorage, so the aircraft picker costs no network — and a second source of truth was not invented for something both sides can already see.
+- **The plan matrix is N².** Two fields, two plans. At ~20 airports this should become a per-pair request; the seam is that one function and nothing downstream would know.
+- **The snapshot is fetched at STARTUP, not on first open.** Found by looking at the built panel rather than by reasoning: opened cold, the two airport columns were empty while the round trip completed, while the aircraft column was already full because it needs no network.
+
+### 🐛 Three bugs, and only one of them was findable by testing
+
+**1. The fixture disagreed with the aeroplane.** The obvious departure runway for Meadow → Ridge is Meadow's default, 36. The live answer is **18**: `bestRunwayFor()` picks the runway pointing most nearly at the destination, and Ridge is 200 m *south* as well as 1,600 m east. A fixture written from the guess passed while describing a different flight from the one the pilot was given. It is now read off a live `RequestAirportList`.
+
+**2. ⚠️ Starting a flight from a field you were not standing at left the pilot behind.** Everything measured correct — the plan, the validation, the aeroplane parked exactly on Ridge's slot — and the feature was still broken. The pilot stayed on Meadow's apron **1.6 km away**, and because **streaming is on**, their client held the model's shell with **0 of its 128 parts**: from the apron, indistinguishable from the spawn having failed in silence. *No unit test in this project could have found that.* Starting a flight now brings the pilot with it, `RequestStreamAroundAsync` first.
+
+**3. ⚠️ And the first fix buried them 2.3 m inside the hillside.** The standing height was measured by raycasting down from the character's root through `groundHeightAt` — which excludes the `Aircraft` folder **and nothing else**. The ray starts at `root + 1 m`, exactly the top of the R6 torso, and hit the pilot's **own head** at 253.25 rather than the apron at 250.00. Standing height: **−2.3 m**. The pilot was placed inside Ridge's terrain, fell through the world, died, and respawned at Meadow — taking their aeroplane with them (§7: dying requests a new one). It is derived from `Model:GetBoundingBox()` now, which cannot make that mistake and survives the next change to the rig, as §34 and §36 both already were.
+
+A fourth was caught by the suite and is worth one line, because it is §7's cross-product lesson from the other direction: the pilot stands off the aeroplane's **left**, and facing east, left is **north** — so the offset *reduces* Z. The assertion was first written as `+` and failed on correct code.
+
+### Verified live, not only in tests
+
+Real keypresses, the real bootstrap, the real remotes:
+
+- The tablet builds **disabled**, so a closed tablet absorbs no cursor travel at all.
+- Both airport columns and the aircraft column populate at startup; the summary reads `Meadow Field 18 -> Ridge Strip 09`, `0.87 nm (1.61 km)`, `097 T (back 277 T)`, `+150 m`, `705 m` — identical to what the pure suite asserts.
+- `StartFlight` Ridge → Meadow: the aeroplane parked on Ridge's slot **and the pilot standing beside it**, stable, all 128 parts streamed.
+- **M seated on the ground → opens. Aeroplane lifted → shuts itself within 0.3 s with the reason on screen. R engaged at altitude → opens again.** All four refusal messages come back readable from the server.
+
+### Not built, and deliberately
+
+- **No live "distance to run" from the aircraft's own position.** §14 asks for the field-to-field figures and that is what is presented. A live readout needs a heading on the client, which would be a second implementation of `headingOf` — exactly the thing this section was careful to avoid. §14 already homes the moving map in **Phase 8**, on this same snapshot.
+- **`FlightEvent` is still unwired.** Milestones — airborne, waypoint, landed — are its own task; the tablet starts a flight, it does not yet follow one.
+
+### How to test it
+
+```lua
+-- Client datamodel, in Play
+require(game.StarterPlayer.StarterPlayerScripts.FlightSim.Controllers.TabletController).runTests()  -- 41
+require(game.StarterPlayer.StarterPlayerScripts.FlightSim.Controls.InputController).runTests()      -- 121
+-- Server datamodel, in Play
+require(game.ServerScriptService.FlightSim.Services.AirportService).runTests()                       -- 109
+require(game.ServerScriptService.FlightSim.Services.AircraftService).runTests()                      -- 54
+```
+
+And by hand, which is the part that matters:
+
+1. **On the apron, before boarding, press M.** It opens. Pick Ridge as departure, Meadow as destination, and press START FLIGHT — you should be standing beside a 172 at Ridge, 150 m higher and 1.6 km east.
+2. **Board, and press M on the ground.** It opens.
+3. **Take off, and press M.** It refuses, and says to land or engage altitude hold.
+4. **Open it during the take-off roll and let the aeroplane fly itself off.** It must close itself the instant the wheels leave.
+5. **At altitude, press R, then M.** It opens, and the autopilot keeps flying while you pick a destination.

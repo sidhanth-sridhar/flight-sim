@@ -156,11 +156,31 @@ InputController.DEFAULT_BINDINGS = {
 	ToggleHud = Enum.KeyCode.H, -- specified
 
 	--[[
+		Open or close the flight tablet (Phase 4b). M, for map.
+
+		M IS FREE BECAUSE THE ABSOLUTE YOKE FREED IT - it used to be
+		MouseModeToggle, and the note below records why that action no longer
+		exists. It is also a long way from the left-hand flight cluster, which
+		matters for a key that hands the controls over: a fat-fingered W or A is
+		a nudge, a fat-fingered tablet key is the pilot letting go of the yoke.
+
+		Consumed by TabletController off InputBegan, NOT by update(), and this is
+		the third action in that arrangement after ResetAircraft and ToggleHud.
+		The reason is the same one every time: update() only runs while an
+		aircraft is being flown, and the whole point of this key is that a pilot
+		can plan a flight standing on the apron with no aeroplane at all. Two
+		tests assert it stays inert here.
+	]]
+	ToggleTablet = Enum.KeyCode.M,
+
+	--[[
 		X (RecenterStick) and M (MouseModeToggle) were removed when the yoke
 		became absolute. Neither could still mean anything: there are no mouse
 		modes left, and Roblox exposes no API to warp the cursor, so "recentre
 		the stick" would have to lie about where the pointer is. Recentring is
 		now what it is in PTFS - move the mouse back to the middle of the screen.
+
+		M has since been reclaimed by the tablet, directly above. X is still free.
 	]]
 }
 
@@ -398,6 +418,19 @@ export type Systems = {
 	gearDown: boolean, -- L
 	paused: boolean, -- P
 	viewIndex: number, -- V, cycles
+	--[[
+		M. Written by TabletController through FlightController, not by update().
+
+		It is an INPUT to this module rather than an output, which makes it the
+		odd one out in this table and is worth stating plainly. Everything else
+		here is a decision update() made; this one is a decision made outside and
+		reported in, because the tablet has to work with no aircraft at all (see
+		the binding note) and update() only runs while one is being flown.
+
+		What update() does with it is exactly what it does with altitudeHold: the
+		cursor stops being the yoke. See the ignore block down in update().
+	]]
+	tabletOpen: boolean,
 }
 
 --[[
@@ -513,6 +546,7 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 			gearDown = true,
 			paused = false,
 			viewIndex = 1,
+			tabletOpen = false,
 		} :: Systems,
 	}
 end
@@ -730,6 +764,58 @@ function InputController.stabilityRoll(
 end
 
 -- =========================================================================
+-- THE TABLET GATE (Phase 4b)
+-- =========================================================================
+
+--[[
+	MAY THE TABLET BE OPEN RIGHT NOW? The pilot's decision, as one function.
+
+	The problem, stated once: the cursor IS the yoke (§6g), so anything the
+	pilot has to click can only be reached by dragging the controls most of the
+	way to their stops on the journey there. §7 puts it as a flat rule - an
+	on-screen button cannot be a flight control in this game - and the switches
+	dodged it entirely by being keys (§14, Phase 4c). A picker cannot: no key
+	chooses among airports.
+
+	⚠️ DECIDED BY THE PILOT (2026-08-09), and it is neither of the two options
+	§14 wrote down. Not "modal, releases the yoke anywhere", and not "ground
+	only". It is:
+
+	    ON THE GROUND, or with ALTITUDE HOLD ENGAGED.
+
+	And the second half is the good bit, because it costs nothing at all. §28
+	already established that while the mode on R is engaged THE CURSOR IS NOT
+	READ AS THE YOKE - update() zeroes it - and the augmentation holds the
+	wings, the heading and the altitude. So in that state the pilot's hands are
+	already off the controls by construction, and a clickable tablet takes
+	nothing away from them. There is no new modal state, no new hand-off, and
+	nothing to tune: the only mode in this project that flies the aeroplane for
+	you is exactly the mode in which a cursor is free to be a cursor.
+
+	On the ground the argument is simpler still - a parked aeroplane does not
+	care where the elevator is - and it covers planning a flight before boarding,
+	which is what the tablet is mostly for.
+
+	Anywhere else, hand-flying, it refuses. That is the whole safety property:
+	nothing clickable can ever appear on screen while the cursor is the yoke.
+
+	Pure, and it takes three plain booleans rather than a rig, so every corner of
+	it is driven from runTests() without an aeroplane.
+]]
+function InputController.tabletMayOpen(flying: boolean, onGround: boolean, altitudeHold: boolean): boolean
+	--[[
+		Not flying means not seated in a working aeroplane - standing on the
+		apron, or walking to one, or having just bent one. The pilot is on their
+		feet and there is no yoke to take away.
+	]]
+	if not flying then
+		return true
+	end
+
+	return onGround or altitudeHold
+end
+
+-- =========================================================================
 -- UPDATE
 -- =========================================================================
 
@@ -927,7 +1013,25 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 		controls.yaw still reaches the aeroplane and still releases the heading
 		reference to follow.
 	]]
-	if systems.altitudeHold then
+	--[[
+		AND THE TABLET IGNORES IT FOR THE SAME REASON (Phase 4b).
+
+		While the tablet is open the cursor is being used to click buttons, so
+		reading its position as the yoke would mean picking a destination in the
+		top-right corner commanded full nose-down and full right roll on the way
+		there - which is §7's rule about on-screen buttons, arriving from the
+		inside.
+
+		Belt AND braces, deliberately: FlightController also sends
+		neutralSnapshot() while the tablet is open, which zeroes the keys as
+		well. Either alone would hold the yoke; this one is here because it is
+		the half that can be ASSERTED as a pure function of state, and the state
+		this protects against is the pilot dragging the cursor across the screen.
+
+		Trim is untouched, exactly as it is while typing, so a trimmed aeroplane
+		holds its attitude with the tablet up.
+	]]
+	if systems.altitudeHold or systems.tabletOpen then
 		rawPitch = 0
 		rawRoll = 0
 	end
@@ -2183,6 +2287,119 @@ function InputController.runTests(): (boolean, { any })
 		"poll() knows about the reset binding",
 		state.bindings.ResetAircraft == Enum.KeyCode.Backspace,
 		"present in the per-player binding table"
+	)
+
+	-- 15. The flight tablet (Phase 4b) -----------------------------------------
+	record(
+		"M is bound to the tablet",
+		InputController.DEFAULT_BINDINGS.ToggleTablet == Enum.KeyCode.M,
+		tostring(InputController.DEFAULT_BINDINGS.ToggleTablet)
+	)
+
+	--[[
+		Inert here, exactly like ResetAircraft and ToggleHud. TabletController
+		owns the key, because the pilot has to be able to plan a flight on the
+		apron with no aeroplane, and update() only runs while one is being flown.
+	]]
+	state = fresh()
+	run(state, 120, { "ToggleTablet" })
+	record(
+		"Holding the tablet key moves no control",
+		state.controls.pitch == 0 and state.controls.roll == 0 and state.controls.yaw == 0
+			and state.controls.throttle == 0 and state.controls.brake == 0 and state.controls.flaps == 0,
+		string.format("pitch %+.3f, throttle %.3f", state.controls.pitch, state.controls.throttle)
+	)
+	record(
+		"Holding the tablet key does not open the tablet",
+		not state.systems.tabletOpen and not state.systems.altitudeHold and not state.systems.paused,
+		"tabletOpen still false - the controller owns it, not update()"
+	)
+
+	--[[
+		THE SAFETY PROPERTY, and the reason this feature needed a decision at
+		all. With the tablet open the cursor is clicking buttons, so its position
+		must not reach the yoke - a destination button in the corner of the
+		screen would otherwise be full nose-down and full right roll on the way
+		to it (§7).
+
+		Driven from the corner deliberately: the centre would pass whether the
+		ignore worked or not.
+	]]
+	state = fresh()
+	state.systems.tabletOpen = true
+	run(state, 120, nil, pointer(1, -1)) -- top-right: hard nose-down, hard right
+	record(
+		"With the tablet open the cursor is not the yoke",
+		math.abs(state.controls.pitch) < 1e-6 and math.abs(state.controls.roll) < 1e-6,
+		string.format("pitch %+.6f, roll %+.6f with the cursor in the corner", state.controls.pitch, state.controls.roll)
+	)
+
+	--[[
+		...and the yoke comes straight back. A release that could not be undone
+		would be worse than no tablet: the pilot would land with the controls
+		dead and no way to tell why.
+	]]
+	state.systems.tabletOpen = false
+	run(state, 120, nil, pointer(1, -1))
+	record(
+		"Closing the tablet hands the yoke straight back",
+		state.controls.pitch < -0.5 and state.controls.roll > 0.5,
+		string.format("pitch %+.3f, roll %+.3f", state.controls.pitch, state.controls.roll)
+	)
+
+	--[[
+		TRIM SURVIVES, which is what makes this safe in the air at all. A
+		trimmed aeroplane flies on hands-off while the pilot plans; the same
+		property §6g relies on for typing.
+	]]
+	state = fresh()
+	run(state, 120, { "TrimNoseUp" })
+	local trimmed = state.trim
+	state.systems.tabletOpen = true
+	run(state, 120, nil, pointer(0, 1)) -- cursor at the bottom: hard nose-up
+	record(
+		"The tablet releases the yoke but keeps trim",
+		math.abs(state.trim - trimmed) < 1e-9 and math.abs(state.controls.pitch - trimmed) < 1e-3,
+		string.format("trim %+.4f, pitch %+.4f - the aeroplane flies on trim alone", state.trim, state.controls.pitch)
+	)
+
+	--[[
+		THE GATE ITSELF - the pilot's 2026-08-09 decision, asserted in all four
+		states rather than in the one that motivated it. The airborne
+		hand-flying case is the one that matters: it is the only "false" in the
+		table, and it is the whole of the safety argument.
+	]]
+	record(
+		"On foot, the tablet opens",
+		InputController.tabletMayOpen(false, false, false),
+		"not flying - there is no yoke to take away"
+	)
+	record(
+		"On the ground, the tablet opens",
+		InputController.tabletMayOpen(true, true, false),
+		"parked or taxiing"
+	)
+	record(
+		"Airborne with altitude hold engaged, the tablet opens",
+		InputController.tabletMayOpen(true, false, true),
+		"the mode on R already ignores the cursor (section 28)"
+	)
+	record(
+		"Airborne and hand-flying, the tablet REFUSES",
+		not InputController.tabletMayOpen(true, false, false),
+		"the cursor is the yoke - nothing clickable may appear"
+	)
+
+	--[[
+		Both gates open at once must not be a special case. Worth one line
+		because "on the ground AND in altitude hold" is reachable - the mode
+		does not disengage on touchdown - and an `elseif` chain written the
+		wrong way round would fail exactly here.
+	]]
+	record(
+		"...and both conditions together still open it",
+		InputController.tabletMayOpen(true, true, true),
+		"on the ground with the mode still engaged"
 	)
 
 	local passCount = 0

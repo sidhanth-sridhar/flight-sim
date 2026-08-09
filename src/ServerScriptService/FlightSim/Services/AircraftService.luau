@@ -620,8 +620,23 @@ end
 	makes RequestSpawnAircraft double as "reset my aircraft", which is what a
 	pilot wants after putting one on its back, and it enforces one-per-player
 	without a second code path.
+
+	WHERE IT PARKS, AND THE THIRD ARGUMENT (Phase 4b)
+	-------------------------------------------------
+	`airportId` is optional and normally omitted, in which case the aeroplane
+	appears at the field NEAREST the player - the rule §24 settled and the one
+	every existing caller relies on. The tablet is the first caller with an
+	opinion: a flight plan names its own departure field, and a pilot who plans
+	Ridge to Meadow expects to start at Ridge rather than wherever they happen to
+	be standing.
+
+	An unknown id falls back to the nearest field rather than erroring. That is
+	deliberate: this argument arrives from a remote, and the honest failure for
+	"park me at somewhere that does not exist" is to park the pilot somewhere
+	that does. StartFlight validates the field for real before it ever gets here,
+	so the fallback is a second line of defence rather than the only one.
 ]]
-function AircraftService.spawn(owner: Player?, aircraftId: string?): (Model?, string?)
+function AircraftService.spawn(owner: Player?, aircraftId: string?, departureId: string?): (Model?, string?)
 	local id = aircraftId or Registry.DEFAULT_ID
 	local definition = Registry.get(id)
 
@@ -636,7 +651,7 @@ function AircraftService.spawn(owner: Player?, aircraftId: string?): (Model?, st
 		end
 	end
 
-	local airportId = airportFor(owner)
+	local airportId = if departureId and AirportService.getAirport(departureId) then departureId else airportFor(owner)
 	local slot = claimSlot(airportId)
 
 	--[[
@@ -858,6 +873,183 @@ local function runSanityPass()
 end
 
 -- =========================================================================
+-- FLIGHT REQUESTS (Phase 4b)
+-- =========================================================================
+
+--[[
+	How far to the aeroplane's LEFT the pilot is stood, in metres.
+
+	6 m, which puts them under the wing beside the door - where you actually walk
+	up to a 172. It has to clear the fuselage and it must not be so far that the
+	pilot lands on the next slot: §45 draws the aeroplane at 1.872x, so the
+	fuselage is about 1.9 m half-width and the parked slots are 25 m apart.
+]]
+local PILOT_STANDOFF = 6
+
+--[[
+	Stand the pilot beside their new aeroplane.
+
+	⚠️ WITHOUT THIS THE TABLET IS A BROKEN FEATURE, and no unit test could have
+	said so. Found by starting a real flight from Ridge while standing at Meadow:
+	the aeroplane appeared correctly at Ridge, 1.6 km away, and the pilot was
+	left on Meadow's apron with a 1.6 km walk to a board prompt they could not
+	see. Worse than not seeing it - WORKSPACE STREAMING IS ON in this place, so
+	the client held the model's shell with 0 of its 128 parts replicated, which
+	from the apron is indistinguishable from the spawn having silently failed.
+
+	So "start a flight from Ridge" moves the pilot to Ridge. That is what the
+	words mean, and it is what §24's spawn-at-the-nearest-field rule already does
+	for the ordinary case - this is the same rule, with the tablet choosing the
+	field instead of the pilot's position.
+
+	THE STANDING HEIGHT IS DERIVED FROM THE RIG, NOT FROM A RAYCAST, AND THE
+	DIFFERENCE COST A DEAD PILOT.
+
+	The first version measured it: raycast down from the character's root, and
+	take root.Y minus the ground it found. That is the obvious approach and it is
+	wrong here, because `groundHeightAt` excludes the Aircraft folder and NOTHING
+	ELSE - including the character the ray is being fired out of. The ray starts
+	at root + 1 m, which on this R6 rig is exactly the top of the torso, so it
+	sometimes hits the pilot's OWN HEAD at 253.25 instead of the apron at 250.00.
+	The standing height came out as -2.3 m, the pilot was placed 2.3 m INSIDE
+	Ridge's terrain, fell through the world, died, and respawned at Meadow -
+	taking their aeroplane with them (§7: dying requests a new one).
+
+	The bounding box cannot make that mistake. It is the rig's own extent, so it
+	stays correct through §34's R6 change and §36's 1.55 m scaling, and there is
+	no ray to hit the wrong thing.
+
+	Returns false when there is nothing to move, which is not an error: a player
+	whose character has not loaded still gets their aeroplane.
+]]
+--[[
+	WHERE the pilot stands, as a pure function of the aeroplane's CFrame.
+
+	Split out from the moving for the same reason evaluate() is split from
+	checkSanity(): there is no way to fabricate a Player, so the half with the
+	arithmetic in it - which side is left, which way they face, how the height is
+	built - has to be reachable without one. The impure half below is then three
+	lookups and a PivotTo.
+
+	`groundY` is the surface beside the aeroplane and `standingHeight` is how far
+	the character's root sits above whatever it is standing on. Neither is
+	assumed here, because both are facts about the world and the rig rather than
+	about this arithmetic.
+]]
+function AircraftService.pilotStandingCFrame(aircraft: CFrame, groundY: number, standingHeight: number): CFrame
+	-- The aeroplane's own left, so this works at any field on any heading -
+	-- Ridge's runway runs east-west where Meadow's runs north-south, and a
+	-- world-axis offset would put the pilot in front of the propeller at one of
+	-- them.
+	local beside = (aircraft * CFrame.new(-PILOT_STANDOFF, 0, 0)).Position
+	local position = Vector3.new(beside.X, groundY + standingHeight, beside.Z)
+
+	-- Facing the aeroplane, which is where a pilot walking up to it is looking.
+	-- Levelled to the pilot's own height so they look AT it rather than up or
+	-- down at its centre.
+	return CFrame.lookAt(position, Vector3.new(aircraft.Position.X, position.Y, aircraft.Position.Z))
+end
+
+local function standPilotBeside(owner: Player?, model: Model): boolean
+	local character = owner and owner.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local aircraftRoot = model.PrimaryPart
+
+	if not character or not root or not root:IsA("BasePart") or not aircraftRoot then
+		return false
+	end
+
+	--[[
+		How far the root sits above the rig's own lowest point. See the note
+		above for what measuring this with a raycast did instead.
+	]]
+	local boundsCFrame, boundsSize = character:GetBoundingBox()
+	local standing = root.Position.Y - (boundsCFrame.Position.Y - boundsSize.Y / 2)
+
+	--[[
+		Probed from well above, because the ray has to start clear of the
+		aeroplane it is standing next to. groundHeightAt already excludes the
+		Aircraft folder, so this is belt and braces rather than the only guard.
+	]]
+	local beside = (aircraftRoot.CFrame * CFrame.new(-PILOT_STANDOFF, 0, 0)).Position
+	local ground = AirportService.groundHeightAt(Vector3.new(beside.X, aircraftRoot.Position.Y + 50, beside.Z), 200)
+		or aircraftRoot.Position.Y
+
+	--[[
+		PivotTo rather than writing the root's CFrame, so the whole rig moves as
+		one instead of being dragged through its own joints.
+	]]
+	character:PivotTo(AircraftService.pilotStandingCFrame(aircraftRoot.CFrame, ground, standing))
+	return true
+end
+
+--[[
+	Is this flight plan flyable? Returns (true, accepted) or (false, nil, why).
+
+	PURE, AND SPLIT OUT FOR THE SAME REASON evaluate() IS: the remote handler
+	needs a real Player and a real spawn, and none of the interesting failures
+	here involve either. Every refusal below can be driven with a plain table.
+
+	The refusal messages are written to be READ BY THE PILOT, on the tablet,
+	because that is where they end up. "unknown airport 'ridg'" tells them they
+	mistyped; "the request was not a table" tells a developer their client is
+	broken. Both are more use than a bare false.
+]]
+export type AcceptedFlight = {
+	aircraftId: string,
+	from: string,
+	to: string,
+	plan: any,
+}
+
+function AircraftService.evaluateFlightRequest(request: any): (boolean, AcceptedFlight?, string?)
+	if type(request) ~= "table" then
+		return false, nil, string.format("the request was not a table (got %s)", typeof(request))
+	end
+
+	--[[
+		The aircraft. Omitted means the default, exactly as RequestSpawnAircraft
+		treats it, so a tablet that has not drawn its aircraft picker yet still
+		produces a flyable request.
+	]]
+	local aircraftId = if type(request.aircraftId) == "string" then request.aircraftId else Registry.DEFAULT_ID
+	if not Registry.get(aircraftId) then
+		return false, nil, string.format("unknown aircraft '%s' (known: %s)", tostring(aircraftId), table.concat(Registry.ids(), ", "))
+	end
+
+	local from = if type(request.from) == "string" then request.from else nil
+	local to = if type(request.to) == "string" then request.to else nil
+
+	if not from or not AirportService.getAirport(from) then
+		return false, nil, string.format("unknown departure airport '%s'", tostring(request.from))
+	end
+	if not to or not AirportService.getAirport(to) then
+		return false, nil, string.format("unknown destination airport '%s'", tostring(request.to))
+	end
+
+	--[[
+		Same field twice. Refused here rather than left to flightPlan()'s nil,
+		because "you cannot fly to where you already are" is a thing to tell the
+		pilot, and a nil plan three lines later is not.
+	]]
+	if from == to then
+		return false, nil, "departure and destination are the same field"
+	end
+
+	--[[
+		The plan itself is AirportService's answer, not a second one. If this is
+		ever nil with two valid and different fields, the registry and the
+		planner disagree and that is a server fault rather than a bad request.
+	]]
+	local plan = AirportService.flightPlan(from, to)
+	if not plan then
+		return false, nil, string.format("no route from '%s' to '%s'", from, to)
+	end
+
+	return true, { aircraftId = aircraftId, from = from, to = to, plan = plan }, nil
+end
+
+-- =========================================================================
 -- INIT
 -- =========================================================================
 
@@ -907,6 +1099,99 @@ function AircraftService.Init()
 			return false, message
 		end
 		return true, nil
+	end
+
+	--[[
+		THE TABLET'S "START FLIGHT" (Phase 4b).
+
+		Validated here and spawned here rather than in AirportService, because
+		this is the module that owns spawning - AirportService owns where the
+		tarmac is and what the leg looks like, and it has already answered both
+		by the time this runs.
+
+		It lives on RequestSpawnAircraft's own path deliberately: a flight plan
+		that could not put an aeroplane on the ground would be a plan the pilot
+		cannot fly, so this IS a spawn, with a departure field and a validated
+		selection attached. Replacing an existing aircraft is inherited from
+		spawn() rather than restated.
+	]]
+	local startFlight = Remotes.Get("StartFlight")
+	startFlight.OnServerInvoke = function(player: Player, request: any)
+		--[[
+			Everything below arrives from a client and is treated as such. The
+			shape is checked before any field is read, because `request.from` on
+			a number is not an error in Lua - it is nil, and nil would silently
+			become "the nearest field" three calls further down.
+		]]
+		local ok, evaluated, message = AircraftService.evaluateFlightRequest(request)
+		if not ok then
+			return false, message
+		end
+
+		local accepted = evaluated :: AcceptedFlight
+
+		--[[
+			⚠️ STREAM THE DEPARTURE FIELD IN BEFORE ANYONE GOES THERE. This is
+			not an optimisation, it is the difference between the feature working
+			and killing the pilot.
+
+			WORKSPACE STREAMING IS ON in this place. Measured, starting a flight
+			from Ridge while standing at Meadow: the pilot was teleported to
+			Ridge's parking correctly - and then FELL, because their client had
+			not streamed Ridge's terrain yet and there was nothing under them.
+			Three seconds later they were 45 m below the strip and accelerating;
+			shortly after that they died and respawned at Meadow, which also
+			respawned their aeroplane (§7 - dying requests a new one). From the
+			pilot's seat the tablet simply killed them.
+
+			RequestStreamAroundAsync is the documented answer: it yields until
+			the client holds that region. Yielding here is free - this is a
+			RemoteFunction handler and the tablet is already waiting on the
+			round trip.
+
+			pcall'd because it can time out on a slow client, and a timeout must
+			not take the whole flight request down with it: a pilot who arrives
+			slightly early falls a metre, which the fall damage in this game does
+			not care about, and the alternative is refusing to start the flight
+			at all.
+		]]
+		local departure = AirportService.getAirport(accepted.from) :: any
+		local streamOk, streamErr = pcall(function()
+			player:RequestStreamAroundAsync(
+				Vector3.new(departure.origin.X, departure.elevation, departure.origin.Z)
+			)
+		end)
+		if not streamOk then
+			warn(string.format(
+				"[FlightSim:Aircraft] could not stream %s in for %s: %s - they may arrive before the ground does",
+				accepted.from, player.Name, tostring(streamErr)
+			))
+		end
+
+		local model, spawnMessage = AircraftService.spawn(player, accepted.aircraftId, accepted.from)
+		if not model then
+			warn(string.format("[FlightSim:Aircraft] flight refused for %s: %s", player.Name, tostring(spawnMessage)))
+			return false, spawnMessage
+		end
+
+		--[[
+			And the pilot goes with it. See standPilotBeside for what starting a
+			flight from a field you are not standing on looks like without this.
+		]]
+		local moved = standPilotBeside(player, model)
+
+		log(
+			"%s starts %s -> %s in a %s (%.1f km on %03.0f)%s",
+			player.Name,
+			accepted.plan.fromName,
+			accepted.plan.toName,
+			accepted.aircraftId,
+			accepted.plan.distance / 1000,
+			accepted.plan.bearing,
+			if moved then " - pilot moved to the aeroplane" else ""
+		)
+
+		return true, accepted.plan
 	end
 
 	table.insert(connections, Remotes.Get("RequestDespawnAircraft").OnServerEvent:Connect(function(player)
@@ -1350,6 +1635,208 @@ function AircraftService.runTests(): (boolean, { any })
 		"Unowned aircraft belong to no player",
 		(active[c] :: Record).owner == nil,
 		"owner = nil"
+	)
+
+	-- 10. Flight requests from the tablet (Phase 4b) -------------------------
+	--[[
+		The remote handler itself needs a Player and cannot be tested here, for
+		the same reason network ownership cannot - see this suite's header. What
+		CAN be tested is everything the handler decides before it spawns
+		anything, which is why evaluateFlightRequest() is a separate function.
+
+		Every one of these refusals is reachable from a client, so each is
+		asserted rather than assumed: this is the project's first remote that
+		takes a structured payload rather than a single string.
+	]]
+	local goodRequest = { aircraftId = "c172", from = "meadow", to = "ridge" }
+	local accepted, acceptedPlan = AircraftService.evaluateFlightRequest(goodRequest)
+	record(
+		"A well-formed flight plan is accepted",
+		accepted and acceptedPlan ~= nil and (acceptedPlan :: AcceptedFlight).plan.toName == "Ridge Strip",
+		accepted and string.format("%s -> %s", (acceptedPlan :: AcceptedFlight).from, (acceptedPlan :: AcceptedFlight).to) or "refused"
+	)
+
+	--[[
+		The plan handed back must be AirportService's, not a rebuild of it. Same
+		argument as the snapshot check in that module: two navigation
+		implementations is one too many.
+	]]
+	local reference = AirportService.flightPlan("meadow", "ridge") :: any
+	record(
+		"...and carries AirportService's own plan, not a copy of the arithmetic",
+		acceptedPlan ~= nil
+			and math.abs((acceptedPlan :: AcceptedFlight).plan.distance - reference.distance) < 1e-6
+			and math.abs((acceptedPlan :: AcceptedFlight).plan.bearing - reference.bearing) < 1e-6,
+		string.format("%.1f m on %03.0f", reference.distance, reference.bearing)
+	)
+
+	-- Omitting the aircraft is legal and means the default, exactly as
+	-- RequestSpawnAircraft treats it.
+	local defaulted, defaultedPlan = AircraftService.evaluateFlightRequest({ from = "meadow", to = "ridge" })
+	record(
+		"An omitted aircraft defaults rather than failing",
+		defaulted and (defaultedPlan :: AcceptedFlight).aircraftId == Registry.DEFAULT_ID,
+		defaulted and (defaultedPlan :: AcceptedFlight).aircraftId or "refused"
+	)
+
+	local refusals = {
+		{ label = "A request that is not a table", request = "meadow" },
+		{ label = "An unknown aircraft", request = { aircraftId = "spitfire", from = "meadow", to = "ridge" } },
+		{ label = "An unknown departure field", request = { from = "heathrow", to = "ridge" } },
+		{ label = "An unknown destination field", request = { from = "meadow", to = "heathrow" } },
+		{ label = "A missing destination", request = { from = "meadow" } },
+		--[[
+			The same field twice. Refused with a message a pilot can read rather
+			than left to flightPlan()'s nil, which would surface as "no route"
+			and read like a fault in the registry.
+		]]
+		{ label = "Departing and arriving at one field", request = { from = "ridge", to = "ridge" } },
+		--[[
+			A number where a string belongs. This is the shape that motivated
+			checking the payload at all: `request.from` on a non-table is nil in
+			Lua, not an error, and nil silently means "the nearest field".
+		]]
+		{ label = "A field id that is a number", request = { from = 36, to = "ridge" } },
+	}
+
+	for _, case in refusals do
+		local ok, plan, message = AircraftService.evaluateFlightRequest(case.request)
+		record(
+			case.label .. " is refused with a reason",
+			not ok and plan == nil and type(message) == "string" and #message > 0,
+			tostring(message)
+		)
+	end
+
+	--[[
+		SPAWNING AT A CHOSEN FIELD, which is the whole point of the third
+		argument and the one behaviour that would otherwise only be discovered
+		by flying to Ridge and finding the aeroplane at Meadow.
+	]]
+	local atRidge = AircraftService.spawn(nil, "c172", "ridge")
+	if atRidge then
+		table.insert(spawned, atRidge)
+	end
+	local ridge = AirportService.getAirport("ridge") :: any
+	local ridgeRoot = atRidge and atRidge.PrimaryPart
+	record(
+		"A flight from Ridge parks the aeroplane at Ridge",
+		ridgeRoot ~= nil
+			and (Vector3.new(ridgeRoot.Position.X - ridge.origin.X, 0, ridgeRoot.Position.Z - ridge.origin.Z)).Magnitude < 400,
+		ridgeRoot and string.format(
+			"(%.0f, %.0f) against a field origin at (%.0f, %.0f)",
+			ridgeRoot.Position.X, ridgeRoot.Position.Z, ridge.origin.X, ridge.origin.Z
+		) or "no aircraft"
+	)
+
+	--[[
+		And it sits on RIDGE's surface, 150 m above Meadow's. An aeroplane
+		parked at the right X and Z but the wrong elevation would be buried in
+		the hillside or dropped onto it, and the horizontal check above cannot
+		see that at all.
+	]]
+	record(
+		"...at Ridge's own elevation, not Meadow's",
+		ridgeRoot ~= nil and math.abs(ridgeRoot.Position.Y - (ridge.elevation + SPAWN_HEIGHT)) < 0.01,
+		ridgeRoot and string.format(
+			"y = %.2f m against a field at %.0f m",
+			ridgeRoot.Position.Y, ridge.elevation
+		) or "no aircraft"
+	)
+
+	--[[
+		An unknown field falls back rather than erroring - the second line of
+		defence described on spawn(). Meadow is the primary and there is no
+		character in this suite, so that is where it must land.
+	]]
+	local fallback = AircraftService.spawn(nil, "c172", "heathrow")
+	if fallback then
+		table.insert(spawned, fallback)
+	end
+	record(
+		"An unknown departure field falls back to a real one",
+		fallback ~= nil
+			and fallback.PrimaryPart ~= nil
+			and math.abs((fallback.PrimaryPart :: BasePart).Position.Y - (AirportService.SURFACE_Y + SPAWN_HEIGHT)) < 0.01,
+		fallback and "parked at the primary field" or "no aircraft"
+	)
+
+	-- 11. Standing the pilot beside their aeroplane (Phase 4b) ---------------
+	--[[
+		⚠️ THE BEHAVIOUR THIS ASSERTS WAS MISSING ENTIRELY UNTIL A REAL FLIGHT
+		WAS STARTED. Everything else about StartFlight measured correct - the
+		plan, the validation, the aeroplane parked exactly on Ridge's slot - and
+		the feature was still broken, because the pilot stayed on Meadow's apron
+		1.6 km away, with workspace streaming holding 0 of the aeroplane's 128
+		parts on their client. No unit test in this file could have found it;
+		flying it did, immediately.
+
+		The arithmetic is asserted here. That the whole thing works is asserted
+		by starting a flight, which is in the handoff.
+	]]
+	local FACING_NORTH = CFrame.lookAt(Vector3.new(0, 250, 0), Vector3.new(0, 250, -1))
+	local stood = AircraftService.pilotStandingCFrame(FACING_NORTH, 250, 0.93)
+
+	--[[
+		To the aeroplane's LEFT, which for something facing north (-Z) is -X.
+		Left rather than right because that is the side a 172's pilot door is on,
+		and because it must be a side rather than in front of the propeller.
+	]]
+	record(
+		"The pilot stands off the aeroplane's left wing",
+		math.abs(stood.Position.X - (-PILOT_STANDOFF)) < 1e-4 and math.abs(stood.Position.Z) < 1e-4,
+		string.format("(%.2f, %.2f) beside an aeroplane facing north", stood.Position.X, stood.Position.Z)
+	)
+
+	record(
+		"...standing on the ground, not floating or buried",
+		math.abs(stood.Position.Y - (250 + 0.93)) < 1e-4,
+		string.format("y = %.3f, which is the surface plus the rig's own standing height", stood.Position.Y)
+	)
+
+	--[[
+		Facing the aeroplane. Its LookVector must point back toward the
+		aeroplane's centre - +X for a pilot stood to the left of it.
+	]]
+	record(
+		"...and facing it, so the board prompt is in front of them",
+		stood.LookVector.X > 0.99 and math.abs(stood.LookVector.Y) < 1e-3,
+		string.format("look %s", tostring(stood.LookVector))
+	)
+
+	--[[
+		THE ONE THAT GENERALISES, and the reason the offset is taken in the
+		aeroplane's own frame rather than along an axis. Ridge's runway runs
+		east-west, so an aeroplane there faces +X - and a world-X offset would
+		put the pilot squarely in front of the propeller instead of beside the
+		door. Meadow's north-south runway would never have shown it.
+	]]
+	--[[
+		⚠️ AND THE SIGN IS THE POINT. Facing EAST, the pilot's left hand points
+		NORTH, and north is -Z in this project's convention (AirportService's
+		header). So the offset REDUCES Z. This assertion was first written as
+		166 + 6 and failed on correct code - the same class of mistake §7 records
+		for the lateral cross product, arrived at from the other direction.
+	]]
+	local facingEast = CFrame.lookAt(Vector3.new(1390, 400, 166), Vector3.new(1391, 400, 166))
+	local atRidgeStand = AircraftService.pilotStandingCFrame(facingEast, 400, 0.93)
+	record(
+		"The offset follows the aeroplane, so it works at Ridge too",
+		math.abs(atRidgeStand.Position.X - 1390) < 1e-3
+			and math.abs(atRidgeStand.Position.Z - (166 - PILOT_STANDOFF)) < 1e-3,
+		string.format("(%.1f, %.1f) beside an aeroplane facing east - left of east is north, so Z falls",
+			atRidgeStand.Position.X, atRidgeStand.Position.Z)
+	)
+
+	--[[
+		And clear of the aeroplane it is parked beside. §45 draws the fuselage
+		about 1.9 m half-width; the standoff must clear that and must NOT reach
+		the next slot, which is SPAWN_SPACING away.
+	]]
+	record(
+		"The standoff clears the fuselage without reaching the next slot",
+		PILOT_STANDOFF > 2 and PILOT_STANDOFF < SPAWN_SPACING / 2,
+		string.format("%.0f m, against a %.0f m slot spacing", PILOT_STANDOFF, SPAWN_SPACING)
 	)
 
 	end

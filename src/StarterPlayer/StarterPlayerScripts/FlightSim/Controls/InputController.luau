@@ -721,10 +721,10 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 			avionicsMaster = true,
 			breakerReset = false,
 
-			-- Beacon on, as it is whenever the engine is running. The rest are
-			-- the pilot's to switch.
+			-- All lights off. The beacon is the pilot's to switch on with 5,
+			-- like every other light.
 			lights = {
-				beacon = true,
+				beacon = false,
 				nav = false,
 				strobe = false,
 				taxi = false,
@@ -2895,14 +2895,14 @@ function InputController.runTests(): (boolean, { any })
 	record("...and back on, one position per press", state.systems.batteryMaster, "on")
 
 	state = fresh()
-	record("The beacon starts on, as it is whenever the engine runs", state.systems.lights.beacon, "on")
+	record("The beacon starts off - it is the pilot's to switch on with 5", state.systems.lights.beacon, "off")
 	run(state, 120, { "LightLanding" })
 	record("9 switches the landing light on", state.systems.lights.landing, "on")
 	record(
 		"...and leaves the others exactly as they were",
-		state.systems.lights.beacon and not state.systems.lights.nav
+		not state.systems.lights.beacon and not state.systems.lights.nav
 			and not state.systems.lights.strobe and not state.systems.lights.taxi,
-		"beacon on, nav/strobe/taxi still off"
+		"beacon/nav/strobe/taxi still off"
 	)
 
 	--[[

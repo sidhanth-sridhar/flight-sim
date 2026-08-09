@@ -1,57 +1,100 @@
- TASK 0 — ⚠️ FLY THE RESIZED AEROPLANE (§45). The 172 is now drawn 1.872x life size and has NOT
-  been flown. All 799 static checks pass, but §9/§14 are flown, not written. Taxi it first: the
-  wheelbase went 1.80 -> 3.37 m and the taxi turn radius 10.2 -> 19.1 m, so it needs noticeably
-  more room to turn. Then takeoff, circuit, landing. If the handling is wrong, K lives in ONE
-  place — Cessna172.AIRCRAFT_SCALE — and setting it to 1 returns the aeroplane to life size with
-  no other edit.
+  TASK — Phase 5: WEATHER (and the jet, last)
 
-  TASK 0b — AIRPORT WIDENING, the §45 knock-on. NOT part of §45 and deliberately not fixed there.
-  The aeroplane now spans 20.59 m against a 23 m runway (0.90x) and a 15 m taxiway that is NARROWER
-  THAN THE AIRCRAFT. Runway/taxiway/apron very likely need widening to keep the landing and taxi
-  feel. This is airport design = feature work per §44, so it belongs with TASK 5 (Phase 7) rather
-  than with the resize. Decide with the pilot whether to widen the existing field or treat the
-  narrow runway as intended difficulty.
+  Project: Roblox flight sim (Cessna 172S), graybox mode. Source of truth is
+  HANDOFF.md — read §0 first, then §14 Phase 5, §29 (the altitude-hold
+  droop parked here), §4/§31 (nothing moves mass or aero without
+  re-verifying), §44 (graybox — no 3D modelling detours), §8 (working
+  agreement). Edit src/ only; Rojo syncs file→Studio. Append to HANDOFF.md +
+  progress_journal.txt, keep every suite green, commit and push when done.
+  No co-authored trailers.
 
-  TASK 1 — Phase 4b: the flight tablet. Departure/destination pickers on the AirportService
-  registry, distance/bearing to destination, aircraft picker on Aircraft/Registry.luau. ⚠️ Decide
-  with the pilot FIRST: a picker cannot be a clickable UI while flying (cursor-is-the-yoke, §6g/§7)
-  and a key cannot choose among airports — so either a modal state that releases the yoke, or
-  ground-only use. Build only after the decision.
+  WHERE THINGS STAND
+  1,019/1,019 across 24 suites (commit 9cc3ad3, pushed). Phases 1-4c are all
+  signed off. Phase 4b (flight tablet, §46) and 4c (172S systems, §47/§47b)
+  are complete; §48 made the lights real and widened the runways.
 
-  TASK 2 — Phase 4c: the missing 172S systems (HANDOFF §14): rudder trim (tab on the rudder, like
-  §37's TrimTab), fuel selector (LEFT/BOTH/RIGHT/OFF), mixture, magnetos/keyed start, master/avionics/
-  electrical, the POH engine gauges (oil pressure/temp, fuel flow), cabin environment, and lights
-  that actually switch. Switches are keyboard-bound (decision 2026-08-06) — the key drives the state,
-  the 3D part mirrors it. Controls contract (six fields) unchanged; anything that splits the fuel
-  tank or changes engine behaviour re-verifies §4.
+  ⚠️ CARRY THESE FORWARD
+  - Controls is SIX FIELDS and stays that way (§6c). Weather is not a control
+    — wind belongs to the flight model's air, not to the pilot's inputs.
+  - Number keys 1-9 are Roblox CoreGUI hotbar slots. They work today because
+    poll() uses IsKeyDown, but they must move if a backpack ever exists.
+  - A Play session SNAPSHOTS the datamodel when it starts. Always stop Play,
+    confirm the edit ran through Rojo, then start Play — otherwise the suite
+    reports the previous run's numbers and it looks like your change did
+    nothing. This cost time in three separate sessions.
+  - TerrainService fails one check when run FIRST in a batch and passes alone
+    or last ("fillTopFor ... got nothing"). §7's flaky-ordering class,
+    PRE-EXISTING. Phase 5 touches the air, not the ground, but if you are
+    batching suites, run it last — or fix it, it is a small honest win.
+  - Roblox caps light Range at 120 studs and SpotLight Angle at 180 (§48,
+    measured). Relevant if weather ever dims or scatters the lights.
+  - If a module draws something, LOOK AT IT. Arithmetic has passed while the
+    rendering was wrong four times now (§17, §18, §48).
 
-  TASK 3 — Phase 5: weather. Wind layers (crosswind landings exist by construction), turbulence
-  (Dryden/Karman, seed-deterministic — same seed, same flight), the wind-shear/microburst gate
-  (~150 ft AGL, 90 kt approach — survivable but hard), temperature + QNH presets, then the jet
-  aircraft last. §4/§31: nothing that moves mass or aero without re-verifying.
+  THE PHASE, IN ORDER (§14). The jet is deliberately LAST.
 
-  TASK 4 — Phase 6: audio (engine from RPM, wind over the panel, stall horn), damage (marks the
-  aeroplane, never silently invalidates §4), persistence (DataStore behind AircraftService),
-  tutorial (the gates as an in-game syllabus).
+  1. WIND. At minimum a wind LAYER that changes with altitude — one wind at
+     the surface and another aloft is what makes a real circuit different
+     from a still-air one, and it makes crosswind landings exist by
+     construction, which is the highest-value skill this game can teach.
+     FlightModel's relative-wind model already acts on the air, so wind is a
+     field added to it rather than new physics.
+  2. TURBULENCE. A gust model on the standard — Dryden or Von Kármán spectra,
+     per MIL-F-8785C / MIL-HDBK-1797 — driving gust velocities the aircraft's
+     own stability damps, as a real pilot damps them. Tuning rule: persistent
+     enough to feel like rough air, mild enough that a trimmed aeroplane still
+     holds its trim. ⚠️ SEED-DETERMINISTIC: the same seed must reproduce the
+     same flight, or none of it is assertable. ⚠️ §6i's peak-capture lesson
+     applies — gusts act between physics frames, so any instrument fed by them
+     needs the same treatment §15 proved necessary for alpha.
+  3. WIND SHEAR / THE MICROBURST. Low-level shear is the deadliest weather
+     near the ground; the canonical case is the burst ~150 ft AGL on a 90 kt
+     approach, where the loss of headwind is answered by a downdraft. THIS IS
+     THE PHASE'S GATE and the reason weather is not decorative. It must be
+     SURVIVABLE BUT HARD — if it is not both, the numbers are wrong.
+  4. TEMPERATURE AND QNH AS WEATHER INPUTS. Atmosphere already takes
+     tempOffsetC and qnhPa — ISA deviation for hot-day performance, and the
+     pressure setting an altimeter reads. Phase 5 wires these to selectable
+     presets rather than constants, and §32's instrument-error mechanism
+     becomes visible for the first time.
+  5. THE JET — LAST, and not because it is small. Aircraft/Registry.luau is
+     already id → definition and is the only thing crossing the network at
+     spawn, so the jet proves the registry generalises, and it is where the
+     compressibility correction Atmosphere notes for "the Phase 5 jet"
+     finally gets exercised. It is the RISK: a second aircraft touches every
+     assumption the first one made.
 
-  TASK 5 — Phase 7: the world grows — more airports in the registry, buildings and scenery
-  (collidable world objects, not aircraft parts), runway and apron detail (PAPI/VASI, signage,
-  holding points). This is the airport-design work.
+  ⚠️ §29 IS PARKED HERE. The altitude-hold loop's slow climb/descent while
+  engaged is WANTED (the pilot asked for that variability as realism) — do
+  NOT add an integrator to flatten it. The ~29 m droop was parked for this
+  phase specifically, because density, thermals and hot pockets give the loop
+  something real to fight. Read §29 before touching the loop; every
+  derivative term tried on it has made it worse, three so far.
 
-  TASK 6 — Phase 8: UI depth — main menu/pause/settings/flight log, the interactive moving map
-  (grows out of the tablet picker), new cockpit indicators (wet compass, trim, flap, gear, breakers,
-  G-meter), the pilot's HUD.
+  HOW TO TEST IT
+  Wind and gusts are deterministic fields given a seed, so the same seed must
+  reproduce the same flight — assertable in the existing pure-function style.
+  The shear gate is a scenario scripted to the canonical numbers (headwind
+  loss, downdraft, height above threshold), flown on instruments. Assert
+  against published figures and standards, not against what the code does.
 
-  TASK 7 — Phase 9: ATC — deterministic server-side tower state machine first (clearance → taxi →
-  line up → takeoff → handoff), optional LLM layer via HttpService with the key server-side only.
+  GATE: the pilot flies a crosswind landing, and flies the wind-shear
+  scenario. The microburst must be survivable but hard.
 
-  TASK 8 — Phase 10: airliners — 737/747/A320/A350 definitions through the same definition → builder
-  → registry path as the 172.
+  ⚠️ ASK THE PILOT BEFORE BUILDING IF ANYTHING IS AMBIGUOUS — §8. Two
+  candidates that are worth asking about up front rather than guessing:
+  whether weather is server-authoritative and pushed over WeatherChanged
+  (the remote already exists in the manifest, unwired) or client-local for
+  now; and whether the tablet gets a weather page (RequestWeather is also
+  already in the manifest and unwired).
 
-  TASK 9 — Phase 11: the ocean, a carrier (catapult/arresting gear, moving deck) and the fighter
-  definition; gate = a carrier circuit — launch, transit, bolter, trap.
+  STILL OPEN, UNCHANGED — do not silently resolve these:
+  - DYNAMIC FUEL MASS. Two tanks currently move NO centre of mass, because
+    the fuel is already in the definition's STATIC wing boxes (110 kg each).
+    An imbalance is a gauge reading, not a wing that drops. Making it real is
+    a §4 mass-model decision for the pilot.
+  - Pitch inertia (the model has 2,951 against a real 1,825).
+  - Item 7's cabin knobs have no 3D part; §44 parks that until the 3D pass.
 
-  Phase 12 (mesh/3D polish) is the postponed 3D pass — last, after all of the above.
-
-  Work the tasks in order. Stop when the pilot's session budget runs out; report what is done and
-  what is next.commit and push after
+  Work the items in order. Stop when the session budget runs out; report what
+  is done and what is next. Commit and push after, no co-authored trailers.

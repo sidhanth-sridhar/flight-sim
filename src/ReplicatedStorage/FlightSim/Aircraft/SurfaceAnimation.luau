@@ -313,11 +313,107 @@ end
 	aircraft is pointing at night. Getting it backwards is the classic error and
 	is asserted rather than trusted.
 ]]
+--[[
+	⚠️ THE ENGINE CAPS LIGHT RANGE AT 120 STUDS. Measured, not read: asking for
+	500 keeps 120, on both `PointLight` and `SpotLight`. At 1 stud = 1 m that is
+	120 m, and a real landing light throws several hundred - so the beam below
+	is at the engine's ceiling and is still SHORTER than the real thing. There
+	is no workaround; a longer reach would have to be faked with geometry, which
+	§44 forbids. `Angle` caps at 180, and a `SpotLight`'s default `Face` is
+	`Front`, which in Roblox is the part's -Z - the direction this aeroplane
+	flies (§11's convention). That default is why the beams need no rotation.
+]]
+local MAX_LIGHT_RANGE = 120
+
+--[[
+	FLASH PATTERNS, as data rather than as branches.
+
+	Each is a function of the phase through one cycle, 0..1, returning whether
+	the lamp is lit at that point. Writing them this way means the beacon's
+	double-flash and the strobe's single are the same mechanism with different
+	numbers, and each can be asserted across a whole cycle without a clock.
+]]
+local PATTERNS: { [string]: { period: number, lit: (number) -> boolean } } = {
+	--[[
+		Steady. Landing, taxi and navigation lights burn continuously - only the
+		anti-collision lights flash, and confusing the two is the obvious way to
+		get an aeroplane's night signature wrong.
+	]]
+	steady = { period = 1, lit = function(_phase: number): boolean
+		return true
+	end },
+
+	--[[
+		THE 172S BEACON: RED, DOUBLE-FLASH, ~1.4 s CYCLE.
+
+		Two short pulses close together, then a long dark gap - which is what
+		makes a beacon readable as a beacon from a mile away and distinguishes
+		it from a strobe's single flash. The pilot asked for this pattern
+		specifically, against the real one rather than a custom strobe.
+
+		The two pulses sit at 0.00-0.07 and 0.14-0.21 of the cycle: at a 1.4 s
+		period that is a 98 ms flash, a 98 ms gap, a second 98 ms flash, then
+		1.1 s of dark. Total lit time is 14% of the cycle.
+	]]
+	doubleFlash = { period = 1.4, lit = function(phase: number): boolean
+		return phase < 0.07 or (phase >= 0.14 and phase < 0.21)
+	end },
+
+	--[[
+		A single anti-collision strobe, about 1 Hz on a short duty cycle. The
+		figures are unchanged from §47b so its existing assertions still hold.
+	]]
+	strobe = { period = 1.0, lit = function(phase: number): boolean
+		return phase < 0.08
+	end },
+}
+
+SurfaceAnimation.PATTERNS = PATTERNS
+
+--[[
+	The aeroplane's exterior lighting, as one table.
+
+	`emitter` chooses the Roblox class: a POINT light radiates in every
+	direction and is what a position light is, while a SPOT light throws a cone
+	and is what a landing or taxi light is. That distinction is the whole of
+	this revision - a landing light modelled as a point source lights the
+	aeroplane's own belly and nothing ahead of it, which is a decoration.
+
+	`brightness` and `range` are chosen so the lamps are DISTINGUISHABLE at
+	night rather than all being "on": a landing light must dominate, a taxi
+	light must wash the near field, and a navigation light must be visible
+	without illuminating anything at all.
+]]
 SurfaceAnimation.LIGHTS = {
-	beacon = { parts = { "Beacon" }, color = Color3.fromRGB(255, 40, 40), brightness = 3, range = 24 },
+	--[[
+		The beacon: red, and the only light on the aeroplane whose job is to say
+		"the engine is running" rather than to help anyone see.
+
+		Low range on purpose. A beacon is meant to be SEEN, not to light
+		anything - a 24 m pool of red light around the fin would be wrong, and
+		would wash out the strobes it sits beside.
+	]]
+	beacon = {
+		parts = { "Beacon" },
+		emitter = "PointLight",
+		pattern = "doubleFlash",
+		color = Color3.fromRGB(255, 30, 30),
+		brightness = 4,
+		range = 18,
+	},
+
+	--[[
+		Position lights. RED TO PORT, GREEN TO STARBOARD, white astern - the
+		convention that states an aircraft's heading at night.
+
+		Deliberately dim and short-ranged: these are lights you LOOK AT, not
+		lights you see BY. A nav light bright enough to illuminate the wing
+		would make the aeroplane glow green from the cockpit.
+	]]
 	nav = {
 		parts = { "NavLightLeft", "NavLightRight", "TailLight" },
-		-- Per-part colours override the group's, for the red/green convention.
+		emitter = "PointLight",
+		pattern = "steady",
 		colors = {
 			NavLightLeft = Color3.fromRGB(255, 40, 40),
 			NavLightRight = Color3.fromRGB(40, 255, 80),
@@ -325,38 +421,86 @@ SurfaceAnimation.LIGHTS = {
 		},
 		color = Color3.fromRGB(255, 255, 255),
 		brightness = 2,
-		range = 18,
+		range = 12,
 	},
-	strobe = { parts = { "StrobeLeft", "StrobeRight" }, color = Color3.fromRGB(255, 255, 255), brightness = 6, range = 30 },
-	taxi = { parts = { "TaxiLight" }, color = Color3.fromRGB(255, 240, 200), brightness = 5, range = 40 },
-	landing = { parts = { "LandingLight" }, color = Color3.fromRGB(255, 250, 230), brightness = 8, range = 70 },
+
+	--[[
+		Anti-collision strobes on the wingtips. Brief, brilliant and white -
+		the brightest thing on the aeroplane for the 80 ms they are lit, which
+		is why the brightness is far above everything else here.
+	]]
+	strobe = {
+		parts = { "StrobeLeft", "StrobeRight" },
+		emitter = "PointLight",
+		pattern = "strobe",
+		color = Color3.fromRGB(255, 255, 255),
+		brightness = 10,
+		range = 40,
+	},
+
+	--[[
+		THE TAXI LIGHT: a wide, shallow wash of the near field.
+
+		Wide cone and short range, because taxiing is about
+		seeing the next fifty metres of pavement and the centreline - not about
+		reaching down a runway. That is what makes it distinct from the landing
+		light rather than a dimmer copy of it.
+	]]
+	taxi = {
+		parts = { "TaxiLight" },
+		emitter = "SpotLight",
+		pattern = "steady",
+		color = Color3.fromRGB(255, 238, 200),
+		brightness = 5,
+		range = 45,
+		angle = 90, -- a broad wash
+	},
+
+	--[[
+		THE LANDING LIGHT: a narrow beam down the nose axis.
+
+		⚠️ THE RANGE IS THE ENGINE'S CEILING, NOT A CHOICE. 120 studs is the
+		most Roblox will hold (measured), which at metre scale is 120 m - short
+		of a real landing light by a long way. On a 65 kt approach that is about
+		3.6 seconds of pavement ahead, so it lights the flare and the touchdown
+		zone and not the whole approach. Stated plainly because it is a limit
+		somebody will otherwise try to "fix" by turning the brightness up.
+
+		Narrow and bright. It is not pitched down - see bindLights for why the
+		parts are never rotated, and why the cone spread does the work instead.
+	]]
+	landing = {
+		parts = { "LandingLight" },
+		emitter = "SpotLight",
+		pattern = "steady",
+		color = Color3.fromRGB(255, 250, 235),
+		brightness = 10,
+		range = MAX_LIGHT_RANGE,
+		angle = 42, -- a beam, not a wash
+	},
 }
-
---[[
-	How fast a strobe flashes, in flashes per second.
-
-	Roughly 1 Hz, which is what an anti-collision strobe actually does. A strobe
-	that flashed at frame rate would be a different, much worse thing.
-]]
-local STROBE_HZ = 1.0
-local STROBE_DUTY = 0.08 -- fraction of the cycle it is actually lit
 
 --[[
 	Is a light on THIS frame?
 
-	Pure, so the strobe's duty cycle can be asserted without a clock. `powered`
-	is the electrical bus - §47 item 5 - and it outranks the switch entirely:
-	a landing light switched on with the master off is a switch that does
-	nothing, which is the whole reason item 8 waited for item 5.
+	Pure, so every pattern can be asserted across a whole cycle without a clock.
+	`powered` is the electrical bus - §47 item 5 - and it outranks the switch
+	entirely: a landing light switched on with the master off is a switch that
+	does nothing, which is the whole reason item 8 waited for item 5.
+
+	An unknown light burns steady rather than going dark, because a lamp nobody
+	has given a pattern is a lamp somebody forgot to configure, and a light that
+	is on is easier to notice than one that never comes up.
 ]]
 function SurfaceAnimation.lightIsLit(name: string, switchedOn: boolean, powered: boolean, clock: number): boolean
 	if not switchedOn or not powered then
 		return false
 	end
-	if name == "strobe" then
-		return (clock * STROBE_HZ) % 1 < STROBE_DUTY
-	end
-	return true
+
+	local spec = SurfaceAnimation.LIGHTS[name]
+	local pattern = PATTERNS[spec and spec.pattern or "steady"] or PATTERNS.steady
+
+	return pattern.lit((clock % pattern.period) / pattern.period)
 end
 
 --[[
@@ -379,16 +523,64 @@ function SurfaceAnimation.bindLights(model: Model): any
 					landing light that does not put light on the runway is a
 					decoration, and the runway is the entire reason it exists.
 				]]
-				local emitter = part:FindFirstChildOfClass("PointLight")
+				--[[
+					⚠️ THE CLASS IS PART OF THE SPEC, and rebuilding rather than
+					reusing matters: a lamp that was a PointLight yesterday and
+					is a SpotLight today must not keep the old instance, or the
+					landing light stays a glow around its own bulb.
+				]]
+				local wanted = spec.emitter or "PointLight"
+				local emitter = part:FindFirstChild("Lamp")
+				if emitter and not emitter:IsA(wanted) then
+					emitter:Destroy()
+					emitter = nil
+				end
 				if not emitter then
-					emitter = Instance.new("PointLight")
+					emitter = Instance.new(wanted)
 					emitter.Name = "Lamp"
 					emitter.Parent = part
 				end
+
 				emitter.Color = (spec.colors and spec.colors[partName]) or spec.color
 				emitter.Brightness = spec.brightness
-				emitter.Range = spec.range
+				--[[
+					Clamped to what the engine will actually hold. Asking for
+					more is silently reduced, and a spec that reads 300 while
+					the engine keeps 120 is a lie in the source.
+				]]
+				emitter.Range = math.min(spec.range, MAX_LIGHT_RANGE)
 				emitter.Enabled = false
+
+				if emitter:IsA("SpotLight") then
+					emitter.Angle = spec.angle or 60
+					--[[
+						`Front` is the part's -Z, which is the direction this
+						aeroplane flies. So a beam needs no rotation of its own -
+						it points where the nose points, and follows it through
+						every turn and flare for free.
+					]]
+					emitter.Face = Enum.NormalId.Front
+				end
+
+				--[[
+					⚠️ THE BEAM IS NOT PITCHED BY ROTATING THE PART, and the
+					first version did exactly that - which would have been a
+					real bug rather than a cosmetic one.
+
+					These lamps are DECORATIONS WELDED INTO THE AIRFRAME'S
+					ASSEMBLY. Writing `.CFrame` on a welded part does not tilt
+					it in place; Roblox resolves the constraint by moving the
+					assembly, so aiming the landing light would have shoved the
+					aeroplane - and §6e records how much work went into getting
+					boarding down to 0.000 m of displacement.
+
+					It is not needed anyway. THE CONE SPREAD DOES THE WORK: at
+					21 degrees of half-angle the beam's lower edge is 46 m below
+					the axis by the time it has gone 120 m, and the lamp sits
+					under a metre above the datum - so it washes the pavement
+					well before its range runs out. The taxi light's 90 degrees
+					floods the near field for the same reason.
+				]]
 
 				table.insert(bound[switch], {
 					part = part,
@@ -679,7 +871,137 @@ function SurfaceAnimation.runTests(): (boolean, { any })
 	record(
 		"The strobe flashes rather than burning steadily",
 		duty > 0.02 and duty < 0.2,
-		string.format("lit %.1f%% of a 10 s window, at about %.1f Hz", duty * 100, STROBE_HZ)
+		string.format("lit %.1f%% of a 10 s window, at about %.1f Hz",
+			duty * 100, 1 / SurfaceAnimation.PATTERNS.strobe.period)
+	)
+
+	--[[
+		⚠️ THE 172S BEACON IS A DOUBLE-FLASH, NOT A STROBE, and the pilot asked
+		for the real pattern rather than a custom one. Two short pulses close
+		together then a long dark gap is what makes a beacon readable as a
+		beacon from a mile away.
+
+		COUNTING THE PULSES is the assertion, not the duty cycle: a lamp lit for
+		14% of a cycle in ONE burst would pass a duty check and be the wrong
+		light. So this walks a whole period and counts rising edges.
+	]]
+	local beaconPattern = SurfaceAnimation.PATTERNS.doubleFlash
+	local pulses, wasLit, beaconLitFrames = 0, false, 0
+	local samples = 1400
+	for i = 0, samples - 1 do
+		local lit = SurfaceAnimation.lightIsLit("beacon", true, true, (i / samples) * beaconPattern.period)
+		if lit and not wasLit then
+			pulses += 1
+		end
+		if lit then
+			beaconLitFrames += 1
+		end
+		wasLit = lit
+	end
+	record(
+		"The beacon double-flashes: two pulses per cycle, not one",
+		pulses == 2,
+		string.format("%d pulse(s) in one %.1f s cycle", pulses, beaconPattern.period)
+	)
+	record(
+		"...on a ~1.4 s cycle, the real 172S rate",
+		math.abs(beaconPattern.period - 1.4) < 0.01,
+		string.format("%.2f s", beaconPattern.period)
+	)
+	record(
+		"...and is dark for most of it, which is what makes it readable",
+		beaconLitFrames / samples < 0.25,
+		string.format("lit %.0f%% of the cycle", (beaconLitFrames / samples) * 100)
+	)
+	record(
+		"The beacon is RED, as an anti-collision beacon is",
+		SurfaceAnimation.LIGHTS.beacon.color.R > 0.9
+			and SurfaceAnimation.LIGHTS.beacon.color.G < 0.2
+			and SurfaceAnimation.LIGHTS.beacon.color.B < 0.2,
+		tostring(SurfaceAnimation.LIGHTS.beacon.color)
+	)
+
+	--[[
+		The beacon and the strobe must not be the same light twice. Different
+		pattern, different colour, different job - and a beacon that flashed on
+		the strobe's schedule would be indistinguishable from it at night.
+	]]
+	record(
+		"The beacon and the strobe are different lights, not one twice",
+		SurfaceAnimation.LIGHTS.beacon.pattern ~= SurfaceAnimation.LIGHTS.strobe.pattern
+			and SurfaceAnimation.LIGHTS.beacon.color ~= SurfaceAnimation.LIGHTS.strobe.color,
+		string.format("%s red against %s white",
+			SurfaceAnimation.LIGHTS.beacon.pattern, SurfaceAnimation.LIGHTS.strobe.pattern)
+	)
+
+	-- ---- The beams -------------------------------------------------------
+	--[[
+		⚠️ A LANDING LIGHT MODELLED AS A POINT SOURCE LIGHTS ITS OWN BULB AND
+		NOTHING AHEAD - it is a decoration, which is exactly what the pilot
+		asked to have fixed. The class is the fix, so the class is asserted.
+	]]
+	record(
+		"The landing and taxi lights throw a BEAM, not a glow",
+		SurfaceAnimation.LIGHTS.landing.emitter == "SpotLight"
+			and SurfaceAnimation.LIGHTS.taxi.emitter == "SpotLight",
+		"both SpotLight"
+	)
+	record(
+		"...while the position and anti-collision lights radiate",
+		SurfaceAnimation.LIGHTS.nav.emitter == "PointLight"
+			and SurfaceAnimation.LIGHTS.beacon.emitter == "PointLight"
+			and SurfaceAnimation.LIGHTS.strobe.emitter == "PointLight",
+		"nav, beacon and strobe are PointLights - lights you look at, not see by"
+	)
+
+	--[[
+		The taxi light is a DISTINCT light, not a dimmer landing light: wider
+		cone, shorter reach. If those two ever converged there would be no
+		reason for the aeroplane to carry both.
+	]]
+	record(
+		"The taxi light is wider and shorter than the landing light",
+		SurfaceAnimation.LIGHTS.taxi.angle > SurfaceAnimation.LIGHTS.landing.angle
+			and SurfaceAnimation.LIGHTS.taxi.range < SurfaceAnimation.LIGHTS.landing.range,
+		string.format("taxi %d deg / %d m against landing %d deg / %d m",
+			SurfaceAnimation.LIGHTS.taxi.angle, SurfaceAnimation.LIGHTS.taxi.range,
+			SurfaceAnimation.LIGHTS.landing.angle, SurfaceAnimation.LIGHTS.landing.range)
+	)
+
+	--[[
+		⚠️ NO SPEC MAY ASK FOR MORE THAN THE ENGINE WILL HOLD. Measured: Roblox
+		keeps 120 for a Range of 500, silently. A spec reading 300 while the
+		engine keeps 120 is a lie in the source that nothing would report.
+	]]
+	local overRange = {}
+	for name, spec in SurfaceAnimation.LIGHTS do
+		if spec.range > MAX_LIGHT_RANGE then
+			table.insert(overRange, string.format("%s asks %d", name, spec.range))
+		end
+		if spec.angle and spec.angle > 180 then
+			table.insert(overRange, string.format("%s asks %d deg", name, spec.angle))
+		end
+	end
+	record(
+		"No light asks for more range or spread than the engine will hold",
+		#overRange == 0,
+		#overRange == 0 and string.format("all inside %d studs / 180 deg", MAX_LIGHT_RANGE)
+			or table.concat(overRange, ", ")
+	)
+
+	--[[
+		The lamps must be DISTINGUISHABLE at night rather than all simply "on".
+		A landing light that did not dominate, or a nav light bright enough to
+		illuminate the wing, would both be wrong.
+	]]
+	record(
+		"The landing light is the brightest thing on the aeroplane, and the nav lights the dimmest",
+		SurfaceAnimation.LIGHTS.landing.brightness >= SurfaceAnimation.LIGHTS.taxi.brightness
+			and SurfaceAnimation.LIGHTS.taxi.brightness > SurfaceAnimation.LIGHTS.nav.brightness,
+		string.format("landing %d, taxi %d, nav %d",
+			SurfaceAnimation.LIGHTS.landing.brightness,
+			SurfaceAnimation.LIGHTS.taxi.brightness,
+			SurfaceAnimation.LIGHTS.nav.brightness)
 	)
 	record(
 		"...and does not flash at all with the bus dead",

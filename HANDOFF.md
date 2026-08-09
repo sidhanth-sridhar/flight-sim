@@ -6,9 +6,11 @@
 
 ## 0. Resume here — state at 2026-08-09
 
-**All 1,004 checks green across 24 suites.** Twenty run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 1,019 checks green across 24 suites.** Twenty run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
 
-# ✅ **PHASE 4c IS SIGNED OFF AND NOW COMPLETE — ALL EIGHT ITEMS.** The systems were **flown and passed on 2026-08-09** — the mag check on start, BOTH for takeoff, rudder trim hands-off in the climb, and the mixture stopping the engine. The **visual half was then built at the pilot's request** (§47b): three engine gauges with POH bands, and five lights that actually light. **1,004 checks green across 24 suites.** ⚠️ **The gauges and lights themselves have NOT been flown** — they were built after the gate.
+# ✅ **PHASE 4c IS SIGNED OFF AND NOW COMPLETE — ALL EIGHT ITEMS.** The systems were **flown and passed on 2026-08-09** — the mag check on start, BOTH for takeoff, rudder trim hands-off in the climb, and the mixture stopping the engine. The **visual half was then built at the pilot's request** (§47b): three engine gauges with POH bands, and five lights that actually light. **1,019 checks green across 24 suites.** ⚠️ **The gauges and lights themselves have NOT been flown** — they were built after the gate.
+
+💡 **THE LIGHTS ARE REAL LIGHTS NOW, AND THE RUNWAYS FIT THE AEROPLANE (§48).** The beacon is a **red double-flash on a 1.4 s cycle** (the real 172S pattern, counted by rising edges rather than duty); landing and taxi are **`SpotLight` beams** rather than point sources, because a landing light that lights nothing ahead is a decoration. ⚠️ **The engine caps light `Range` at 120 studs** — measured — so a landing light reaches 120 m where a real one throws several hundred. ⚠️ **The beams are NOT aimed by rotating the parts**: they are welded into the assembly, so writing `.CFrame` would have shoved the aeroplane; `SpotLight.Face` defaults to the nose axis and the cone spread does the rest. 🐛 **§47b's new engine gauges were invisible from the cockpit** — the flight panel is view-dependent and switches off in first person, so the cluster now has its own always-on ScreenGui. **Runways widened ~1.5x**: Meadow **23 → 35 m**, Ridge **18 → 27 m**, taxiway **15 → 23 m** — the taxiway was the broken one, **narrower than the aeroplane**.
 
 🔌 **THE LIGHTS ARE GATED ON THE BUS, NOT ON THE SWITCH (§47b).** A landing light switched on with the battery master off does nothing, which is what makes item 5 worth having and is why item 8 waited for it. **Red to port, green to starboard**, asserted rather than trusted. The strobe **flashes at ~1 Hz on an 8% duty cycle**, checked across a whole cycle because a duty cycle sampled at one instant would pass on a lamp that was always on.
 
@@ -215,7 +217,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (1,004 checks total)
+### Verified green (1,019 checks total)
 
 ⚠️ `UIController.runTests()` runs **all five** UI suites — `DebugHud`, `Instrument`, `InstrumentError`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 ⚠️ `TabletController.runTests()` does the same for the tablet: `Tablet` plus its own 9. `TabletController.runOwnTests()` is the 9 alone.
@@ -228,7 +230,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Electrical` | `Physics/Electrical.luau` | 21/21 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 33/33 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 28/28 | Client |
-| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 41/41 | Client |
+| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 51/51 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 155/155 | Client |
@@ -244,7 +246,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `TabletController` | `StarterPlayer/.../FlightSim/Controllers/TabletController.luau` | 9/9 (aggregate 41) | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 54/54 | **Server** |
 | `TerrainService` | `ServerScriptService/FlightSim/Services/TerrainService.luau` | 23/23 | **Server** |
-| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 109/109 | **Server** |
+| `AirportService` | `ServerScriptService/FlightSim/Services/AirportService.luau` | 114/114 | **Server** |
 | `PlayerService` | `ServerScriptService/FlightSim/Services/PlayerService.luau` | 14/14 | **Server** |
 
 ⚠️ `CameraController` (36 → 45, §45), `SixPack` (48 → 53) and `InstrumentError` (24 → 23) were **stale in this table** and were corrected on 2026-08-09 by running each suite rather than by inheriting the row. The old figures summed to 877 against a measured 881.
@@ -3226,3 +3228,77 @@ Real keypresses on a seated pilot, in a real Play session: all eight lamp parts 
 Nothing in Phase 4c. **Item 7's cabin switches hold state and draw current but still have no 3D part to mirror** — the cabin heat, vent and defrost controls are pedestal knobs the graybox does not model, and §44 parks that until the 3D pass. It is recorded here rather than left implied.
 
 **Next: Phase 5 — weather.** Wind layers, Dryden/Von Kármán turbulence, the wind-shear gate, temperature and QNH presets, and the jet last.
+
+---
+
+## 48. Realistic lights, and the runways widened (2026-08-09)
+
+**1,019/1,019 across 24 suites** (was 1,004). `SurfaceAnimation` 41 → 51, `AirportService` 109 → 114.
+
+### ⚠️ The engine caps light range at 120 studs
+
+Measured, not read: asking a `PointLight` or a `SpotLight` for a `Range` of 500 keeps **120**. `Angle` caps at **180**. `Brightness` is not meaningfully capped.
+
+At 1 stud = 1 m that means **a landing light cannot reach further than 120 m**, where a real one throws several hundred. On a 65 kt approach that is about 3.6 seconds of pavement — it lights the flare and the touchdown zone, not the approach. There is no workaround; more reach would have to be faked with geometry, which §44 forbids. It is stated plainly in the spec because it is a limit somebody will otherwise try to "fix" by winding the brightness up.
+
+### Flash patterns are data now
+
+Each pattern is a function of phase through one cycle, so the beacon's double-flash and the strobe's single are the same mechanism with different numbers, and each is asserted **across a whole cycle**.
+
+⚠️ **The 172S beacon is a RED DOUBLE-FLASH on a ~1.4 s cycle**, which the pilot asked for against the real pattern rather than a custom strobe. Two 98 ms pulses 98 ms apart, then 1.1 s of dark — 14% lit. **The test counts rising edges, not duty cycle**, because a lamp lit for 14% of a cycle in *one* burst would pass a duty check and be the wrong light entirely.
+
+The beacon and the strobe are asserted to be **different lights, not one twice** — different pattern *and* different colour, or they would be indistinguishable at night.
+
+### A landing light that lights nothing is a decoration
+
+That was the pilot's complaint and the class was the fix: **landing and taxi are `SpotLight`s, everything else stays a `PointLight`.** A point source at the wing root lights the aeroplane's own belly and nothing ahead.
+
+| Light | Class | Beam | Range | Why |
+|---|---|---|---|---|
+| Landing | SpotLight | 42° | 120 m (the cap) | A beam, bright enough to dominate |
+| Taxi | SpotLight | 90° | 45 m | Wide, short — the near field, not a dimmer landing light |
+| Beacon | PointLight | — | 18 m | Meant to be *seen*, not to light anything |
+| Nav | PointLight | — | 12 m | Position lights you look at, not see by |
+| Strobe | PointLight | — | 40 m | Brief and brilliant, 80 ms at a time |
+
+A test asserts the taxi light is **wider and shorter** than the landing light, so the two can never converge into one light carried twice.
+
+⚠️ **THE BEAMS ARE NOT AIMED BY ROTATING THE PARTS, and the first version did exactly that** — which would have been a real bug rather than a cosmetic one. These lamps are **decorations welded into the airframe's assembly**; writing `.CFrame` on a welded part does not tilt it in place, Roblox resolves the constraint by moving the assembly. Aiming the landing light would have shoved the aeroplane, and §6e records how much work went into getting boarding down to 0.000 m.
+
+It is not needed: `SpotLight.Face` defaults to `Front`, which is the part's −Z — **the direction this aeroplane flies** — so a beam points where the nose points and follows it through every turn and flare for free. And **the cone spread does the aiming**: at 21° of half-angle the beam's lower edge is 46 m below the axis by 120 m out, from a lamp under a metre above the datum, so it washes the pavement long before its range runs out.
+
+### 🐛 The new engine gauges were invisible from the cockpit
+
+Found by **looking at a night screenshot** and noticing they were not there — §17's lesson for the fourth time.
+
+The flight panel is **view-dependent** (§42/§43): in the cockpit the screen panel is switched *off* and the 3D board on the `PanelBoard` takes over, which is what makes the cockpit tangible. §47b put the engine cluster inside that same ScreenGui — so it vanished in first person, **which is the one place a pilot reads oil pressure**.
+
+The cluster has no 3D board and cannot be given one (§44 forbids the part). So it now has **its own ScreenGui, on in every view**, bottom-right and clear of the yoke's neutral — a small always-present overlay exactly like the debug HUD, until the 3D pass gives it a board.
+
+### The runways are wider, because the aeroplane did not fit
+
+§45 left this as an open decision and the pilot's answer was **widen by ~1.5×**:
+
+| | was | now | against a 20.59 m drawn span |
+|---|---|---|---|
+| Meadow 18/36 | 23 m | **35 m** | ratio 0.90 → **0.59** |
+| Ridge 09/27 | 18 m | **27 m** | the aeroplane was **wider than the strip** |
+| Taxiway | 15 m | **23 m** | the aeroplane was **wider than the taxiway** |
+
+⚠️ **The taxiway is the one that was actually broken.** At 15 m the 172 overhung it by 2.8 m a side, so a wider runway it could not taxi to would not have been a fix — the two changes are a pair, and a test says so.
+
+**Length is unchanged**, as asked. Almost nothing else needed touching: the geometry is width-derived, so the threshold bars, edge markers, wing bars, connectors and the windsock all followed. The stripe count is looked up by **nearest table entry**, and 35 m lands on the 30 m row → **8 stripes** (was 6); Ridge's 27 m lands there too. A pilot reads the number of stripes *as* the width, so that is asserted rather than left to arithmetic nobody checked.
+
+**`Cessna172.model.skinScale` is now exposed**, and that mattered: the new checks measure the runway against the aeroplane's **drawn** span, and a test reaching for a scale the definition did not publish would have silently fallen back to the unscaled 11.00 m and passed while the aeroplane still did not fit.
+
+### Verified live
+
+- **Night, seated, on the runway**: the landing light washes the pavement and the grass ahead; the taxi light floods the near field; the engine cluster reads OIL PSI / OIL C / FLOW from the seat.
+- **Daylight, chase view**: the 172 sits inside the widened pavement with real margin each side, threshold re-marked to 8 stripes, and the wider taxiway visible alongside.
+- Measured on the built world: runway **35.0 m**, aeroplane occupying **20.59 m** across.
+
+⚠️ **`TerrainService` failed one check when run FIRST in a batch and passed alone and when run last** — "fillTopFor puts the surface where it was asked to → got nothing". That is §7's "a suite that depends on another having run is flaky" class and is **pre-existing**, not caused by the width change; the widths were green in every ordering. Worth chasing when someone has budget for it.
+
+### Not done
+
+**Phase 5 (weather) is NOT started** — no wind, no turbulence, no shear, no QNH presets, no jet. It is the next task.

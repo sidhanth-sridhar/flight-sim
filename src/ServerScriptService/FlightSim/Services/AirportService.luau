@@ -217,7 +217,25 @@ local PAVEMENT_THICKNESS = 0.4
 	which is the point of the exercise.
 ]]
 local RUNWAY_LENGTH = 1000
-local RUNWAY_WIDTH = 23
+
+--[[
+	⚠️ WIDENED 23 -> 35 m ON 2026-08-09, AND THE REASON IS §45.
+
+	The aeroplane is drawn 1.872x life size, so its span is 20.59 m - which was
+	**0.90 of the 23 m runway it lands on**. An aeroplane very nearly as wide as
+	its pavement makes every crosswind landing a wingtip problem that the real
+	172 does not have, and §45 logged it as an open decision rather than fixing
+	it in the middle of a scaling change.
+
+	The pilot's answer: widen by about 1.5x. 35 m is that, and it is also a real
+	figure - a 35 m runway is an ordinary width for a field that takes light
+	transport aircraft, and it restores the span-to-width ratio to 0.59, close
+	to the 0.48 the real 172 has on a real 23 m strip.
+
+	LENGTH IS UNCHANGED. The pilot asked for width only, and 1,000 m was already
+	signed off as generous against the 172's ~370 m take-off requirement.
+]]
+local RUNWAY_WIDTH = 35
 local RUNWAY_HALF = RUNWAY_LENGTH / 2
 
 -- Runway 36's threshold is the SOUTH end: you start there and fly north.
@@ -235,7 +253,20 @@ local AIMING_POINT_DISTANCE = 300
 
 -- Taxiway parallel to the runway, on the west side.
 local TAXIWAY_X = -60
-local TAXIWAY_WIDTH = 15
+
+--[[
+	⚠️ WIDENED 15 -> 23 m IN THE SAME PASS, AND IT HAD TO BE.
+
+	15 m was NARROWER THAN THE AEROPLANE. §45 draws the span at 20.59 m, so the
+	172 overhung its own taxiway by 2.8 m on each side - and a wider runway that
+	cannot be reached is not a fix. Widening the runway without this would have
+	left the aeroplane taxiing with both wingtips over the grass.
+
+	23 m is the same ~1.5x, and it clears the span by 1.2 m a side. That is
+	tight by real standards and deliberately so: a taxiway is meant to be
+	followed accurately, and the centreline is there to be tracked.
+]]
+local TAXIWAY_WIDTH = 23
 local TAXIWAY_HALF_LENGTH = 480 -- slightly shorter than the runway
 
 -- Connectors join the taxiway to the runway near each threshold.
@@ -353,7 +384,15 @@ export type Runway = {
 	sign wrong.
 ]]
 local RIDGE_LENGTH = 550
-local RIDGE_WIDTH = 18
+--[[
+	⚠️ WIDENED 18 -> 27 m, the same ~1.5x as Meadow's, and for the same reason:
+	the 20.59 m span did not fit an 18 m strip AT ALL. Ridge was the worse of
+	the two - the aeroplane was wider than the surface it was meant to land on.
+
+	It stays NARROWER than Meadow's 35 m, because a short grass strip being
+	tighter than a paved field is the whole character of the place (§23).
+]]
+local RIDGE_WIDTH = 27
 
 local RUNWAY_SPECS: { [string]: { any } } = {
 	meadow = {
@@ -1674,6 +1713,77 @@ function AirportService.runTests(): (boolean, { any })
 		string.format("%d m against a ~370 m take-off requirement", r36.length)
 	)
 	checkRange("Runway width is a realistic GA figure", r36.width, 18, 45, "m")
+
+	--[[
+		⚠️ THE AEROPLANE HAS TO FIT ON THE PAVEMENT, AND IT DID NOT.
+
+		§45 draws the 172 at 1.872x, giving a 20.59 m span against a 23 m runway
+		and a 15 m TAXIWAY - so the aeroplane was 0.90 of the runway's width and
+		WIDER THAN THE TAXIWAY it had to reach the runway along. §45 logged that
+		as an open decision; the pilot's answer on 2026-08-09 was to widen both
+		by about 1.5x.
+
+		Asserted against the DEFINITION's drawn span rather than a typed number,
+		so that if the aeroplane is ever rescaled again this fails instead of
+		quietly going back to being too wide.
+	]]
+	local Cessna172 = require(game:GetService("ReplicatedStorage").FlightSim.Aircraft.Definitions.Cessna172)
+	local drawnSpan = Cessna172.reference.wingSpan * (Cessna172.model.skinScale or 1)
+
+	record(
+		"The runway is comfortably wider than the aeroplane's drawn span",
+		r36.width > drawnSpan * 1.5,
+		string.format("%.0f m of runway against a %.2f m span - a ratio of %.2f",
+			r36.width, drawnSpan, drawnSpan / r36.width)
+	)
+
+	local ridge09 = AirportService.getRunway("ridge", "09") :: Runway
+	record(
+		"...and so is Ridge's strip, which used to be NARROWER than the aeroplane",
+		ridge09.width > drawnSpan,
+		string.format("%.0f m against a %.2f m span", ridge09.width, drawnSpan)
+	)
+	record(
+		"Ridge stays tighter than Meadow, which is its character",
+		ridge09.width < r36.width,
+		string.format("%.0f m grass against %.0f m paved", ridge09.width, r36.width)
+	)
+
+	--[[
+		THE TAXIWAY IS THE ONE THAT WAS ACTUALLY BROKEN. A wider runway the
+		aeroplane cannot taxi to is not a fix, so this is the check that makes
+		the pair of changes a pair.
+	]]
+	record(
+		"The taxiway is wider than the aeroplane, so it can be taxied at all",
+		TAXIWAY_WIDTH > drawnSpan,
+		string.format("%.0f m of taxiway against a %.2f m span, %.1f m clear a side",
+			TAXIWAY_WIDTH, drawnSpan, (TAXIWAY_WIDTH - drawnSpan) / 2)
+	)
+
+	--[[
+		The stripe count is looked up by NEAREST width, so widening the runway
+		silently re-marks it. 35 m is nearest the table's 30 m entry, which is
+		8 stripes - and a pilot reads the number of stripes AS the width, so it
+		is asserted rather than left to arithmetic nobody checked.
+	]]
+	local function stripesFor(width: number): number
+		local table_ = { { 18, 4 }, { 23, 6 }, { 30, 8 }, { 45, 12 }, { 60, 16 } }
+		local best, bestGap = table_[1][2], math.huge
+		for _, entry in table_ do
+			local gap = math.abs(entry[1] - width)
+			if gap < bestGap then
+				best, bestGap = entry[2], gap
+			end
+		end
+		return best
+	end
+	record(
+		"The widened runway re-marks itself to the right stripe count",
+		stripesFor(r36.width) == 8 and stripesFor(ridge09.width) == 8,
+		string.format("Meadow %d stripes at %.0f m, Ridge %d at %.0f m",
+			stripesFor(r36.width), r36.width, stripesFor(ridge09.width), ridge09.width)
+	)
 
 	-- 2. The two directions are genuinely reciprocal -------------------------
 	record(

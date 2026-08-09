@@ -457,3 +457,76 @@ the jet last. Section 29's ~29 m altitude-hold droop is parked there.
 Open decisions, unchanged: dynamic fuel mass (a section 4 mass-model call);
 pitch inertia; and section 45's 20.59 m span against the 23 m runway and
 15 m taxiway - airport design is feature work, a separate task.
+
+----------------------------------------------------------------------------
+2026-08-09 (Sun) — Day 5 (continued): realistic lights, wider runways
+----------------------------------------------------------------------------
+1019/1019 across 24 suites (was 1004).
+
+TASK 1 - LIGHTS MADE REAL
+- THE ENGINE CAPS LIGHT RANGE AT 120 STUDS. Measured: asking for 500 keeps
+  120, on PointLight and SpotLight both. Angle caps at 180. So a landing light
+  reaches 120 m where a real one throws several hundred - about 3.6 s of
+  pavement at 65 kt. No workaround; more reach means faking geometry, which
+  section 44 forbids.
+- Flash patterns are DATA now: each is a function of phase through one cycle,
+  so the beacon's double-flash and the strobe's single are one mechanism.
+- The 172S BEACON is a RED DOUBLE-FLASH on a ~1.4 s cycle, as the pilot asked,
+  against the real pattern rather than a custom strobe. The test COUNTS RISING
+  EDGES, not duty - a lamp lit 14% of a cycle in ONE burst would pass a duty
+  check and be the wrong light.
+- Landing and taxi are SpotLights; beacon, nav and strobe stay PointLights. A
+  point source at the wing root lights the aeroplane's belly and nothing
+  ahead, which is the decoration the pilot complained about.
+- Taxi is asserted WIDER and SHORTER than landing so the two can never
+  converge into one light carried twice.
+- THE BEAMS ARE NOT AIMED BY ROTATING THE PARTS. The first version did, and
+  it would have been a real bug: the lamps are welded into the assembly, so
+  writing .CFrame moves the aeroplane (section 6e got boarding to 0.000 m).
+  SpotLight.Face defaults to Front = the nose axis, and the cone spread puts
+  the beam on the pavement anyway.
+
+BUG: THE NEW ENGINE GAUGES WERE INVISIBLE FROM THE COCKPIT
+Found by looking at a night screenshot - section 17's lesson, fourth time.
+The flight panel is view-dependent: in the cockpit the screen panel switches
+OFF and the 3D board takes over. Section 47b put the cluster in that same GUI,
+so it vanished in first person - the one place a pilot reads oil pressure. It
+has no 3D board and cannot be given one (section 44), so it now has its own
+always-on ScreenGui, bottom right, clear of the yoke's neutral.
+
+TASK 2 - RUNWAYS WIDENED ~1.5x (section 45's open decision, pilot's answer)
+- Meadow 18/36: 23 -> 35 m. Ridge 09/27: 18 -> 27 m. Taxiway: 15 -> 23 m.
+- THE TAXIWAY WAS THE BROKEN ONE: at 15 m the 20.59 m aeroplane overhung it
+  by 2.8 m a side, so a wider runway it could not taxi to was not a fix.
+- Length unchanged, as asked.
+- Almost nothing else needed touching - the geometry is width-derived, so
+  bars, markers, connectors and the windsock all followed. Stripe count is a
+  nearest-entry lookup: 35 m lands on the 30 m row -> 8 stripes (was 6).
+- Cessna172.model.skinScale is now exposed, and it mattered: the new checks
+  measure the runway against the DRAWN span, and a test reaching for a scale
+  the definition did not publish would have fallen back to the unscaled 11 m
+  and passed while the aeroplane still did not fit.
+
+VERIFIED LIVE
+- Night, seated: landing light washes the pavement, taxi floods the near
+  field, engine cluster readable from the seat.
+- Daylight chase: the 172 sits inside the widened pavement with real margin,
+  8 threshold stripes, wider taxiway alongside. Measured 35.0 m of runway
+  against 20.59 m of aeroplane.
+
+NOTE: TerrainService failed one check when run FIRST in a batch and passed
+alone and when run last ("fillTopFor ... got nothing"). That is section 7's
+"a suite that depends on another having run is flaky" class and is
+PRE-EXISTING - the widths were green in every ordering.
+
+----------------------------------------------------------------------------
+NEXT
+----------------------------------------------------------------------------
+Phase 5 - WEATHER, not started. Wind layers (crosswinds by construction),
+Dryden/Von Karman turbulence (seed-deterministic), the wind-shear/microburst
+gate (~150 ft AGL at 90 kt, survivable but hard), temperature + QNH presets
+(Atmosphere already takes tempOffsetC/qnhPa), and the jet LAST. Section 29's
+~29 m altitude-hold droop is parked there.
+
+Open, unchanged: dynamic fuel mass (a section 4 mass-model call); pitch
+inertia; and the TerrainService ordering flakiness above.

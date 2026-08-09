@@ -1596,6 +1596,22 @@ Cessna172.model = {
 	rootPart = "Cabin",
 
 	--[[
+		The factor the SKIN is drawn at, exposed so consumers can ask how big
+		the aeroplane LOOKS rather than how big it flies (§45).
+
+		⚠️ IT IS PUBLISHED HERE BECAUSE THE AIRPORT NEEDS IT. The runway and
+		taxiway widths are checked against the aeroplane's DRAWN span, not its
+		published 11.00 m - the drawn span is what overhangs the pavement, and
+		it was 20.59 m against a 15 m taxiway until 2026-08-09. A test that
+		reached for a scale this file did not expose would silently fall back to
+		the unscaled span and pass while the aeroplane still did not fit.
+
+		The physics does NOT read this. The nine mass boxes are unscaled and
+		§45's whole design is that only the skin, the gear and the seat move.
+	]]
+	skinScale = AIRCRAFT_SCALE,
+
+	--[[
 		The structural boxes are the physics and are not meant to be looked
 		at. Phase 4 draws the real shape over them in `decorations`, so they
 		are hidden rather than deleted - deleting one would delete the mass

@@ -488,6 +488,9 @@ SixPack.samplers = {
 local player = Players.LocalPlayer
 
 local screenGui: ScreenGui? = nil
+-- The engine cluster's own GUI (Phase 4c). Separate because it stays on in
+-- every view where the flight panel does not - see build().
+local clusterScreenGui: ScreenGui? = nil
 local gauges: { [string]: any } = {}
 local registration: any = nil
 local initialised = false
@@ -678,26 +681,45 @@ function SixPack.build(parent: Instance): (ScreenGui, { [string]: any })
 	panel.Position = UDim2.new(0.5, 0, 1, -BOTTOM_MARGIN)
 
 	--[[
-		The engine cluster sits directly ABOVE the panel's right-hand end, where
-		a 172's engine gauges are - beside the flight instruments rather than
-		under them, and clear of the middle of the screen where the yoke's
-		neutral lives (§6i's reasoning for the debug HUD, applied again).
+		⚠️ THE ENGINE CLUSTER GETS ITS OWN ScreenGui, AND THAT IS NOT TIDINESS.
+
+		The flight panel is VIEW-DEPENDENT (see Init): in the cockpit the screen
+		panel is switched OFF and the 3D board on the `PanelBoard` takes over,
+		which is what makes the cockpit tangible. The cluster has NO 3D board -
+		the board is sized for the six-pack, and giving the engine gauges one
+		would be a new cockpit part, which §44 forbids while the project is in
+		graybox.
+
+		So a cluster living in the flight panel's GUI was invisible in the
+		cockpit - which is precisely where a pilot reads oil pressure. Found by
+		looking at a night screenshot and noticing the gauges were not there.
+
+		Its own GUI, always on while flying, is the honest graybox answer: a
+		small always-present overlay, exactly like the debug HUD, until the 3D
+		pass gives it a board.
 	]]
-	local enginePanel, engineBuilt = SixPack.buildEnginePanel(gui)
+	local clusterGui = Instance.new("ScreenGui")
+	clusterGui.Name = "FlightSimEngineCluster"
+	clusterGui.ResetOnSpawn = false
+	clusterGui.IgnoreGuiInset = false
+	clusterGui.Enabled = false
+	clusterGui.Parent = parent
+
+	local enginePanel, engineBuilt = SixPack.buildEnginePanel(clusterGui)
+	--[[
+		Bottom RIGHT, out of the middle of the screen where the yoke's neutral
+		lives, and clear of the flight panel which is bottom-centre. §6i's
+		reasoning for the debug HUD, applied again.
+	]]
 	enginePanel.AnchorPoint = Vector2.new(1, 1)
-	enginePanel.Position = UDim2.new(
-		0.5,
-		panel.Size.X.Offset / 2,
-		1,
-		-(BOTTOM_MARGIN + panel.Size.Y.Offset + GAP)
-	)
+	enginePanel.Position = UDim2.new(1, -BOTTOM_MARGIN, 1, -BOTTOM_MARGIN)
 
 	-- Merged into one table so `render` drives both frames with one call.
 	for key, value in engineBuilt do
 		built[key] = value
 	end
 
-	return gui, built
+	return gui, built, clusterGui
 end
 
 --[[
@@ -747,7 +769,8 @@ function SixPack.Init()
 	initialised = true
 
 	local playerGui = player:WaitForChild("PlayerGui")
-	local gui, built = SixPack.build(playerGui)
+	local gui, built, clusterGui = SixPack.build(playerGui)
+	clusterScreenGui = clusterGui
 	screenGui = gui
 	gauges = built
 
@@ -814,6 +837,9 @@ function SixPack.Init()
 		local flying = telemetry ~= nil and FlightController.isFlying()
 
 		if not flying then
+			if clusterGui.Enabled then
+				clusterGui.Enabled = false
+			end
 			if gui.Enabled then
 				gui.Enabled = false
 			end
@@ -821,6 +847,17 @@ function SixPack.Init()
 				boardSurface.Enabled = false
 			end
 			return
+		end
+
+		--[[
+			⚠️ THE ENGINE CLUSTER IS ON IN EVERY VIEW, unlike the flight panel
+			below it. It has no 3D board to hand over to - the `PanelBoard` is
+			sized for the six-pack and §44 forbids adding another part - so a
+			cluster that followed the panel's view switching would be invisible
+			in the cockpit, which is the one place a pilot reads oil pressure.
+		]]
+		if not clusterGui.Enabled then
+			clusterGui.Enabled = true
 		end
 
 		local systems = FlightController.getSystems()
@@ -859,6 +896,12 @@ function SixPack.Shutdown()
 	if screenGui then
 		screenGui:Destroy()
 		screenGui = nil
+	end
+	-- The cluster is a second ScreenGui (see build) and would otherwise be
+	-- left behind on the PlayerGui after a shutdown.
+	if clusterScreenGui then
+		clusterScreenGui:Destroy()
+		clusterScreenGui = nil
 	end
 	table.clear(gauges)
 	initialised = false

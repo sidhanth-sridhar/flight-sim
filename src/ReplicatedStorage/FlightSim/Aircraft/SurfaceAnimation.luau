@@ -43,6 +43,9 @@ local RESPONSE_TAU = {
 	rudder = 0.05,
 	flaps = 2.5,
 	trim = 1.2,
+	-- Rudder trim is a wheel on the pedestal, exactly like the pitch trim
+	-- wheel, so it moves at the same unhurried rate (Phase 4c, item 1).
+	rudderTrim = 1.2,
 }
 
 --[[
@@ -117,6 +120,14 @@ function SurfaceAnimation.surfaceAngle(hinge: any, sources: any): number
 			deflections is negative, which is what caught it.
 		]]
 		input = sources.trim or 0
+	elseif channel == "rudderTrim" then
+		--[[
+			Not negated, for exactly the reason the pitch trim tab is not: the
+			opposition between a tab and the surface it trims is carried by the
+			SIGNS the two declare, and negating the input as well would cancel it
+			and give an anti-servo tab off a different aeroplane (Phase 4c).
+		]]
+		input = sources.rudderTrim or 0
 	else
 		return 0
 	end
@@ -224,7 +235,20 @@ end
 	FlightModel consumes, and adding it to them to make this easier would
 	change a contract that §6c pins down for good reasons.
 ]]
-function SurfaceAnimation.step(state: any, dt: number, controls: any, trim: number?, rpm: number?)
+function SurfaceAnimation.step(
+	state: any,
+	dt: number,
+	controls: any,
+	trim: number?,
+	rpm: number?,
+	--[[
+		Rudder trim, -1..1, added in Phase 4c. Optional and last, so every
+		existing caller is unchanged and an aircraft with no rudder trim tab
+		simply drives nothing - which is what a definition without the surface
+		should do.
+	]]
+	rudderTrim: number?
+)
 	if not state then
 		return
 	end
@@ -235,6 +259,7 @@ function SurfaceAnimation.step(state: any, dt: number, controls: any, trim: numb
 		yaw = controls and controls.yaw or 0,
 		flaps = controls and controls.flaps or 0,
 		trim = trim or 0,
+		rudderTrim = rudderTrim or 0,
 	}
 
 	for _, entry in state.surfaces do
@@ -418,6 +443,66 @@ function SurfaceAnimation.runTests(): (boolean, { any })
 		string.format("%+.1f deg about Y", deg(rudder, { yaw = 1 }))
 	)
 
+	-- ---- Rudder trim (Phase 4c, item 1) ----------------------------------
+	--[[
+		The same relationship the elevator tab has, on the other axis. Read from
+		the DEFINITION rather than restated, so this cannot drift away from the
+		aeroplane the builder actually makes.
+	]]
+	local rudderTab = bySpec.RudderTrimTab
+	record(
+		"The rudder has a trim tab at all",
+		rudderTab ~= nil and rudderTab.hinge.channel == "rudderTrim",
+		rudderTab and string.format("%s on channel %s", rudderTab.name, rudderTab.hinge.channel) or "missing"
+	)
+	record(
+		"...hinged to the RUDDER, so it rides with it rather than off the fin",
+		rudderTab ~= nil and rudderTab.hinge.parent == "Rudder",
+		rudderTab and tostring(rudderTab.hinge.parent) or "missing"
+	)
+	record(
+		"...on the same axis as the rudder it trims",
+		rudderTab ~= nil and rudderTab.hinge.axis == bySpec.Rudder.hinge.axis,
+		rudderTab and string.format("both about %s", rudderTab.hinge.axis) or "missing"
+	)
+	--[[
+		A tab OPPOSES the surface it trims. Right rudder trim must swing the tab
+		LEFT, which is what pushes the rudder right and holds it there.
+	]]
+	record(
+		"The rudder tab opposes the rudder it trims",
+		rudderTab ~= nil
+			and deg(rudderTab.hinge, { rudderTrim = 1 }) * deg(bySpec.Rudder.hinge, { yaw = 1 }) < 0,
+		rudderTab and string.format(
+			"trim %+.1f against rudder %+.1f",
+			deg(rudderTab.hinge, { rudderTrim = 1 }),
+			deg(bySpec.Rudder.hinge, { yaw = 1 })
+		) or "missing"
+	)
+	--[[
+		⚠️ AND ITS TRAVEL IS SMALLER THAN THE PITCH TAB'S, deliberately: rudder
+		trim takes the footwork out of a climb, it does not fly the aeroplane
+		sideways.
+	]]
+	record(
+		"Rudder trim has less authority than pitch trim",
+		rudderTab ~= nil and rudderTab.hinge.maxDeg < bySpec.TrimTab.hinge.maxDeg,
+		rudderTab and string.format("%d deg against the elevator tab's %d",
+			rudderTab.hinge.maxDeg, bySpec.TrimTab.hinge.maxDeg) or "missing"
+	)
+	--[[
+		The two trim channels must be independent. One `trim` source driving
+		both tabs would mean trimming the nose up also kicked the rudder, which
+		would be very confusing and entirely invisible in the arithmetic above.
+	]]
+	record(
+		"Pitch trim does not move the rudder tab, and vice versa",
+		rudderTab ~= nil
+			and deg(rudderTab.hinge, { trim = 1 }) == 0
+			and deg(bySpec.TrimTab.hinge, { rudderTrim = 1 }) == 0,
+		"the two trim channels are independent"
+	)
+
 	-- ---- Guards ----------------------------------------------------------
 	record(
 		"An unknown channel is inert rather than an error",
@@ -553,6 +638,72 @@ function SurfaceAnimation.runTests(): (boolean, { any })
 				and math.abs(bothWorld - (elevatorMoved + tabTrimmed)) < 0.5,
 			string.format("carried to %+.1f deg while holding %+.1f against the elevator", bothWorld, bothRelative)
 		)
+
+		--[[
+			---- And the SAME compound motion on the rudder (Phase 4c) --------
+
+			Driven on a real built model for exactly the reason §37 gives: every
+			check above this block is pure arithmetic, and the bug §37 found
+			lived in the JOINT the builder made rather than in the arithmetic.
+			The rudder tab is built the same way, so it gets the same test - on
+			the Y axis, where a sign convention that happened to be right about X
+			proves nothing.
+		]]
+		local rudderPart = model:FindFirstChild("Rudder") :: BasePart
+		local rudderTabPart = model:FindFirstChild("RudderTrimTab") :: BasePart
+
+		if rudderPart and rudderTabPart then
+			-- Yaw about Y, read off the part's own look direction relative to
+			-- its reference, which is the Y-axis analogue of angleBetween above.
+			local function yawBetween(part: BasePart, reference: BasePart): number
+				local rel = reference.CFrame:Inverse() * part.CFrame
+				return math.deg(math.asin(math.clamp(rel.LookVector.X, -1, 1)))
+			end
+
+			local function settleRudder(yaw: number, rudderTrimValue: number)
+				for _ = 1, 2000 do
+					SurfaceAnimation.step(
+						state,
+						1 / 60,
+						{ pitch = 0, roll = 0, yaw = yaw, flaps = 0, throttle = 0, brake = 0 },
+						0,
+						0,
+						rudderTrimValue
+					)
+				end
+			end
+
+			settleRudder(0, 0)
+			local restRudderTab = yawBetween(rudderTabPart, rudderPart)
+
+			settleRudder(1, 0)
+			local rudderMoved = yawBetween(rudderPart, model.PrimaryPart)
+			local tabCarried = yawBetween(rudderTabPart, rudderPart)
+			record(
+				"Full rudder carries the rudder trim tab with it",
+				math.abs(rudderMoved) > 20 and math.abs(tabCarried - restRudderTab) < 0.1,
+				string.format("rudder %+.1f deg, tab still %+.1f deg relative to it", rudderMoved, tabCarried)
+			)
+
+			settleRudder(0, 1)
+			local rudderTabTrimmed = yawBetween(rudderTabPart, rudderPart)
+			record(
+				"...and still trims against it, on neutral pedals",
+				math.abs(rudderTabTrimmed) > 8 and rudderTabTrimmed * rudderMoved < 0,
+				string.format("tab %+.1f deg, opposing a full rudder's %+.1f", rudderTabTrimmed, rudderMoved)
+			)
+
+			settleRudder(1, 1)
+			local rudderBoth = yawBetween(rudderTabPart, model.PrimaryPart)
+			record(
+				"Pedal and rudder trim compound rather than override",
+				math.abs(rudderBoth - (rudderMoved + rudderTabTrimmed)) < 0.5,
+				string.format("carried to %+.1f deg, the sum of %+.1f and %+.1f",
+					rudderBoth, rudderMoved, rudderTabTrimmed)
+			)
+		else
+			record("The rudder trim tab is built onto the model", false, "RudderTrimTab or Rudder missing from the built model")
+		end
 
 		model:Destroy()
 	else

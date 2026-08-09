@@ -174,6 +174,103 @@ InputController.DEFAULT_BINDINGS = {
 	ToggleTablet = Enum.KeyCode.M,
 
 	--[[
+		=====================================================================
+		PHASE 4c - THE 172S SYSTEMS
+		=====================================================================
+
+		⚠️ TWENTY-TWO NEW KEYS, AND THAT IS WHY THE BINDS REFERENCE EXISTS.
+		Nineteen bindings were memorable; forty-one are not, and a control the
+		pilot cannot find is a control that is not there. `BindsPanel` renders
+		this table - not a copy of it - on K.
+
+		EVERY ONE OF THESE IS A KEY, NOT A CLICKABLE SWITCH, and that is the
+		2026-08-06 decision recorded in §14: the cursor is the yoke, so a
+		clickable knob mid-flight IS the flight controls by construction. The
+		tablet earned its modal state because a picker cannot be a key (§46); a
+		switch can, so it is one.
+
+		The 3D parts these drive are already modelled and inert (Phase 4 item 4).
+		This phase gives them state; the parts mirror it.
+	]]
+
+	--[[
+		Rudder trim, on the comma and full stop - a left/right pair that sits
+		under the right hand, well away from the flight cluster. Same shape as
+		the U/J pitch trim pair: two keys, held, moving a wheel.
+	]]
+	RudderTrimLeft = Enum.KeyCode.Comma,
+	RudderTrimRight = Enum.KeyCode.Period,
+
+	--[[
+		Mixture. Q richer, Z leaner - vertically arranged on the keyboard the
+		way the knob moves, and both clear of everything else.
+
+		⚠️ Z IS THE KEY THAT CAN STOP THE ENGINE, because pulling the mixture to
+		idle cutoff is how a 172 is shut down. That is correct and is the whole
+		point of modelling the control; it is called out here because "my engine
+		died and I do not know why" is the support question it will generate.
+	]]
+	MixtureRich = Enum.KeyCode.Q,
+	MixtureLean = Enum.KeyCode.Z,
+
+	--[[
+		The fuel selector, stepped through OFF-LEFT-BOTH-RIGHT on the bracket
+		keys. It CLAMPS at each end rather than wrapping (see
+		Engine.stepFuelSelector) so that one press too many can never shut the
+		fuel off.
+	]]
+	FuelSelectorDown = Enum.KeyCode.LeftBracket,
+	FuelSelectorUp = Enum.KeyCode.RightBracket,
+
+	--[[
+		The ignition, stepped OFF-R-L-BOTH on minus and equals. The mag CHECK is
+		what these are for: at 1,800 rpm, step down to L, read the drop, back to
+		BOTH, down to R, read the drop.
+	]]
+	MagnetosDown = Enum.KeyCode.Minus,
+	MagnetosUp = Enum.KeyCode.Equals,
+
+	--[[
+		The starter, HELD rather than pressed, because the real key is
+		spring-loaded out of START. Y is under the right hand near the mag keys.
+	]]
+	StarterEngage = Enum.KeyCode.Y,
+
+	-- The electrical masters. 1/2/3 in the order the checklist works them:
+	-- battery, then alternator, then avionics.
+	BatteryMaster = Enum.KeyCode.One,
+	AlternatorMaster = Enum.KeyCode.Two,
+	AvionicsMaster = Enum.KeyCode.Three,
+	BreakerReset = Enum.KeyCode.Four,
+
+	-- The lights, 5 through 9, in the order the panel switches run.
+	LightBeacon = Enum.KeyCode.Five,
+	LightNav = Enum.KeyCode.Six,
+	LightStrobe = Enum.KeyCode.Seven,
+	LightTaxi = Enum.KeyCode.Eight,
+	LightLanding = Enum.KeyCode.Nine,
+
+	-- Cabin environment: heat, vent, defrost.
+	CabinHeat = Enum.KeyCode.I,
+	CabinVent = Enum.KeyCode.O,
+	CabinDefrost = Enum.KeyCode.Zero,
+
+	-- Pitot heat, which is electrical load rather than cabin comfort but lives
+	-- with the other environmental switches on the real panel.
+	PitotHeat = Enum.KeyCode.Backquote,
+
+	--[[
+		The binds reference itself, on K for Keys.
+
+		⚠️ READ OFF InputBegan BY ITS OWN PANEL, not by update(), and this is now
+		the fourth action wired that way after ResetAircraft, ToggleHud and
+		ToggleTablet. The reason is the same one every time - update() only runs
+		while an aircraft is being flown, and a pilot who cannot remember a key
+		needs the list on the apron more than anywhere else.
+	]]
+	ToggleBinds = Enum.KeyCode.K,
+
+	--[[
 		X (RecenterStick) and M (MouseModeToggle) were removed when the yoke
 		became absolute. Neither could still mean anything: there are no mouse
 		modes left, and Roblox exposes no API to warp the cursor, so "recentre
@@ -216,6 +313,21 @@ InputController.DEFAULTS = {
 	yawReturnRate = 3.5, -- pedals centre faster than they apply
 	brakeRate = 6.0,
 	trimRate = 0.08, -- per second held
+
+	--[[
+		Phase 4c rates, both per second held.
+
+		Rudder trim is slower than pitch trim because it is used less and needs
+		less precision - it takes the foot pressure out of a climb and is then
+		left alone, where pitch trim is adjusted continuously through an
+		approach.
+
+		The mixture is faster than either, because its travel is a knob the
+		pilot pulls in one movement rather than a wheel they wind.
+	]]
+	rudderTrimRate = 0.05,
+	rudderTrimLimit = 1.0,
+	mixtureRate = 0.35,
 
 	-- Time constant for the yoke's "mass". Small: this is control feel, not
 	-- aircraft response, and the aircraft's own inertia does the rest.
@@ -431,6 +543,50 @@ export type Systems = {
 		cursor stops being the yoke. See the ignore block down in update().
 	]]
 	tabletOpen: boolean,
+
+	--[[
+		=====================================================================
+		PHASE 4c - THE 172S SYSTEMS
+		=====================================================================
+
+		⚠️ ALL OF IT IS HERE, AND NONE OF IT IS IN Controls. That is §6c's
+		contract and §14's constraint stated as code: FlightModel and
+		GroundHandling consume exactly six fields, and adding a seventh for the
+		mixture or the fuel valve would break a contract that three suites pin
+		down. These are SYSTEMS - things the aeroplane is doing - and the
+		physics reads them through the modules that own them (Engine,
+		Electrical), never through the control contract.
+	]]
+
+	-- Rudder trim, -1..1, positive trims the nose right. The lateral twin of
+	-- `state.trim`, which is pitch and which lives outside systems for
+	-- historical reasons this deliberately does not copy.
+	rudderTrim: number,
+
+	-- Engine.FuelSelector / Engine.Magnetos, carried as plain strings so this
+	-- module keeps no dependency on the physics.
+	fuelSelector: string,
+	magnetos: string,
+	starterEngaged: boolean, -- true only while the key is held
+	mixture: number, -- 0 = idle cutoff, 1 = full rich
+
+	batteryMaster: boolean,
+	alternatorMaster: boolean,
+	avionicsMaster: boolean,
+	breakerReset: boolean, -- edge, consumed by FlightController
+
+	lights: {
+		beacon: boolean,
+		nav: boolean,
+		strobe: boolean,
+		taxi: boolean,
+		landing: boolean,
+	},
+
+	pitotHeat: boolean,
+	cabinHeat: boolean,
+	cabinVent: boolean,
+	cabinDefrost: boolean,
 }
 
 --[[
@@ -547,6 +703,38 @@ function InputController.new(definition: any, overrides: { [string]: any }?)
 			paused = false,
 			viewIndex = 1,
 			tabletOpen = false,
+
+			--[[
+				Phase 4c. The aeroplane is handed over in the configuration the
+				POH says to take off in - BOTH, full rich, both magnetos,
+				masters on - so every caller that predates this phase gets an
+				aeroplane that behaves exactly as it did.
+			]]
+			rudderTrim = 0,
+			fuelSelector = "BOTH",
+			magnetos = "BOTH",
+			starterEngaged = false,
+			mixture = 1,
+
+			batteryMaster = true,
+			alternatorMaster = true,
+			avionicsMaster = true,
+			breakerReset = false,
+
+			-- Beacon on, as it is whenever the engine is running. The rest are
+			-- the pilot's to switch.
+			lights = {
+				beacon = true,
+				nav = false,
+				strobe = false,
+				taxi = false,
+				landing = false,
+			},
+
+			pitotHeat = false,
+			cabinHeat = false,
+			cabinVent = false,
+			cabinDefrost = false,
 		} :: Systems,
 	}
 end
@@ -824,6 +1012,34 @@ local function rising(state: any, snapshot: InputSnapshot, action: string): bool
 end
 
 --[[
+	The ORDER the fuel selector and the ignition step through (Phase 4c).
+
+	⚠️ THESE ARE THE SEQUENCE, NOT THE MEANING, and the duplication against
+	Engine.FUEL_SELECTOR_POSITIONS is deliberate rather than sloppy. This module
+	is the input layer and must not require the physics - it is loaded on a
+	client that may have no aircraft at all. So it carries which position comes
+	next; Engine carries what each one DOES. `runTests` asserts the two lists
+	are identical, so they cannot drift.
+]]
+local FUEL_SELECTOR_ORDER = { "OFF", "LEFT", "BOTH", "RIGHT" }
+local MAGNETO_ORDER = { "OFF", "R", "L", "BOTH" }
+
+--[[
+	Step through a list of positions, CLAMPED at both ends.
+
+	Clamped rather than wrapped because these are a valve and a key with stops.
+	A fuel selector that wrapped from OFF round to RIGHT would let a pilot shut
+	the fuel off by pressing the same key one time too many, which is the exact
+	failure the physical detent exists to prevent.
+
+	Pure and exported, so the stepping is asserted without a keyboard.
+]]
+function InputController.stepPosition(list: { string }, current: string, delta: number): string
+	local index = table.find(list, current) or 1
+	return list[clamp(index + delta, 1, #list)]
+end
+
+--[[
 	Advance the control state by one frame.
 
 	Pure with respect to Roblox: everything it needs is in `snapshot` and
@@ -878,6 +1094,106 @@ function InputController.update(state: any, dt: number, snapshot: InputSnapshot,
 	end
 	-- C is momentary: the camera is held only while the key is down.
 	systems.cameraHold = held.CameraHold == true
+
+	-- ---- Phase 4c systems -------------------------------------------------
+	--[[
+		Every switch here is EDGE-TRIGGERED, for the reason stated above the
+		block this sits in: without it, holding a key for a fifth of a second
+		would strobe the switch at frame rate. The two knobs (mixture, rudder
+		trim) are the exception and ramp while held, because they have travel
+		rather than positions.
+	]]
+	if rising(state, snapshot, "BatteryMaster") then
+		systems.batteryMaster = not systems.batteryMaster
+	end
+	if rising(state, snapshot, "AlternatorMaster") then
+		systems.alternatorMaster = not systems.alternatorMaster
+	end
+	if rising(state, snapshot, "AvionicsMaster") then
+		systems.avionicsMaster = not systems.avionicsMaster
+	end
+
+	--[[
+		The breaker reset is an EDGE REPORTED ONWARD, not a state. It is set
+		true for exactly the frame the key goes down and cleared here on every
+		other frame, so FlightController can act on it once without having to
+		do its own edge detection against a boolean that never changes.
+	]]
+	systems.breakerReset = rising(state, snapshot, "BreakerReset")
+
+	if rising(state, snapshot, "LightBeacon") then
+		systems.lights.beacon = not systems.lights.beacon
+	end
+	if rising(state, snapshot, "LightNav") then
+		systems.lights.nav = not systems.lights.nav
+	end
+	if rising(state, snapshot, "LightStrobe") then
+		systems.lights.strobe = not systems.lights.strobe
+	end
+	if rising(state, snapshot, "LightTaxi") then
+		systems.lights.taxi = not systems.lights.taxi
+	end
+	if rising(state, snapshot, "LightLanding") then
+		systems.lights.landing = not systems.lights.landing
+	end
+
+	if rising(state, snapshot, "PitotHeat") then
+		systems.pitotHeat = not systems.pitotHeat
+	end
+	if rising(state, snapshot, "CabinHeat") then
+		systems.cabinHeat = not systems.cabinHeat
+	end
+	if rising(state, snapshot, "CabinVent") then
+		systems.cabinVent = not systems.cabinVent
+	end
+	if rising(state, snapshot, "CabinDefrost") then
+		systems.cabinDefrost = not systems.cabinDefrost
+	end
+
+	--[[
+		The fuel selector and the ignition step through their positions. Both
+		CLAMP at the ends rather than wrapping - Engine owns that rule and the
+		reason for it, and this layer only reports which way the pilot turned.
+
+		The lists are duplicated here as the ORDER, not as the meaning: this
+		module must not require the physics, so it carries the sequence and
+		Engine carries what each position does. A test asserts the two agree.
+	]]
+	if rising(state, snapshot, "FuelSelectorUp") then
+		systems.fuelSelector = InputController.stepPosition(FUEL_SELECTOR_ORDER, systems.fuelSelector, 1)
+	end
+	if rising(state, snapshot, "FuelSelectorDown") then
+		systems.fuelSelector = InputController.stepPosition(FUEL_SELECTOR_ORDER, systems.fuelSelector, -1)
+	end
+	if rising(state, snapshot, "MagnetosUp") then
+		systems.magnetos = InputController.stepPosition(MAGNETO_ORDER, systems.magnetos, 1)
+	end
+	if rising(state, snapshot, "MagnetosDown") then
+		systems.magnetos = InputController.stepPosition(MAGNETO_ORDER, systems.magnetos, -1)
+	end
+
+	--[[
+		The starter is MOMENTARY, like the camera hold and unlike everything
+		else here, because the real key is spring-loaded out of START. A pilot
+		who lets go mid-crank gets a crank that stops, which is the behaviour.
+	]]
+	systems.starterEngaged = held.StarterEngage == true
+
+	-- ---- The two knobs, which ramp while held -----------------------------
+	if held.MixtureRich then
+		systems.mixture = clamp(systems.mixture + config.mixtureRate * dt, 0, 1)
+	end
+	if held.MixtureLean then
+		systems.mixture = clamp(systems.mixture - config.mixtureRate * dt, 0, 1)
+	end
+
+	if held.RudderTrimRight then
+		systems.rudderTrim += config.rudderTrimRate * dt
+	end
+	if held.RudderTrimLeft then
+		systems.rudderTrim -= config.rudderTrimRate * dt
+	end
+	systems.rudderTrim = clamp(systems.rudderTrim, -config.rudderTrimLimit, config.rudderTrimLimit)
 
 	-- ---- Flaps -----------------------------------------------------------
 	-- F steps toward more flap, G back toward clean, one detent per press.
@@ -2400,6 +2716,252 @@ function InputController.runTests(): (boolean, { any })
 		"...and both conditions together still open it",
 		InputController.tabletMayOpen(true, true, true),
 		"on the ground with the mode still engaged"
+	)
+
+	-- 16. Phase 4c systems ----------------------------------------------------
+	print("--- Phase 4c systems ---")
+
+	--[[
+		⚠️ THE CONTRACT CHECK, RESTATED FOR THIS PHASE. §14's constraint is that
+		nothing here may reach Controls, and twenty-two new switches is exactly
+		the change that would break it. The six-field check at the top of this
+		suite covers a fresh state; this covers one that has been driven through
+		every new key.
+	]]
+	state = fresh()
+	local everyNewKey = {
+		"RudderTrimLeft", "RudderTrimRight", "MixtureRich", "MixtureLean",
+		"FuelSelectorUp", "FuelSelectorDown", "MagnetosUp", "MagnetosDown",
+		"StarterEngage", "BatteryMaster", "AlternatorMaster", "AvionicsMaster",
+		"BreakerReset", "LightBeacon", "LightNav", "LightStrobe", "LightTaxi",
+		"LightLanding", "CabinHeat", "CabinVent", "CabinDefrost", "PitotHeat",
+		"ToggleBinds",
+	}
+	run(state, 60, everyNewKey)
+	local extraFields = 0
+	for k in state.controls do
+		if not table.find(fields, k) then
+			extraFields += 1
+		end
+	end
+	record(
+		"Holding every new systems key adds no field to Controls",
+		extraFields == 0,
+		string.format("%d unexpected field(s) after 60 frames of all 23 keys", extraFields)
+	)
+	record(
+		"...and moves no flight control",
+		math.abs(state.controls.pitch) < 1e-9 and math.abs(state.controls.roll) < 1e-9
+			and math.abs(state.controls.yaw) < 1e-9 and state.controls.throttle == 0,
+		string.format("pitch %+.6f, yaw %+.6f, throttle %.3f",
+			state.controls.pitch, state.controls.yaw, state.controls.throttle)
+	)
+
+	-- ---- Rudder trim (item 1) ---------------------------------------------
+	state = fresh()
+	run(state, 120, { "RudderTrimRight" })
+	record(
+		"Rudder trim runs right and stays there",
+		state.systems.rudderTrim > 0,
+		string.format("%+.4f", state.systems.rudderTrim)
+	)
+	local heldRudderTrim = state.systems.rudderTrim
+	run(state, 120, nil)
+	record(
+		"...holding its setting when released, like a trim wheel",
+		math.abs(state.systems.rudderTrim - heldRudderTrim) < 1e-9,
+		string.format("%+.4f", state.systems.rudderTrim)
+	)
+	run(state, 600, { "RudderTrimLeft" })
+	record(
+		"Rudder trim runs left too, and clamps at its limit",
+		state.systems.rudderTrim < 0 and state.systems.rudderTrim >= -1.0,
+		string.format("%+.4f against a limit of %.1f", state.systems.rudderTrim, InputController.DEFAULTS.rudderTrimLimit)
+	)
+	--[[
+		The two trims are independent. One key moving both would mean trimming
+		the nose up also kicked the rudder - and §38's lesson is that two
+		actions on one control is a control the pilot cannot diagnose.
+	]]
+	state = fresh()
+	run(state, 120, { "TrimNoseUp" })
+	record(
+		"Pitch trim does not touch rudder trim",
+		state.trim > 0 and state.systems.rudderTrim == 0,
+		string.format("pitch trim %+.4f, rudder trim %+.4f", state.trim, state.systems.rudderTrim)
+	)
+
+	-- ---- Mixture (item 3) --------------------------------------------------
+	state = fresh()
+	record("The mixture starts full rich", state.systems.mixture == 1, "1.000")
+	run(state, 120, { "MixtureLean" })
+	record(
+		"Z leans the mixture",
+		state.systems.mixture < 1,
+		string.format("%.4f", state.systems.mixture)
+	)
+	run(state, 600, { "MixtureLean" })
+	record(
+		"...all the way to idle cutoff, which is how a 172 is shut down",
+		state.systems.mixture == 0,
+		"0.000"
+	)
+	run(state, 600, { "MixtureRich" })
+	record(
+		"Q takes it back to full rich and clamps there",
+		state.systems.mixture == 1,
+		"1.000"
+	)
+
+	-- ---- The fuel selector and the ignition (items 2, 4) -------------------
+	--[[
+		⚠️ THE LISTS MUST MATCH THE PHYSICS. This module carries the ORDER and
+		Engine carries the MEANING, which is the only way the input layer can
+		stay free of a dependency on the physics - and it is exactly the kind of
+		duplication that rots silently, so it is asserted rather than trusted.
+	]]
+	local Engine = require(FlightSim.Physics.Engine)
+	record(
+		"The fuel selector order matches the physics module's",
+		table.concat(FUEL_SELECTOR_ORDER, ",") == table.concat(Engine.FUEL_SELECTOR_POSITIONS, ","),
+		table.concat(FUEL_SELECTOR_ORDER, " -> ")
+	)
+	record(
+		"The magneto order matches the physics module's",
+		table.concat(MAGNETO_ORDER, ",") == table.concat(Engine.MAGNETO_POSITIONS, ","),
+		table.concat(MAGNETO_ORDER, " -> ")
+	)
+
+	state = fresh()
+	record("The selector starts on BOTH, as the POH says to take off", state.systems.fuelSelector == "BOTH", "BOTH")
+
+	-- One press is one position, however long the key is held.
+	run(state, 300, { "FuelSelectorDown" })
+	record(
+		"A held selector press steps exactly one position",
+		state.systems.fuelSelector == "LEFT",
+		state.systems.fuelSelector
+	)
+	run(state, 1, nil)
+	run(state, 120, { "FuelSelectorDown" })
+	record(
+		"...and the next press reaches OFF",
+		state.systems.fuelSelector == "OFF",
+		state.systems.fuelSelector
+	)
+	--[[
+		THE ONE THAT MATTERS FOR SAFETY. Wrapping would put RIGHT one press past
+		OFF, so a pilot stepping down past the stop would silently come round to
+		a live tank - or, going the other way, shut the fuel off.
+	]]
+	run(state, 1, nil)
+	run(state, 120, { "FuelSelectorDown" })
+	record(
+		"The selector CLAMPS at OFF rather than wrapping round",
+		state.systems.fuelSelector == "OFF",
+		"still OFF - a valve has stops"
+	)
+
+	state = fresh()
+	record("The ignition starts on BOTH", state.systems.magnetos == "BOTH", "BOTH")
+	run(state, 120, { "MagnetosDown" })
+	record("The mag check steps down to L", state.systems.magnetos == "L", state.systems.magnetos)
+	run(state, 1, nil)
+	run(state, 120, { "MagnetosUp" })
+	record("...and back to BOTH", state.systems.magnetos == "BOTH", state.systems.magnetos)
+
+	-- ---- The starter is momentary ------------------------------------------
+	state = fresh()
+	run(state, 60, { "StarterEngage" })
+	record("The starter engages while the key is held", state.systems.starterEngaged, "engaged")
+	run(state, 1, nil)
+	record(
+		"...and releases the moment it is let go, because the key is sprung",
+		not state.systems.starterEngaged,
+		"released"
+	)
+
+	-- ---- Electrical and lights (items 5, 8) --------------------------------
+	state = fresh()
+	record(
+		"The masters start on, in the configuration the aeroplane is handed over in",
+		state.systems.batteryMaster and state.systems.alternatorMaster and state.systems.avionicsMaster,
+		"BAT, ALT and AVIONICS all on"
+	)
+	run(state, 120, { "BatteryMaster" })
+	record("1 toggles the battery master", not state.systems.batteryMaster, "off")
+	run(state, 1, nil)
+	run(state, 120, { "BatteryMaster" })
+	record("...and back on, one position per press", state.systems.batteryMaster, "on")
+
+	state = fresh()
+	record("The beacon starts on, as it is whenever the engine runs", state.systems.lights.beacon, "on")
+	run(state, 120, { "LightLanding" })
+	record("9 switches the landing light on", state.systems.lights.landing, "on")
+	record(
+		"...and leaves the others exactly as they were",
+		state.systems.lights.beacon and not state.systems.lights.nav
+			and not state.systems.lights.strobe and not state.systems.lights.taxi,
+		"beacon on, nav/strobe/taxi still off"
+	)
+
+	--[[
+		The breaker reset is an EDGE, not a state: true for one frame only, so
+		the consumer can act on it once without doing its own edge detection.
+	]]
+	state = fresh()
+	InputController.update(state, dt, snap({ "BreakerReset" }), nil)
+	record("The breaker reset reports on the frame it is pressed", state.systems.breakerReset, "true")
+	InputController.update(state, dt, snap({ "BreakerReset" }), nil)
+	record(
+		"...and not while the key is still held",
+		not state.systems.breakerReset,
+		"false - an edge, not a state"
+	)
+
+	-- ---- The cabin (item 7) -------------------------------------------------
+	state = fresh()
+	run(state, 120, { "CabinHeat" })
+	run(state, 1, nil)
+	run(state, 120, { "CabinDefrost" })
+	record(
+		"Cabin heat and defrost switch independently",
+		state.systems.cabinHeat and state.systems.cabinDefrost and not state.systems.cabinVent,
+		"heat on, defrost on, vent still off"
+	)
+
+	--[[
+		⚠️ EVERY SYSTEM MUST BE PER-AIRCRAFT, and `lights` is a NESTED table -
+		exactly the shape §6k records as a latent bug when `altHold` and
+		`toggleViews` were cloned into DEFAULTS. Two aeroplanes sharing one
+		lights table would mean one pilot's landing light switching everybody's.
+	]]
+	local a, b = fresh(), fresh()
+	a.systems.lights.landing = true
+	record(
+		"Two aircraft do not share one lights table",
+		b.systems.lights.landing == false,
+		"the second aircraft's landing light is still off"
+	)
+	record(
+		"...nor one systems table",
+		a.systems ~= b.systems and a.systems.lights ~= b.systems.lights,
+		"distinct tables"
+	)
+
+	-- ---- The binds reference's own key -------------------------------------
+	record(
+		"The binds reference is bound to K",
+		InputController.DEFAULT_BINDINGS.ToggleBinds == Enum.KeyCode.K,
+		tostring(InputController.DEFAULT_BINDINGS.ToggleBinds)
+	)
+	state = fresh()
+	run(state, 120, { "ToggleBinds" })
+	record(
+		"Holding it moves no control and flips no system",
+		state.controls.pitch == 0 and state.controls.throttle == 0
+			and state.systems.magnetos == "BOTH" and state.systems.mixture == 1,
+		"inert in update(), like the other three panel keys"
 	)
 
 	local passCount = 0

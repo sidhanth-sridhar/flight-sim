@@ -6,7 +6,13 @@
 
 ## 0. Resume here — state at 2026-08-09
 
-**All 881 checks green across 22 suites.** Eighteen run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 991 checks green across 24 suites.** Twenty run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+
+⚙️ **PHASE 4c — THE 172S SYSTEMS ARE IN, SIX OF EIGHT ITEMS COMPLETE (§47).** Rudder trim, the fuel selector, mixture, magnetos and the electrical system are **built, wired and tested against the POH**; the engine gauges are **modelled but not yet drawn**, and the lights and cabin switches **hold state and draw current but do not yet change the 3D parts**. ⚠️ **Twenty-two new keys — forty-two bindings total — so the binds reference (K) was built with them**, read from `DEFAULT_BINDINGS` rather than a copy of it. **The Controls contract is untouched**: every system lives in `state.systems`. **NOT YET FLOWN — the Phase 4c gate is open.**
+
+🔎 **THE BRIEF'S PREMISE ABOUT THE FUEL SPLIT WAS WRONG, AND MEASURING IT IS THE FINDING (§47).** Two tanks were expected to move the CoM. They do not: the fuel is **already** carried in the definition's *static* mass boxes — `WingLeft` and `WingRight` at 110 kg each, commented "structure plus the fuel it carries" — and those never change as fuel burns. `fuelKg` was never a mass, it is bookkeeping the engine drinks from. **So §4 stands unchanged, verified rather than assumed.** Making a lateral imbalance produce a real rolling moment means making the wing boxes *dynamic*, which is a **§4 mass-model decision for the pilot**, not a side effect of fitting a fuel valve.
+
+🐛 **THREE BUGS THE SUITES CAUGHT ON CORRECT-LOOKING CODE (§47).** The rudder trim tab was built with `sign = +1` like the rudder and so **followed** it instead of opposing it — an anti-servo tab off a different aeroplane, and §37's exact lesson on the other axis. It also **hung past the rudder's trailing edge** and grew the aeroplane to 15.755 m against §45's 15.500 target; the real tab is *inset*, and the published-length check found it immediately. And the mixture curve **disagreed with its own comment** — a plain square gave 0.87 power at best economy where the note claimed 0.95, so the exponent is now derived from the figure it has to hit (2.5, not 2).
 
 📱 **THE FLIGHT TABLET IS IN, AND PHASE 4b'S OPEN DECISION IS CLOSED (§46).** ⚠️ **The pilot's answer was neither option §14 wrote down.** Not "modal, releases the yoke anywhere" and not "ground only", but **on the ground OR with altitude hold engaged** — and the second half costs nothing, because §28 already made the mode on R ignore the cursor entirely, so the pilot's hands are off the controls by construction and a clickable panel takes nothing away. **M opens it** (free since the absolute yoke retired MouseModeToggle). Departure/destination pickers and an aircraft picker, with distance, bearing, climb and cruise altitude presented from `AirportService.flightPlan()` — **a lookup, never a second implementation.** ⚠️ **The gate is re-checked EVERY FRAME, not just on open**: opened during the take-off roll it is legal, and thirty seconds later the aeroplane is airborne on trim with a clickable panel over the windscreen — so it closes itself and says why. Verified live: opens seated on the ground, **slams shut the instant the wheels leave**, opens again with R engaged.
 
@@ -203,7 +209,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (881 checks total)
+### Verified green (991 checks total)
 
 ⚠️ `UIController.runTests()` runs **all five** UI suites — `DebugHud`, `Instrument`, `InstrumentError`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 ⚠️ `TabletController.runTests()` does the same for the tablet: `Tablet` plus its own 9. `TabletController.runOwnTests()` is the 9 alone.
@@ -212,20 +218,22 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 |---|---|---|---|
 | `Atmosphere` | `Physics/Atmosphere.luau` | 17/17 | Client |
 | `Aerodynamics` | `Physics/Aerodynamics.luau` | 37/37 | Client |
-| `Engine` | `Physics/Engine.luau` | 24/24 | Client |
+| `Engine` | `Physics/Engine.luau` | 57/57 | Client |
+| `Electrical` | `Physics/Electrical.luau` | 21/21 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 33/33 | Client |
-| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 25/25 | Client |
-| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 24/24 | Client |
+| `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 28/28 | Client |
+| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 33/33 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
-| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 121/121 | Client |
+| `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 155/155 | Client |
 | `FlightController` | `StarterPlayer/.../FlightSim/Controllers/FlightController.luau` | 51/51 | Client |
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 45/45 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
 | `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 53/53 | Client |
 | `InstrumentError` | `StarterPlayer/.../FlightSim/UI/Instruments/InstrumentError.luau` | 23/23 | Client |
-| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 (aggregate 181) | Client |
+| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 (aggregate 191) | Client |
+| `BindsPanel` | `StarterPlayer/.../FlightSim/UI/Binds/BindsPanel.luau` | 10/10 | Client |
 | `Tablet` | `StarterPlayer/.../FlightSim/UI/Tablet/Tablet.luau` | 32/32 | Client |
 | `TabletController` | `StarterPlayer/.../FlightSim/Controllers/TabletController.luau` | 9/9 (aggregate 41) | Client |
 | `AircraftService` | `ServerScriptService/FlightSim/Services/AircraftService.luau` | 54/54 | **Server** |
@@ -3042,3 +3050,120 @@ And by hand, which is the part that matters:
 3. **Take off, and press M.** It refuses, and says to land or engage altitude hold.
 4. **Open it during the take-off roll and let the aeroplane fly itself off.** It must close itself the instant the wheels leave.
 5. **At altitude, press R, then M.** It opens, and the autopilot keeps flying while you pick a destination.
+
+---
+
+## 47. Phase 4c — the 172S systems (2026-08-09, six of eight items built)
+
+**991/991 across 24 suites** (was 881; +110 new checks). `Engine` 24 → 57, `SurfaceAnimation` 24 → 33, `InputController` 121 → 155, `AircraftBuilder` 25 → 28, `UIController` 181 → 191, plus two new suites: `Electrical` 21 and `BindsPanel` 10.
+
+⚠️ **NOT FLOWN. The Phase 4c gate is open** — a pilot has not started this aeroplane on a mag check, taken off on BOTH, or trimmed the rudder hands-off. Everything below is green in the suites and verified in Studio; none of it is signed off.
+
+### What is built, and what is honestly not
+
+| # | Item | State |
+|---|---|---|
+| 1 | **Rudder trim tab** | ✅ Built. Tab, channel, keys, wiring, compound-motion test on a real model. |
+| 2 | **Fuel selector** | ✅ Built. Two tanks, OFF/LEFT/BOTH/RIGHT, line fuel, starvation. |
+| 3 | **Mixture** | ✅ Built. Leaning, the power/fuel trade, idle cutoff. |
+| 4 | **Magnetos / keyed ignition** | ✅ Built. OFF-R-L-BOTH, held starter, mag check against POH limits. |
+| 5 | **Master / avionics / electrical** | ✅ Built. New `Electrical` module: BAT/ALT/avionics, bus, ammeter, breakers, battery drain. |
+| 6 | **Engine gauges** | 🟨 **Half.** Oil pressure, oil temperature and fuel flow are **modelled** and asserted in the POH's bands. **They are not drawn** — no `SixPack` dials yet. |
+| 7 | **Cabin environment** | 🟨 **Half.** Heat, vent, defrost and pitot heat hold state and draw current. **No 3D part mirrors them.** |
+| 8 | **Lights that switch** | 🟨 **Half.** Beacon, NAV, strobe, taxi and landing hold state and load the bus. **The parts do not illuminate yet.** |
+| — | **Binds reference** | ✅ Built. K, read-only, from the live bindings table. |
+
+The three halves are all the same missing piece: **the visual layer**. The state, the electrical dependency and the tests exist; what does not is the code that turns a `systems.lights.landing = true` into a part that glows and a needle that moves. That is the next task and it is small — it is a consumer of what is already here, not a redesign.
+
+### The constraint that shaped everything: the Controls contract
+
+⚠️ **Twenty-two new switches, and not one of them is a Controls field.** §6c pins the six-field contract with tests in three suites, and §14 made it non-negotiable for this phase. Everything here is `state.systems`, in the style the engine toggle already used, and a test drives *all twenty-three new keys for sixty frames* and asserts that Controls gained no field and no flight control moved.
+
+The physics reads these through the modules that own them — `Engine` for the valve, the knob and the key, `Electrical` for the bus — never through the control contract.
+
+### 🔎 The brief's premise about the fuel split was wrong, and measuring it is the finding
+
+The task said: *"Re-verify §4 (153 kg tank is one lump; two tanks move CoM)."*
+
+**Measured, two tanks move nothing at all.** The fuel is *already* in the definition's mass boxes:
+
+```
+{ name = "WingLeft",  mass = 110 },  -- "structure plus the fuel it carries"
+{ name = "WingRight", mass = 110 },
+```
+
+Those are **static**. They do not change as fuel burns, they are already symmetric, and `Engine.fuelKg` has never been a mass in the model — it is bookkeeping the engine drinks from. Splitting it into `fuelLeftKg` and `fuelRightKg` therefore moves no mass whatsoever, and **§4 stands unchanged — verified by a test that reads the two wing masses out of the definition, not assumed.**
+
+⚠️ **This is a finding, not a shortcut, and it leaves a real decision open.** `Engine.fuelImbalanceKg()` reports the imbalance, and today it is a *number on a gauge* rather than a wing that wants to drop. Making it produce a genuine rolling moment means making the wing boxes **vary with tank contents** — a change to the mass model, and therefore a **§4 decision for the pilot**, with Roblox `CustomPhysicalProperties` being rewritten as fuel burns. It is deliberately not done here.
+
+### How each system is modelled, and against what
+
+Every figure is a published Lycoming IO-360-L2A or Cessna 172S number, or is derived from one and says so.
+
+- **Mag check.** The POH allows *no more than 150 RPM drop on either magneto, and no more than 50 RPM between them*, at 1,800 RPM. `SINGLE_MAG_POWER_FACTOR` is **derived from that limit**, not chosen for feel, and the factor reaches the **RPM as well as the power** — because the drop is something the pilot *reads on the tachometer*, and a magneto that changed power without changing RPM would be a system with no instrument. Both magnetos carry the same factor deliberately, so the differential is exactly zero: **a differential is a fault, and this engine is not faulty.** When Phase 6's damage model arrives, an unhealthy magneto is one number.
+- **Mixture.** The correct mixture *is* the density ratio — that is the whole physical content of leaning, and it is why full rich at 8,000 ft is 27% too much fuel. Power is unaffected rich of correct (deliberately: full rich at sea level is the reference condition §4 was verified in, and modelling the real 2–3% loss would silently re-tune the whole aeroplane). Lean of correct it falls away, reaching zero *at* the cutoff so the engine quits without a step. **Fuel flow scales with the lean ratio and power does not** — that asymmetry is the entire reason leaning is worth doing, and the test asserts it as an inequality rather than a number.
+- **Fuel.** BOTH draws evenly and makes up a shortfall from either side, which is *why it is the position you take off and land on*. LEFT and RIGHT draw from one tank only, so an empty selected tank starves the engine **with the other one full** — the classic mismanagement accident — and a paired test shows BOTH surviving the identical starting state.
+- **⚠️ OFF does not stop it instantly**, and there is **no published figure** for how long it runs: the POH does not certify flight with the fuel off. So `lineFuelKg` is stated as a *mechanism* with a plausible volume (~70 ml, about six seconds at cruise burn) and the test asserts the resulting time is in the handful-of-seconds band a real one gives — **not a POH number dressed up as one.**
+- **Electrical.** 28-volt system, 24-volt battery, 60-amp alternator, 13 Ah battery — all published. The ammeter shows the **rate of charge**, not the system load, which is why it swings positive after a start and settles toward zero. **The alternator cannot self-excite with the battery master off**, because its field comes off the bus — a real property of the aeroplane and the reason the checklist turns BAT on before ALT.
+- **Oil.** Pressure tracks RPM (zero stopped, the POH's 25 psi minimum at idle, mid-green at cruise) and **cold oil reads higher because it is thicker** — the needle near the top of the green on a cold start, settling as it warms. Temperature starts at ambient and takes minutes, which is why a run-up is not the first thing you do after a start.
+
+### 🐛 Three bugs the suites caught on code that looked right
+
+**1. The rudder trim tab followed the rudder instead of opposing it.** Built with `sign = +1`, matching the rudder's default — and a tab that follows the surface it trims is an **anti-servo tab off a different aeroplane**. This is §37's lesson arriving on the other axis: the opposition lives entirely in the two signs, and the elevator pair reads −1/+1 only because the elevator *declares* −1. The rudder takes the default, so its tab must be the mirror: **+1/−1**.
+
+**2. The tab hung past the trailing edge and grew the aeroplane.** It measured **15.755 m against §45's 15.500 m target** — and the published-length check found it on the first run. The 172S's 8.28 m is measured to the rearmost point, which on the real aeroplane is the *rudder*, because the real tab is **inset into the trailing edge**. Moved so its aft face is exactly flush at z 5.184; envelope restored, `Cessna172` still 33/33.
+
+**3. The mixture curve disagreed with its own comment.** The note claimed 0.95 of power at best economy; a plain square gave **0.87**, a far harsher penalty than leaning really costs. The exponent is now **derived from the figure it has to hit** — `shortfall^2.5`, from `ln(0.05)/ln(0.3077)` — rather than picked. The comment was right and the arithmetic was wrong, which is the useful direction for that disagreement to be found in.
+
+A fourth was caught in the electrical suite and is worth a line, because the test was the broken thing: it tried to trip a breaker by inflating `LOADS.beacon`, and the breaker limit is **derived from `LOADS`** — so the limit rose with the fault and nothing ever tripped. **Testing a threshold by changing the thing the threshold is computed from proves nothing.** `update()` now takes an explicit `faultAmps`, which is also the seam Phase 6's damage model drives. A fifth: the bus voltage was computed *before* the battery drained, so a battery measured at 0.00 Ah reported a live 20.4 V bus.
+
+### The keyed start needed one line, and it was nearly missed
+
+`engineCommanded` is E's latch, and the branch below it stops the engine whenever it is false. So a pilot who started with the **Y** starter would have had the engine stopped **one frame after it caught**, the instant they released the key. Cranking now *sets* the commanded state — the two controls must agree afterwards or they fight. Both ways in are kept deliberately: **E** is the one-key start that every existing test and pilot habit depends on, **Y** is the keyed start the run-up procedure needs.
+
+### The binds reference (K)
+
+Nineteen bindings were memorable. **Forty-two are not**, and a control the pilot cannot find is a control that is not there.
+
+⚠️ **It is built from `InputController.DEFAULT_BINDINGS`, not from a copy.** A second hand-written list is a list that goes stale, and *a controls reference that lies is worse than none at all* — the pilot trusts it and concludes the feature is broken. `rows()` walks the live table, so a rebind appears with no edit, and tests assert every binding appears **exactly once**, **with the key actually bound**, and that the list **contains its own toggle key** (it is drawn over the windscreen; guessing your way out happens in flight).
+
+An action nobody has filed into a section still appears, under **Other** — the failure mode of a hand-maintained grouping is a binding that silently vanishes, and that fallback makes it impossible.
+
+**It absorbs nothing**, and that is counted rather than trusted: a test walks the built panel for any `GuiButton` or `Active` element and requires zero. That is what makes it safe to show mid-flight, which is exactly when it is needed. §7's rule, satisfied by construction.
+
+**Verified live and looked at** (§17: arithmetic cannot verify a rendering). A real K press opens it: 94 labels, **0 interactive**, all forty-two bindings drawn in two ordered columns. The screenshot showed the punctuation keys correctly — confirmed by reading the label bytes (44 = `,`, 46 = `.`) rather than squinting at 13-pixel glyphs.
+
+### Key map, for reference
+
+| Group | Keys |
+|---|---|
+| Rudder trim | `,` `.` |
+| Mixture | `Q` rich, `Z` lean (**Z can stop the engine** — idle cutoff is how a 172 shuts down) |
+| Fuel selector | `[` toward OFF, `]` toward RIGHT — **clamped, never wrapping** |
+| Magnetos | `-` toward OFF, `=` toward BOTH |
+| Starter | `Y`, **held** (the real key is spring-loaded) |
+| Electrical | `1` BAT, `2` ALT, `3` avionics, `4` breaker reset |
+| Lights | `5` beacon, `6` NAV, `7` strobe, `8` taxi, `9` landing |
+| Cabin | `I` heat, `O` vent, `0` defrost, `` ` `` pitot heat |
+| Binds list | `K` |
+
+### How to test it
+
+```lua
+-- Client datamodel, in Play
+require(game.ReplicatedStorage.FlightSim.Physics.Engine).runTests()          -- 57
+require(game.ReplicatedStorage.FlightSim.Physics.Electrical).runTests()      -- 21
+require(game.ReplicatedStorage.FlightSim.Aircraft.SurfaceAnimation).runTests() -- 33
+require(game.StarterPlayer.StarterPlayerScripts.FlightSim.Controls.InputController).runTests() -- 155
+require(game.StarterPlayer.StarterPlayerScripts.FlightSim.Controllers.UIController).runTests() -- 191
+```
+
+**The gate, unchanged from §14** — a pilot re-flies with real systems:
+
+1. **Start on a mag check.** Mixture rich (`Q`), BAT/ALT on, fuel on BOTH, hold `Y` to crank. Run up to ~1,800, step `-` to L and read the drop, `=` back to BOTH, `-` `-` to R, read it, back to BOTH. Both drops inside 150 RPM.
+2. **BOTH for takeoff**, then fly an hour on `[` LEFT and watch the imbalance appear on the gauge.
+3. **Trim hands-off in the climb** — pitch on `U`/`J`, rudder on `,`/`.`.
+4. **Pull `Z` to idle cutoff** and confirm the engine stops, then that only the mixture and the mags can do that.
+5. Turn `1` BAT off in flight and confirm the ammeter dies.
+
+⚠️ **Items 6, 7 and 8 cannot be flown yet** — the gauges are not drawn and the lights do not light. Do those before the gate, or gate items 1–5 alone.

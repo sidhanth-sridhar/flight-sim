@@ -60,6 +60,9 @@ local Registry = require(FlightSim.Aircraft.Registry)
 local Engine = require(FlightSim.Physics.Engine)
 local FlightModel = require(FlightSim.Physics.FlightModel)
 local GroundHandling = require(FlightSim.Physics.GroundHandling)
+-- The 172S's electrical system (Phase 4c, item 5). Owns the bus the lights and
+-- the avionics read; the switches reach it through state.systems.
+local Electrical = require(FlightSim.Physics.Electrical)
 local SurfaceAnimation = require(FlightSim.Aircraft.SurfaceAnimation)
 
 -- Test-only. runTests() builds its own aircraft rather than asking the server
@@ -254,7 +257,7 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 		convenient is exactly what §6c says not to do. RPM is last frame's,
 		for the same reason the gain schedule's airspeed is.
 	]]
-	SurfaceAnimation.step(r.surfaces, dt, controls, r.input.trim, fm.engine.rpm)
+	SurfaceAnimation.step(r.surfaces, dt, controls, r.input.trim, fm.engine.rpm, systems.rudderTrim)
 
 	--[[
 		Paused: stop integrating, but zero the constraints first.
@@ -270,9 +273,68 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 		return Vector3.zero, Vector3.zero
 	end
 
-	-- 3. Engine. E produces a COMMANDED state; the engine model owns the rest,
-	--    including the starter cranking and refusing to catch without fuel.
-	if systems.engineCommanded then
+	--[[
+		3. The 172S systems (Phase 4c).
+
+		⚠️ THE SWITCHES ARE COPIED ONTO THE ENGINE BEFORE IT RUNS, not read by
+		it. `Engine` owns what a fuel selector or a magneto DOES; this is the
+		one line where the pilot's switch positions become the engine's state,
+		and doing it here rather than inside Engine.update keeps that module a
+		pure function of its own state.
+	]]
+	fm.engine.fuelSelector = systems.fuelSelector :: any
+	fm.engine.magnetos = systems.magnetos :: any
+	fm.engine.mixture = systems.mixture
+
+	--[[
+		3b. The electrical system, which the lights and the avionics read.
+
+		Stepped before the engine so the ammeter reflects the RPM the engine
+		reached last frame - the alternator is belt-driven off it, and a
+		one-frame lag on a gauge that moves this slowly is not observable.
+	]]
+	if r.electrical then
+		if systems.breakerReset then
+			Electrical.resetBreaker(r.electrical)
+		end
+		r.electrical.batteryMaster = systems.batteryMaster
+		r.electrical.alternatorMaster = systems.alternatorMaster
+		r.electrical.avionicsMaster = systems.avionicsMaster
+
+		Electrical.update(r.electrical, dt, fm.engine.running, fm.engine.rpm, {
+			beacon = systems.lights.beacon,
+			nav = systems.lights.nav,
+			strobe = systems.lights.strobe,
+			taxi = systems.lights.taxi,
+			landing = systems.lights.landing,
+			pitotHeat = systems.pitotHeat,
+		})
+	end
+
+	--[[
+		3c. Starting.
+
+		TWO WAYS IN, and both are kept. `StarterEngage` (Y, held) is the keyed
+		start the run-up procedure needs - it cranks while held and Engine
+		refuses to catch with the mags off or the mixture cut. `engineCommanded`
+		(E) is the one-key start that predates this phase and that every
+		existing test and every existing pilot habit depends on; removing it to
+		make the new procedure mandatory would break both for no gain.
+	]]
+	if systems.starterEngaged then
+		--[[
+			⚠️ CRANKING SETS THE COMMANDED STATE, and without this line the
+			keyed start does not work at all. `engineCommanded` is E's latch,
+			and the branch below stops the engine whenever it is false - so a
+			pilot who started with Y would have the engine stopped the instant
+			they let go of Y, one frame after it caught. Cranking IS commanding
+			it to run; the two must agree afterwards or E and Y fight.
+		]]
+		systems.engineCommanded = true
+		if not fm.engine.running and not fm.engine.starting then
+			Engine.start(fm.engine, r.definition.engine)
+		end
+	elseif systems.engineCommanded then
 		if not fm.engine.running and not fm.engine.starting then
 			Engine.start(fm.engine, r.definition.engine)
 		end
@@ -1242,6 +1304,8 @@ local function adopt(model: Model)
 		-- Cosmetic. Binds the hinged control surfaces so they follow the
 		-- controls; an aircraft whose definition has none binds nothing.
 		surfaces = SurfaceAnimation.new(model, definition),
+		-- Phase 4c: the electrical bus this aeroplane runs on.
+		electrical = Electrical.createState(),
 	}
 	seat = pilotSeat
 
@@ -1638,6 +1702,7 @@ function FlightController.runTests(): (boolean, { any })
 		gear = GroundHandling.new(model, Cessna172),
 		input = InputController.new(Cessna172),
 		surfaces = SurfaceAnimation.new(model, Cessna172),
+		electrical = Electrical.createState(),
 	}
 
 	local body = function()

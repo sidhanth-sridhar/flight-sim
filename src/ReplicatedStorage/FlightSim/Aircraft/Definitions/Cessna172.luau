@@ -1060,6 +1060,56 @@ add({
 })
 
 --[[
+	THE RUDDER TRIM TAB (Phase 4c, item 1) - the last flight control the
+	aeroplane was missing.
+
+	Same construction as the elevator's tab in §37, and for the same reason:
+	`parent = "Rudder"` makes it RIDE the rudder wherever the pedals put it and
+	add its own trim deflection on top. Without that it would hinge off the fin
+	and be a small fixed vane that the rudder swung around - which is precisely
+	the bug §37 records, and there is no reason to rediscover it.
+
+	It sits low on the rudder's trailing edge, which is where the real one is:
+	the rudder's centre is at z 4.944 with a half-depth of 0.24, so the trailing
+	edge is at 5.184 and the tab hangs just aft of it.
+
+	⚠️ ITS TRAVEL IS SMALLER THAN THE ELEVATOR TAB'S, and deliberately. Rudder
+	trim on a 172 exists to take the footwork out of a cruise climb, not to fly
+	the aeroplane sideways - 12 degrees against the elevator tab's 15 keeps its
+	authority proportionate to the job.
+
+	⚠️ IT IS INSET INTO THE TRAILING EDGE, NOT HUNG OFF THE BACK OF IT. The
+	rudder's centre is z 4.944 with a half-depth of 0.24, so the trailing edge
+	is at 5.184 - and this tab's AFT FACE sits exactly there. Hung beyond it, as
+	the first version was, the aeroplane measured 15.755 m against §45's 15.500
+	target and the published-length check failed immediately. That check is
+	doing its job: the 172S's 8.28 m is measured to the rearmost point, and on
+	the real aeroplane that point is the rudder, because the real tab is inset
+	into it exactly like this one.
+
+	⚠️ AND ITS SIGN IS -1 AGAINST THE RUDDER'S +1. A tab opposes the surface it
+	trims, and that opposition lives entirely in the two signs (§37). Built with
+	sign = 1 - matching the rudder - the tab FOLLOWED the rudder, which is an
+	anti-servo tab off a different aeroplane. The elevator pair reads -1/+1; this
+	pair is the mirror of it, +1/-1, because the rudder takes the default sign
+	where the elevator declares -1.
+]]
+add({
+	name = "RudderTrimTab",
+	size = Vector3.new(0.09, 0.30, 0.14),
+	position = Vector3.new(0, 0.62, 5.114),
+	color = TRIM,
+	hinge = {
+		axis = "Y",
+		channel = "rudderTrim",
+		offset = Vector3.new(0, 0, -0.07),
+		maxDeg = 12,
+		sign = -1,
+		parent = "Rudder",
+	},
+})
+
+--[[
 	---- Landing gear -------------------------------------------------------
 
 	The wheels sit exactly where the structural wheel boxes are, at the same

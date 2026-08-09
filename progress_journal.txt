@@ -325,15 +325,89 @@ NOT BUILT, DELIBERATELY
 - FlightEvent is still unwired - the tablet starts a flight, it does not yet
   follow one.
 
+
+----------------------------------------------------------------------------
+2026-08-09 (Sun) — Day 5 (continued): Phase 4c, the 172S systems
+----------------------------------------------------------------------------
+991/991 across 24 suites (was 881). +110 checks, two new suites.
+NOT FLOWN - the Phase 4c gate is open.
+
+BUILT (6 of 8 items complete, 3 half)
+1. Rudder trim tab - DONE. hinge.parent = "Rudder" so it rides AND trims,
+   own channel, own keys, compound-motion test on a real built model.
+2. Fuel selector - DONE. Two tanks, OFF/LEFT/BOTH/RIGHT, line fuel, real
+   starvation. BOTH makes up a shortfall from either side, which is WHY it is
+   the takeoff position; LEFT on an empty tank starves with the other full.
+3. Mixture - DONE. Correct mixture IS the density ratio. Fuel flow scales
+   with lean ratio and power does not - that asymmetry is why leaning is
+   worth doing. Idle cutoff stops the engine; the throttle cannot.
+4. Magnetos - DONE. OFF-R-L-BOTH, held starter, mag check against the POH's
+   150 RPM / 50 RPM differential limits. The factor reaches RPM as well as
+   power, because the drop is what the pilot READS.
+5. Electrical - DONE. New module. 28 V / 24 V / 60 A / 13 Ah, all published.
+   Ammeter shows rate of charge. Alternator cannot self-excite with BAT off,
+   which is why the checklist does BAT before ALT.
+6. Engine gauges - HALF. Oil pressure, oil temp, fuel flow MODELLED and in
+   the POH bands. NOT DRAWN - no SixPack dials yet.
+7. Cabin environment - HALF. State + keys + electrical load. No 3D mirror.
+8. Lights - HALF. State + keys + bus load. The parts do not illuminate yet.
++  Binds reference (K) - DONE. 42 bindings, read from DEFAULT_BINDINGS, not
+   a copy. Absorbs nothing (counted, not trusted). Verified with a real
+   keypress and a screenshot.
+
+The three halves are all the same missing piece: the VISUAL layer. Next task
+and it is small - a consumer of what exists, not a redesign.
+
+THE BRIEF'S PREMISE ABOUT THE FUEL SPLIT WAS WRONG, AND MEASURING IT IS THE
+FINDING
+- Expected: two tanks move the CoM, re-verify section 4.
+- Measured: they move NOTHING. The fuel is already in the STATIC mass boxes
+  (WingLeft/WingRight 110 kg each, "structure plus the fuel it carries") and
+  those never change as fuel burns. fuelKg was never a mass.
+- So section 4 stands unchanged - verified by a test that reads the two wing
+  masses out of the definition, not assumed.
+- OPEN DECISION FOR THE PILOT: making an imbalance produce a real rolling
+  moment means making the wing boxes DYNAMIC. That is a mass-model change and
+  a section 4 decision, deliberately not done here.
+
+THREE BUGS ON CODE THAT LOOKED RIGHT
+1. The rudder trim tab FOLLOWED the rudder instead of opposing it - built
+   sign = +1 like the rudder. Section 37's lesson on the other axis: the
+   opposition lives in the two signs. Now +1/-1.
+2. The tab hung past the trailing edge and grew the aeroplane to 15.755 m
+   against section 45's 15.500 target. The real tab is INSET; the published-
+   length check caught it on the first run.
+3. The mixture curve disagreed with its own comment - a plain square gave
+   0.87 power at best economy where the note claimed 0.95. Exponent now
+   DERIVED from the figure it must hit (2.5).
+Plus two in the electrical suite: a test that tripped a breaker by inflating
+the loads the breaker limit is DERIVED from (so the limit rose with the fault
+and nothing tripped), and a bus voltage computed before the battery drained,
+reporting 20.4 V on a battery measured at 0.00 Ah.
+
+THE KEYED START NEEDED ONE LINE AND WAS NEARLY MISSED
+engineCommanded is E's latch and the branch below stops the engine when it is
+false - so a pilot starting with Y would have had the engine stopped one frame
+after it caught. Cranking now sets the commanded state. Both ways in are kept:
+E is the habit every existing test depends on, Y is the procedure.
+
+CONSTRAINTS HELD
+- Controls contract untouched. All 22 new switches are state.systems; a test
+  drives all 23 new keys for 60 frames and asserts Controls gained no field
+  and no flight control moved.
+- Every switch keyboard-bound, no clickable knobs (section 7).
+- Tested against published POH numbers, not against current code.
+
 ----------------------------------------------------------------------------
 NEXT
 ----------------------------------------------------------------------------
-Pilot flies the tablet (the five hand-tests in section 46) before Phase 4c
-starts - the test-gate rule. Then 4c (172S systems: rudder trim, fuel
-selector, mixture, mags, electrical, engine gauges, lights), then 5 (weather
-+ jet), then 6, then the remaining feature phases incl. airport design, then
-the 3D modeling pass at the very end.
+1. Finish Phase 4c's visual half: SixPack dials for oil pressure / oil temp /
+   fuel flow with POH green bands; the five lights actually illuminating and
+   dependent on the bus; the cabin and switch parts mirroring their state.
+2. Then the Phase 4c gate - pilot re-flies: mag-check start, BOTH for takeoff,
+   trim hands-off in the climb, gauges in the green, lights switching.
+3. Then Phase 5 (weather + jet), 6, 7, 8, 9, 10, 11, then the 3D pass last.
 
-Still open, unchanged: pitch-inertia decision point; and section 45's
-knock-on that the 20.59 m span is 0.90x the 23 m runway and wider than the
-15 m taxiway - airport design is feature work and a separate task.
+Open decisions, unchanged: dynamic fuel mass (above); pitch inertia; and
+section 45's knock-on that the 20.59 m span is 0.90x the 23 m runway and
+wider than the 15 m taxiway - airport design is feature work, a separate task.

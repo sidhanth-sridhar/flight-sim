@@ -50,6 +50,15 @@ local SixPack = require(Instruments:WaitForChild("SixPack"))
 -- it feeds rather than in a suite of its own, because it has no lifecycle.
 local InstrumentError = require(Instruments:WaitForChild("InstrumentError"))
 
+--[[
+	The controls reference (Phase 4c). It lives here rather than in a controller
+	of its own for the same reason the instruments do - the bootstrap only scans
+	`Controllers/` - and it belongs with the HUD specifically, because it is the
+	same KIND of thing: a read-only overlay that absorbs no input and is
+	therefore safe to show while the cursor is the yoke.
+]]
+local BindsPanel = require(script.Parent.Parent:WaitForChild("UI"):WaitForChild("Binds"):WaitForChild("BindsPanel"))
+
 local UIController = {}
 
 local initialised = false
@@ -91,10 +100,19 @@ local function onInputBegan(input: InputObject, gameProcessed: boolean)
 	if input.UserInputType ~= Enum.UserInputType.Keyboard then
 		return
 	end
-	if not UIController.shouldToggleHud(input.KeyCode, gameProcessed or isTyping(), hudKey()) then
-		return
+	local blocked = gameProcessed or isTyping()
+
+	if UIController.shouldToggleHud(input.KeyCode, blocked, hudKey()) then
+		DebugHud.toggle()
 	end
-	DebugHud.toggle()
+
+	--[[
+		The controls list, on the same guard. K is a letter, so without the
+		blocked check, typing "checklist" in chat would flash the panel twice.
+	]]
+	if UIController.shouldToggleHud(input.KeyCode, blocked, InputController.DEFAULT_BINDINGS.ToggleBinds) then
+		BindsPanel.toggle()
+	end
 end
 
 function UIController.Init()
@@ -113,6 +131,14 @@ function UIController.Init()
 		flying; the debug HUD is a diagnostic that happens to share the screen.
 	]]
 	SixPack.Init()
+
+	--[[
+		Built hidden. Forty-one bindings is a large panel and the pilot asks for
+		it rather than being shown it - and a ScreenGui that is not enabled
+		absorbs nothing at all, which is how the cursor-is-the-yoke rule is
+		satisfied by construction rather than by remembering.
+	]]
+	BindsPanel.Init()
 
 	--[[
 		H toggles the HUD, on a LIFETIME connection rather than a per-aircraft
@@ -135,6 +161,7 @@ function UIController.Shutdown()
 
 	SixPack.Shutdown()
 	DebugHud.Shutdown()
+	BindsPanel.Shutdown()
 	initialised = false
 end
 
@@ -150,7 +177,7 @@ function UIController.runTests(): (boolean, { any })
 	local combined = {}
 	local allOk = true
 
-	for _, suite in { DebugHud, Instrument, InstrumentError, SixPack } do
+	for _, suite in { DebugHud, Instrument, InstrumentError, SixPack, BindsPanel } do
 		local ok, results = suite.runTests()
 		allOk = allOk and ok
 		for _, r in results do

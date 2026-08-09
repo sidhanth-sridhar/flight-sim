@@ -301,6 +301,12 @@ function FlightModel.new(model: Model, definition: any)
 			thrust = 0,
 			rpm = 0,
 			fuelKg = 0,
+			-- Phase 4c engine gauges.
+			oilPressurePsi = 0,
+			oilTempC = 0,
+			fuelFlowKgS = 0,
+			fuelLeftKg = 0,
+			fuelRightKg = 0,
 			force = Vector3.zero,
 			torque = Vector3.zero,
 			surfaces = surfaceTelemetry,
@@ -569,6 +575,19 @@ function FlightModel.computeForces(
 	telemetry.thrust = thrust
 	telemetry.rpm = state.engine.rpm
 	telemetry.fuelKg = state.engine.fuelKg
+
+	--[[
+		The Phase 4c engine gauges. Published straight through, in the units the
+		engine models them in, for the same reason rpm and fuel are: the samplers
+		in SixPack are the unit boundary, and this layer stays pure SI plus
+		whatever the instrument's own scale is marked in.
+	]]
+	telemetry.oilPressurePsi = state.engine.oilPressurePsi
+	telemetry.oilTempC = state.engine.oilTempC
+	telemetry.fuelFlowKgS = state.engine.fuelFlowKgS
+	-- The tanks, so the gauge can show an imbalance the pilot created.
+	telemetry.fuelLeftKg = state.engine.fuelLeftKg
+	telemetry.fuelRightKg = state.engine.fuelRightKg
 	--[[
 		Published for the INSTRUMENTS, not used by the physics.
 

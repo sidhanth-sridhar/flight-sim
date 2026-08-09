@@ -260,6 +260,27 @@ function FlightController.stepFrame(r: any, dt: number, snapshot: any): (Vector3
 	SurfaceAnimation.step(r.surfaces, dt, controls, r.input.trim, fm.engine.rpm, systems.rudderTrim)
 
 	--[[
+		2c. The lights (Phase 4c, item 8).
+
+		Gated on the ELECTRICAL BUS, not on the switch. A landing light switched
+		on with the battery master off is a switch that does nothing, which is
+		the whole reason item 8 waited for item 5 - and it is what makes the
+		master switch matter rather than being a light with a boolean behind it.
+
+		`r.lightClock` rather than os.clock() so the strobe's phase belongs to
+		this aircraft and is driven by the same dt as everything else.
+	]]
+	if r.lights then
+		r.lightClock = (r.lightClock or 0) + dt
+		SurfaceAnimation.stepLights(
+			r.lights,
+			systems.lights,
+			r.electrical ~= nil and Electrical.isPowered(r.electrical),
+			r.lightClock
+		)
+	end
+
+	--[[
 		Paused: stop integrating, but zero the constraints first.
 
 		Leaving the last frame's force applied while time continues would
@@ -1304,7 +1325,10 @@ local function adopt(model: Model)
 		-- Cosmetic. Binds the hinged control surfaces so they follow the
 		-- controls; an aircraft whose definition has none binds nothing.
 		surfaces = SurfaceAnimation.new(model, definition),
-		-- Phase 4c: the electrical bus this aeroplane runs on.
+		-- Phase 4c: the electrical bus this aeroplane runs on, and the lamps
+		-- that read it.
+		lights = SurfaceAnimation.bindLights(model),
+		lightClock = 0,
 		electrical = Electrical.createState(),
 	}
 	seat = pilotSeat

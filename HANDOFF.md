@@ -6,7 +6,13 @@
 
 ## 0. Resume here — state at 2026-08-09
 
-**All 991 checks green across 24 suites.** Twenty run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+**All 1,004 checks green across 24 suites.** Twenty run in **Play mode, Client datamodel**; `TerrainService`, `AirportService`, `AircraftService` and `PlayerService` run in the **Server** datamodel (see §4).
+
+# ✅ **PHASE 4c IS SIGNED OFF AND NOW COMPLETE — ALL EIGHT ITEMS.** The systems were **flown and passed on 2026-08-09** — the mag check on start, BOTH for takeoff, rudder trim hands-off in the climb, and the mixture stopping the engine. The **visual half was then built at the pilot's request** (§47b): three engine gauges with POH bands, and five lights that actually light. **1,004 checks green across 24 suites.** ⚠️ **The gauges and lights themselves have NOT been flown** — they were built after the gate.
+
+🔌 **THE LIGHTS ARE GATED ON THE BUS, NOT ON THE SWITCH (§47b).** A landing light switched on with the battery master off does nothing, which is what makes item 5 worth having and is why item 8 waited for it. **Red to port, green to starboard**, asserted rather than trusted. The strobe **flashes at ~1 Hz on an 8% duty cycle**, checked across a whole cycle because a duty cycle sampled at one instant would pass on a lamp that was always on.
+
+⚠️ **NUMBER KEYS 1–9 ARE ROBLOX COREGUI HOTBAR SLOTS.** Found when Studio's virtual input refused to send `1`: *"key is permanently bound to a CoreGUI core action"*. **The sim reads them anyway** — `InputController.poll` uses `IsKeyDown`, which is raw key state and is not filtered by `gameProcessed` — and the lights were switched with real 6/8/9 presses to prove it. But a player carrying a Tool would also be equipping it, so if a backpack ever exists, the electrical and light keys need moving.
 
 ⚙️ **PHASE 4c — THE 172S SYSTEMS ARE IN, SIX OF EIGHT ITEMS COMPLETE (§47).** Rudder trim, the fuel selector, mixture, magnetos and the electrical system are **built, wired and tested against the POH**; the engine gauges are **modelled but not yet drawn**, and the lights and cabin switches **hold state and draw current but do not yet change the 3D parts**. ⚠️ **Twenty-two new keys — forty-two bindings total — so the binds reference (K) was built with them**, read from `DEFAULT_BINDINGS` rather than a copy of it. **The Controls contract is untouched**: every system lives in `state.systems`. **NOT YET FLOWN — the Phase 4c gate is open.**
 
@@ -209,7 +215,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 
 ## 4. Current state
 
-### Verified green (991 checks total)
+### Verified green (1,004 checks total)
 
 ⚠️ `UIController.runTests()` runs **all five** UI suites — `DebugHud`, `Instrument`, `InstrumentError`, `SixPack` and its own. Its 10 own checks are `UIController.runOwnTests()`.
 ⚠️ `TabletController.runTests()` does the same for the tablet: `Tablet` plus its own 9. `TabletController.runOwnTests()` is the 9 alone.
@@ -222,7 +228,7 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `Electrical` | `Physics/Electrical.luau` | 21/21 | Client |
 | `Cessna172` | `Aircraft/Definitions/Cessna172.luau` | 33/33 | Client |
 | `AircraftBuilder` | `Aircraft/AircraftBuilder.luau` | 28/28 | Client |
-| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 33/33 | Client |
+| `SurfaceAnimation` | `Aircraft/SurfaceAnimation.luau` | 41/41 | Client |
 | `FlightModel` | `Physics/FlightModel.luau` | 53/53 | Client |
 | `GroundHandling` | `Physics/GroundHandling.luau` | 29/29 | Client |
 | `InputController` | `StarterPlayer/.../FlightSim/Controls/InputController.luau` | 155/155 | Client |
@@ -230,9 +236,9 @@ A `tools/srcserve.js` HTTP workaround existed briefly and is **retired — do no
 | `CameraController` | `StarterPlayer/.../FlightSim/Controllers/CameraController.luau` | 45/45 | Client |
 | `DebugHud` | `StarterPlayer/.../FlightSim/UI/Instruments/DebugHud.luau` | 36/36 | Client |
 | `Instrument` | `StarterPlayer/.../FlightSim/UI/Instruments/Instrument.luau` | 59/59 | Client |
-| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 53/53 | Client |
+| `SixPack` | `StarterPlayer/.../FlightSim/UI/Instruments/SixPack.luau` | 58/58 | Client |
 | `InstrumentError` | `StarterPlayer/.../FlightSim/UI/Instruments/InstrumentError.luau` | 23/23 | Client |
-| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 (aggregate 191) | Client |
+| `UIController` | `StarterPlayer/.../FlightSim/Controllers/UIController.luau` | 10/10 (aggregate 196) | Client |
 | `BindsPanel` | `StarterPlayer/.../FlightSim/UI/Binds/BindsPanel.luau` | 10/10 | Client |
 | `Tablet` | `StarterPlayer/.../FlightSim/UI/Tablet/Tablet.luau` | 32/32 | Client |
 | `TabletController` | `StarterPlayer/.../FlightSim/Controllers/TabletController.luau` | 9/9 (aggregate 41) | Client |
@@ -3057,7 +3063,9 @@ And by hand, which is the part that matters:
 
 **991/991 across 24 suites** (was 881; +110 new checks). `Engine` 24 → 57, `SurfaceAnimation` 24 → 33, `InputController` 121 → 155, `AircraftBuilder` 25 → 28, `UIController` 181 → 191, plus two new suites: `Electrical` 21 and `BindsPanel` 10.
 
-⚠️ **NOT FLOWN. The Phase 4c gate is open** — a pilot has not started this aeroplane on a mag check, taken off on BOTH, or trimmed the rudder hands-off. Everything below is green in the suites and verified in Studio; none of it is signed off.
+✅ **FLOWN AND PASSED, 2026-08-09.** The pilot started on a mag check, took off on BOTH, trimmed the rudder hands-off in the climb, and stopped the engine with the mixture. **Phase 4c is signed off.**
+
+⚠️ **BUT ITEMS 6, 7 AND 8 WERE SIGNED OFF ON THEIR MODEL, NOT THEIR DISPLAY.** The gauges are not drawn and the lights do not light, so *none of those three was flown* — there was nothing to look at. The sign-off covers the systems behind them. Their visual half is the next task, at the pilot's request, before Phase 5.
 
 ### What is built, and what is honestly not
 
@@ -3167,3 +3175,54 @@ require(game.StarterPlayer.StarterPlayerScripts.FlightSim.Controllers.UIControll
 5. Turn `1` BAT off in flight and confirm the ammeter dies.
 
 ⚠️ **Items 6, 7 and 8 cannot be flown yet** — the gauges are not drawn and the lights do not light. Do those before the gate, or gate items 1–5 alone.
+
+---
+
+## 47b. Phase 4c signed off, and the visual half built (2026-08-09)
+
+**1,004/1,004 across 24 suites** (was 991). `SurfaceAnimation` 33 → 41, `SixPack` 53 → 58, `UIController` 191 → 196.
+
+### The gate
+
+✅ **Flown and passed, 2026-08-09.** The pilot started on a mag check, took off on BOTH, trimmed the rudder hands-off in the climb, and stopped the engine with the mixture. **Phase 4c is signed off.**
+
+⚠️ **Items 6, 7 and 8 were signed off on their MODEL, not their display** — at the time of the gate the gauges were not drawn and the lights did not light, so there was nothing to look at. The pilot then asked for the visual half before Phase 5, and that is what this section records. **The gauges and the lights have not themselves been flown.**
+
+### Item 6 — the engine cluster
+
+Oil pressure, oil temperature and fuel flow, as three more `Instrument` specs. No new gauge code: §17's framework took them as data, which is what it was built for.
+
+⚠️ **THEY ARE A SEPARATE CLUSTER, NOT A THIRD ROW ON THE PANEL**, and that is a constraint rather than a preference. The main panel is 4 × 2 and **its frame's aspect ratio is asserted against the cockpit's `PanelBoard` part to 1%** — a SurfaceGui maps a fixed-pixel frame onto a face, so a mismatch renders every circular dial as an oval and nothing errors (§19). A third row would change that aspect and force the board from 0.47 m to 0.72 m tall: **a 3D modelling detour, which §44 forbids outright while the project is in graybox.** It is also what a real 172 looks like — the engine instruments are their own cluster beside the flight panel.
+
+**Every band is `Engine`'s own constant by identity, not retyped** — the same arrangement §19 uses for the tachometer's redline, and for the same reason: a gauge whose green arc disagrees with the engine driving it is worse than no gauge. Oil pressure carries a **red band below 25 psi** as well as the POH's 50–90 green, because that reading is the one that means land now. Oil temperature is marked in **Celsius**, converting the published 245 °F red line once rather than carrying two scales. Fuel flow reads **kg/h** for the same honesty the fuel gauge has (§19): the physics burns kilograms, so inventing a fuel density to print gallons would be making up a number the definition does not have.
+
+`FlightModel.telemetry` publishes five new fields — the three gauge values plus both tank quantities, so an imbalance the pilot created is visible.
+
+### Item 8 — lights that actually switch
+
+⚠️ **GATED ON THE ELECTRICAL BUS, NOT ON THE SWITCH.** A landing light switched on with the battery master off does nothing at all. That is the whole reason item 8 waited for item 5, and it is what makes a master switch mean something rather than being a boolean with a lamp behind it.
+
+- **Red to port, green to starboard** — the convention that tells you which way an aircraft is pointing at night, and the classic thing to get backwards. Read off the `LIGHTS` table by the test rather than restated.
+- **The strobe flashes**, ~1 Hz on an 8% duty cycle. Asserted **across a whole cycle**, because a duty cycle sampled at one instant proves nothing — it would pass on a lamp that was always on *and* one that was always off.
+- **A `PointLight` as well as the Neon material.** Neon makes a part *look* bright without lighting anything around it, and a landing light that puts no light on the runway is a decoration — the runway is the entire reason it exists.
+- Two tests guard the wiring: **every switch drives a part the aeroplane actually has**, and **no lamp is driven by two switches** (they would fight over its colour every frame, and table iteration order is undefined).
+
+**Four lamp parts did not exist and were added**: `StrobeLeft/Right`, `TailLight`, `TaxiLight`. ⚠️ **The strobes are placed INBOARD of the nav lights, at x 5.38 against their 5.45, so the span cannot grow** — §45 pins the aeroplane at 20.592 m and the rudder trim tab had already grown the *length* earlier in this same phase by hanging off the trailing edge. `Cessna172` is still 33/33.
+
+### ⚠️ Number keys 1–9 are Roblox CoreGUI hotbar slots
+
+Found when Studio's virtual input refused to send `1`: *"key is permanently bound to a CoreGUI core action"*.
+
+**The simulator reads them anyway.** `InputController.poll` uses `UserInputService:IsKeyDown`, which is raw key state and is **not** filtered by `gameProcessed` — verified by switching the nav, taxi and landing lights with real 6/8/9 presses on a seated pilot. So the electrical and light bindings work today.
+
+But a player carrying a `Tool` would *also* be equipping it on those presses. **There is no backpack in this game, so it is harmless now** — and if one ever appears, the eight number-key bindings are the ones that have to move.
+
+### Verified live
+
+Real keypresses on a seated pilot, in a real Play session: all eight lamp parts bound with a `PointLight` each; `6` lit the navigation lights **red on the left, green on the right**; `8` and `9` lit the taxi and landing lights; the strobe stayed dark because `7` was not pressed. The bus-gating path is covered by unit tests rather than live, because the master-switch keys are the two Studio's virtual input cannot send.
+
+### What is left
+
+Nothing in Phase 4c. **Item 7's cabin switches hold state and draw current but still have no 3D part to mirror** — the cabin heat, vent and defrost controls are pedestal knobs the graybox does not model, and §44 parks that until the 3D pass. It is recorded here rather than left implied.
+
+**Next: Phase 5 — weather.** Wind layers, Dryden/Von Kármán turbulence, the wind-shear gate, temperature and QNH presets, and the jet last.

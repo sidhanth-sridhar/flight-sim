@@ -296,6 +296,144 @@ function SurfaceAnimation.step(
 end
 
 -- =========================================================================
+-- LIGHTS (Phase 4c, item 8)
+-- =========================================================================
+
+--[[
+	Which parts each switch lights, and what colour they burn.
+
+	The parts are ALREADY MODELLED and were inert - §14 item 8's whole
+	complaint. This is what gives them a switch, and it lives here rather than
+	in a module of its own because it is exactly the same kind of thing as the
+	control surfaces: a purely visual consumer of state that the physics does
+	not read. Nothing below applies a force or changes a mass.
+
+	`NavLightRight` and `NavLightLeft` carry the real red/green convention -
+	RED ON THE LEFT WING, green on the right, which is how you tell which way an
+	aircraft is pointing at night. Getting it backwards is the classic error and
+	is asserted rather than trusted.
+]]
+SurfaceAnimation.LIGHTS = {
+	beacon = { parts = { "Beacon" }, color = Color3.fromRGB(255, 40, 40), brightness = 3, range = 24 },
+	nav = {
+		parts = { "NavLightLeft", "NavLightRight", "TailLight" },
+		-- Per-part colours override the group's, for the red/green convention.
+		colors = {
+			NavLightLeft = Color3.fromRGB(255, 40, 40),
+			NavLightRight = Color3.fromRGB(40, 255, 80),
+			TailLight = Color3.fromRGB(255, 255, 255),
+		},
+		color = Color3.fromRGB(255, 255, 255),
+		brightness = 2,
+		range = 18,
+	},
+	strobe = { parts = { "StrobeLeft", "StrobeRight" }, color = Color3.fromRGB(255, 255, 255), brightness = 6, range = 30 },
+	taxi = { parts = { "TaxiLight" }, color = Color3.fromRGB(255, 240, 200), brightness = 5, range = 40 },
+	landing = { parts = { "LandingLight" }, color = Color3.fromRGB(255, 250, 230), brightness = 8, range = 70 },
+}
+
+--[[
+	How fast a strobe flashes, in flashes per second.
+
+	Roughly 1 Hz, which is what an anti-collision strobe actually does. A strobe
+	that flashed at frame rate would be a different, much worse thing.
+]]
+local STROBE_HZ = 1.0
+local STROBE_DUTY = 0.08 -- fraction of the cycle it is actually lit
+
+--[[
+	Is a light on THIS frame?
+
+	Pure, so the strobe's duty cycle can be asserted without a clock. `powered`
+	is the electrical bus - §47 item 5 - and it outranks the switch entirely:
+	a landing light switched on with the master off is a switch that does
+	nothing, which is the whole reason item 8 waited for item 5.
+]]
+function SurfaceAnimation.lightIsLit(name: string, switchedOn: boolean, powered: boolean, clock: number): boolean
+	if not switchedOn or not powered then
+		return false
+	end
+	if name == "strobe" then
+		return (clock * STROBE_HZ) % 1 < STROBE_DUTY
+	end
+	return true
+end
+
+--[[
+	Bind the light parts once, the same way `new` binds the hinges.
+
+	A definition that does not have a given lamp simply binds nothing, so this
+	is safe on any aircraft - the Phase 5 jet will have its own set.
+]]
+function SurfaceAnimation.bindLights(model: Model): any
+	local bound: { [string]: { any } } = {}
+
+	for switch, spec in SurfaceAnimation.LIGHTS do
+		bound[switch] = {}
+		for _, partName in spec.parts do
+			local part = model:FindFirstChild(partName)
+			if part and part:IsA("BasePart") then
+				--[[
+					A PointLight as well as the Neon material, because Neon makes
+					a part LOOK bright without lighting anything around it. A
+					landing light that does not put light on the runway is a
+					decoration, and the runway is the entire reason it exists.
+				]]
+				local emitter = part:FindFirstChildOfClass("PointLight")
+				if not emitter then
+					emitter = Instance.new("PointLight")
+					emitter.Name = "Lamp"
+					emitter.Parent = part
+				end
+				emitter.Color = (spec.colors and spec.colors[partName]) or spec.color
+				emitter.Brightness = spec.brightness
+				emitter.Range = spec.range
+				emitter.Enabled = false
+
+				table.insert(bound[switch], {
+					part = part,
+					emitter = emitter,
+					-- Captured so an unlit lamp goes back to the colour the
+					-- builder painted it rather than to a hardcoded grey.
+					baseColor = part.Color,
+					baseMaterial = part.Material,
+					litColor = (spec.colors and spec.colors[partName]) or spec.color,
+				})
+			end
+		end
+	end
+
+	return bound
+end
+
+--[[
+	Drive every lamp for one frame.
+
+	`switches` is `systems.lights`; `powered` is `Electrical.isPowered`. Both
+	come from the layers that own them, and this function decides nothing except
+	what that means for a part.
+]]
+function SurfaceAnimation.stepLights(bound: any, switches: any, powered: boolean, clock: number)
+	if not bound or not switches then
+		return
+	end
+
+	for switch, lamps in bound do
+		local lit = SurfaceAnimation.lightIsLit(switch, switches[switch] == true, powered, clock)
+		for _, lamp in lamps do
+			lamp.emitter.Enabled = lit
+			if lit then
+				lamp.part.Material = Enum.Material.Neon
+				lamp.part.Color = lamp.litColor
+			else
+				lamp.part.Material = lamp.baseMaterial
+				lamp.part.Color = lamp.baseColor
+			end
+		end
+	end
+end
+
+-- =========================================================================
 -- VERIFICATION
 -- =========================================================================
 
@@ -501,6 +639,116 @@ function SurfaceAnimation.runTests(): (boolean, { any })
 			and deg(rudderTab.hinge, { trim = 1 }) == 0
 			and deg(bySpec.TrimTab.hinge, { rudderTrim = 1 }) == 0,
 		"the two trim channels are independent"
+	)
+
+	-- ---- Lights (Phase 4c, item 8) ---------------------------------------
+	--[[
+		⚠️ THE BUS OUTRANKS THE SWITCH, and this is the check item 8 waited for
+		item 5 to make possible. A landing light switched on with the master off
+		is a switch that does nothing - which is what makes the master switch
+		mean something rather than being a boolean with a lamp behind it.
+	]]
+	record(
+		"A switched-on light does not light with the bus dead",
+		not SurfaceAnimation.lightIsLit("landing", true, false, 0),
+		"master off beats the switch"
+	)
+	record(
+		"...and lights when it is powered",
+		SurfaceAnimation.lightIsLit("landing", true, true, 0),
+		"lit"
+	)
+	record(
+		"A switched-off light stays off on a live bus",
+		not SurfaceAnimation.lightIsLit("landing", false, true, 0),
+		"off"
+	)
+
+	--[[
+		The strobe FLASHES rather than burning. Asserted across a full cycle,
+		because a duty cycle checked at one instant proves nothing - it would
+		pass on a lamp that was always on and on one that was always off.
+	]]
+	local litFrames, totalFrames = 0, 600
+	for i = 0, totalFrames - 1 do
+		if SurfaceAnimation.lightIsLit("strobe", true, true, i / 60) then
+			litFrames += 1
+		end
+	end
+	local duty = litFrames / totalFrames
+	record(
+		"The strobe flashes rather than burning steadily",
+		duty > 0.02 and duty < 0.2,
+		string.format("lit %.1f%% of a 10 s window, at about %.1f Hz", duty * 100, STROBE_HZ)
+	)
+	record(
+		"...and does not flash at all with the bus dead",
+		not SurfaceAnimation.lightIsLit("strobe", true, false, 0.0)
+			and not SurfaceAnimation.lightIsLit("strobe", true, false, 0.5),
+		"dark through the whole cycle"
+	)
+
+	--[[
+		⚠️ RED ON THE LEFT, GREEN ON THE RIGHT. The convention that tells you
+		which way an aircraft is pointing at night, and the classic thing to get
+		backwards. Read off the LIGHTS table rather than restated.
+	]]
+	local navColors = SurfaceAnimation.LIGHTS.nav.colors
+	record(
+		"Navigation lights are red to port and green to starboard",
+		navColors.NavLightLeft.R > 0.8 and navColors.NavLightLeft.G < 0.3
+			and navColors.NavLightRight.G > 0.8 and navColors.NavLightRight.R < 0.3,
+		"left red, right green"
+	)
+
+	--[[
+		Every switch must drive at least one part that the definition actually
+		has. A switch bound to a part nobody modelled is a key that does nothing
+		and reports nothing - and four of these lamps did not exist until this
+		phase added them.
+	]]
+	local partNames = {}
+	for _, spec in Cessna.model.decorations do
+		partNames[spec.name] = true
+	end
+	local unbacked = {}
+	for switch, spec in SurfaceAnimation.LIGHTS do
+		local found = false
+		for _, partName in spec.parts do
+			if partNames[partName] then
+				found = true
+			end
+		end
+		if not found then
+			table.insert(unbacked, switch)
+		end
+	end
+	record(
+		"Every light switch drives a part the aeroplane actually has",
+		#unbacked == 0,
+		#unbacked == 0 and "all five switches are backed by real parts"
+			or ("no part for: " .. table.concat(unbacked, ", "))
+	)
+
+	--[[
+		And no part is claimed by two switches, which would have them fighting
+		over its colour every frame - whichever ran last would win, and the
+		iteration order of a table is not defined.
+	]]
+	local claimedBy: { [string]: string } = {}
+	local conflict = nil
+	for switch, spec in SurfaceAnimation.LIGHTS do
+		for _, partName in spec.parts do
+			if claimedBy[partName] then
+				conflict = string.format("%s claimed by %s and %s", partName, claimedBy[partName], switch)
+			end
+			claimedBy[partName] = switch
+		end
+	end
+	record(
+		"No lamp is driven by two switches",
+		conflict == nil,
+		conflict or "every part belongs to exactly one switch"
 	)
 
 	-- ---- Guards ----------------------------------------------------------

@@ -296,6 +296,102 @@ SixPack.FUEL = {
 }
 
 -- =========================================================================
+-- THE ENGINE CLUSTER (Phase 4c, item 6)
+-- =========================================================================
+
+--[[
+	Oil pressure, oil temperature and fuel flow - the three gauges the POH lists
+	that the panel did not read.
+
+	⚠️ THEY ARE A SEPARATE CLUSTER, NOT A THIRD ROW, and that is a constraint
+	rather than a preference. The main panel is 4 x 2 and its frame's aspect
+	ratio is asserted against the cockpit's `PanelBoard` part to 1%, because a
+	SurfaceGui maps a fixed-pixel frame onto a face and a mismatch renders every
+	circular dial as an oval. A third row would change that aspect and force the
+	board to be rebuilt 0.47 m -> 0.72 m tall - a 3D modelling detour, which §44
+	forbids outright while the project is in graybox.
+
+	It is also what a real 172 looks like: the engine instruments are their own
+	cluster beside the flight panel, not part of the six-pack.
+
+	Every band below is the published Lycoming IO-360-L2A figure, taken from
+	`Engine`'s own constants BY IDENTITY rather than retyped - the same
+	arrangement §19 uses for the tachometer's redline, and for the same reason:
+	a gauge whose green arc disagrees with the engine that drives it is worse
+	than no gauge.
+]]
+local Engine = require(ReplicatedStorage.FlightSim.Physics.Engine)
+
+SixPack.OIL_PRESSURE = {
+	name = "OilPressure",
+	caption = "OIL PSI",
+	captionY = 0.68,
+	--[[
+		0 to the red line, over three quarters of a turn. The scale reaches past
+		the red line for the same reason the ASI's does (§18): a needle pinned
+		at the stop tells the pilot nothing about how far past it they are.
+	]]
+	breakpoints = Instrument.linearFace(0, 125, 210, 300),
+	ticks = { major = 25, minor = 12.5, labelRadius = 0.58 },
+	arcs = {
+		--[[
+			The POH's green is 50-90 psi. Below 25 is the minimum a running
+			engine may show, so the band under it is red: that is the reading
+			that means land now.
+		]]
+		{ from = 0, to = Engine.OIL_PRESSURE_MIN_PSI, color = Instrument.ARC.RED, radius = 0.86, thickness = 5 },
+		{ from = Engine.OIL_PRESSURE_GREEN[1], to = Engine.OIL_PRESSURE_GREEN[2], color = Instrument.ARC.GREEN, radius = 0.86, thickness = 5 },
+	},
+	redline = Engine.OIL_PRESSURE_REDLINE_PSI,
+	-- Damped like a real bourdon-tube gauge, which does not twitch.
+	lagTau = 0.8,
+}
+
+SixPack.OIL_TEMP = {
+	name = "OilTemp",
+	caption = "OIL C",
+	captionY = 0.68,
+	--[[
+		Marked in CELSIUS, not the POH's Fahrenheit, and that is deliberate: the
+		rest of this panel is metric-adjacent and the physics is SI throughout.
+		The published 245 F red line is 118 C, converted once here rather than
+		carrying two scales.
+	]]
+	breakpoints = Instrument.linearFace(0, 130, 210, 300),
+	ticks = { major = 25, minor = 12.5, labelRadius = 0.58 },
+	arcs = {
+		{ from = Engine.OIL_TEMP_GREEN_C[1], to = Engine.OIL_TEMP_GREEN_C[2], color = Instrument.ARC.GREEN, radius = 0.86, thickness = 5 },
+	},
+	redline = Engine.OIL_TEMP_REDLINE_C,
+	--[[
+		Lagged hard. Oil temperature is a slow signal - the warm-up itself has a
+		two-minute time constant - and a needle that moved faster than the oil
+		does would be showing noise.
+	]]
+	lagTau = 2.0,
+}
+
+--[[
+	FUEL FLOW, marked in kg/h.
+
+	Same honesty as the fuel gauge (§19): the physics burns kilograms, so the
+	gauge reads kilograms per hour rather than inventing a fuel density to print
+	gallons. The green band is the cruise range §4 already verified as a burn
+	rate - 20 to 34 kg/h - read here as an instrument instead of an endurance.
+]]
+SixPack.FUEL_FLOW = {
+	name = "FuelFlow",
+	caption = "FLOW kg/h",
+	captionY = 0.68,
+	breakpoints = Instrument.linearFace(0, 45, 210, 300),
+	ticks = { major = 10, minor = 5, labelRadius = 0.58 },
+	arcs = {
+		{ from = 20, to = 34, color = Instrument.ARC.GREEN, radius = 0.86, thickness = 5 },
+	},
+	lagTau = 0.6,
+}
+
+-- =========================================================================
 -- SAMPLERS - THE UNIT BOUNDARY
 -- =========================================================================
 
@@ -367,6 +463,21 @@ SixPack.samplers = {
 	end,
 	fuelKg = function(t: any): number
 		return t.fuelKg or 0
+	end,
+
+	--[[
+		The Phase 4c engine cluster. Oil pressure and temperature are already in
+		the units their faces are marked in; fuel flow is the one conversion,
+		from the kg/s the physics burns to the kg/h a flow gauge reads.
+	]]
+	oilPressurePsi = function(t: any): number
+		return t.oilPressurePsi or 0
+	end,
+	oilTempC = function(t: any): number
+		return t.oilTempC or 0
+	end,
+	fuelFlowKgH = function(t: any): number
+		return (t.fuelFlowKgS or 0) * 3600
 	end,
 }
 
@@ -459,6 +570,47 @@ function SixPack.buildPanel(parent: Instance): (Frame, { [string]: any })
 end
 
 --[[
+	The engine cluster, as its own frame (Phase 4c, item 6).
+
+	A separate `buildPanel`-shaped function rather than three more dials in the
+	one above, for the reason stated on the specs: the main panel's aspect ratio
+	is asserted against the cockpit board, and a third row would change it.
+
+	Built at a SMALLER dial size. These are secondary instruments - a pilot
+	scans them, they do not fly the aeroplane on them - and on a real 172 the
+	engine cluster's gauges are physically smaller than the six-pack's. It also
+	keeps the strip narrow enough to sit beside the panel rather than under it.
+
+	`built` is keyed the same way, so `render` drives both frames with one call
+	and neither knows the other exists.
+]]
+local ENGINE_DIAL_SIZE = 84
+
+function SixPack.buildEnginePanel(parent: Instance): (Frame, { [string]: any })
+	local width = ENGINE_DIAL_SIZE * 3 + GAP * 2
+
+	local panel = Instance.new("Frame")
+	panel.Name = "EnginePanel"
+	panel.Size = UDim2.fromOffset(width, ENGINE_DIAL_SIZE)
+	panel.BackgroundTransparency = 1
+	panel.BorderSizePixel = 0
+	panel.Parent = parent
+
+	local built: { [string]: any } = {}
+
+	built.oilPressure = Instrument.build(panel, SixPack.OIL_PRESSURE, ENGINE_DIAL_SIZE)
+	built.oilPressure.root.Position = UDim2.fromOffset(0, 0)
+
+	built.oilTemp = Instrument.build(panel, SixPack.OIL_TEMP, ENGINE_DIAL_SIZE)
+	built.oilTemp.root.Position = UDim2.fromOffset(ENGINE_DIAL_SIZE + GAP, 0)
+
+	built.fuelFlow = Instrument.build(panel, SixPack.FUEL_FLOW, ENGINE_DIAL_SIZE)
+	built.fuelFlow.root.Position = UDim2.fromOffset((ENGINE_DIAL_SIZE + GAP) * 2, 0)
+
+	return panel, built
+end
+
+--[[
 	Wrap the panel in a ScreenGui and hang it where the 3D panel will sit:
 	bottom centre, under the cowling, which is where a real panel is relative to
 	the windscreen.
@@ -525,6 +677,26 @@ function SixPack.build(parent: Instance): (ScreenGui, { [string]: any })
 	panel.AnchorPoint = Vector2.new(0.5, 1)
 	panel.Position = UDim2.new(0.5, 0, 1, -BOTTOM_MARGIN)
 
+	--[[
+		The engine cluster sits directly ABOVE the panel's right-hand end, where
+		a 172's engine gauges are - beside the flight instruments rather than
+		under them, and clear of the middle of the screen where the yoke's
+		neutral lives (§6i's reasoning for the debug HUD, applied again).
+	]]
+	local enginePanel, engineBuilt = SixPack.buildEnginePanel(gui)
+	enginePanel.AnchorPoint = Vector2.new(1, 1)
+	enginePanel.Position = UDim2.new(
+		0.5,
+		panel.Size.X.Offset / 2,
+		1,
+		-(BOTTOM_MARGIN + panel.Size.Y.Offset + GAP)
+	)
+
+	-- Merged into one table so `render` drives both frames with one call.
+	for key, value in engineBuilt do
+		built[key] = value
+	end
+
 	return gui, built
 end
 
@@ -535,6 +707,17 @@ end
 ]]
 function SixPack.render(built: { [string]: any }, telemetry: any, dt: number?)
 	local s = SixPack.samplers
+
+	--[[
+		The engine cluster, guarded because `mountOnPart` builds the flight panel
+		alone - the cockpit board is sized for the six-pack and the cluster is
+		screen-only until the 3D pass gives it a board of its own.
+	]]
+	if built.oilPressure then
+		Instrument.setValue(built.oilPressure, s.oilPressurePsi(telemetry), dt)
+		Instrument.setValue(built.oilTemp, s.oilTempC(telemetry), dt)
+		Instrument.setValue(built.fuelFlow, s.fuelFlowKgH(telemetry), dt)
+	end
 
 	Instrument.setValue(built.airspeed, s.airspeedKt(telemetry), dt)
 	Instrument.setValue(built.altimeter, s.altitudeFt(telemetry), dt)
@@ -877,6 +1060,51 @@ function SixPack.runTests(): (boolean, { any })
 		string.format("%d rpm", Cessna172.engine.maxRPM)
 	)
 	local tachMin, tachMax = Instrument.faceRange(SixPack.TACHOMETER)
+	record(
+		"The engine cluster's bands ARE the engine's own limits",
+		SixPack.OIL_PRESSURE.redline == Engine.OIL_PRESSURE_REDLINE_PSI
+			and SixPack.OIL_PRESSURE.arcs[2].from == Engine.OIL_PRESSURE_GREEN[1]
+			and SixPack.OIL_PRESSURE.arcs[2].to == Engine.OIL_PRESSURE_GREEN[2]
+			and SixPack.OIL_TEMP.redline == Engine.OIL_TEMP_REDLINE_C,
+		string.format(
+			"oil %d-%d green / %d red, temp %d red - by identity, not retyped",
+			Engine.OIL_PRESSURE_GREEN[1], Engine.OIL_PRESSURE_GREEN[2],
+			Engine.OIL_PRESSURE_REDLINE_PSI, Engine.OIL_TEMP_REDLINE_C
+		)
+	)
+	record(
+		"The oil gauges' scales reach past their red lines",
+		SixPack.OIL_PRESSURE.breakpoints[#SixPack.OIL_PRESSURE.breakpoints].value > Engine.OIL_PRESSURE_REDLINE_PSI
+			and SixPack.OIL_TEMP.breakpoints[#SixPack.OIL_TEMP.breakpoints].value > Engine.OIL_TEMP_REDLINE_C,
+		"a needle pinned at the stop says nothing about how far past it you are"
+	)
+	--[[
+		⚠️ THE UNIT CONVERSION, and the only one in the cluster. The physics
+		burns kg/s; a flow gauge reads kg/h. Cruise burn is about 27 kg/h, so a
+		conversion inverted anywhere gives 0.0075 and the needle never leaves
+		the peg.
+	]]
+	record(
+		"Fuel flow converts kg/s to kg/h",
+		math.abs(SixPack.samplers.fuelFlowKgH({ fuelFlowKgS = 27 / 3600 }) - 27) < 1e-9,
+		string.format("%.2f kg/h from a cruise burn", SixPack.samplers.fuelFlowKgH({ fuelFlowKgS = 27 / 3600 }))
+	)
+	record(
+		"...and a cruise burn lands inside the green band",
+		SixPack.FUEL_FLOW.arcs[1].from <= 27 and SixPack.FUEL_FLOW.arcs[1].to >= 27,
+		string.format("green %.0f-%.0f kg/h against §4's verified cruise burn",
+			SixPack.FUEL_FLOW.arcs[1].from, SixPack.FUEL_FLOW.arcs[1].to)
+	)
+	--[[
+		A stopped engine must read ZERO oil pressure, which is the single most
+		important thing that gauge ever says.
+	]]
+	record(
+		"A stopped engine reads no oil pressure",
+		SixPack.samplers.oilPressurePsi({}) == 0,
+		"0 psi from empty telemetry"
+	)
+
 	record(
 		"The tachometer scale reaches past the redline",
 		tachMax > Cessna172.engine.maxRPM and tachMin <= Cessna172.engine.idleRPM,

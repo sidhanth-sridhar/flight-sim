@@ -878,6 +878,55 @@ add({
 })
 
 --[[
+	Anti-collision strobes, one per wingtip (Phase 4c, item 8).
+
+	⚠️ PLACED INBOARD OF THE NAV LIGHTS ON PURPOSE, at x 5.38 against their
+	5.45, so the SPAN cannot grow. §45 pins the aeroplane at 20.592 m drawn and
+	§33's envelope checks assert it - the rudder trim tab already grew the
+	LENGTH by hanging off the trailing edge earlier in this same phase, and
+	there is no reason to make the same mistake on the other axis.
+
+	On the real aeroplane the strobe shares the wingtip fairing with the nav
+	light; separate parts here so the two switches drive separate lamps and
+	cannot fight over one part's colour.
+]]
+addPair({
+	name = "Strobe",
+	size = Vector3.new(0.08, 0.08, 0.10),
+	position = Vector3.new(5.38, 1.10, -0.10),
+	color = Color3.fromRGB(240, 240, 255),
+	material = Enum.Material.SmoothPlastic,
+})
+
+--[[
+	The tail navigation light, on the trailing edge of the fin.
+
+	Inside the fin's own footprint for the same reason as above: the fin's
+	trailing edge and the rudder behind it already set the aeroplane's length.
+]]
+add({
+	name = "TailLight",
+	size = Vector3.new(0.08, 0.08, 0.08),
+	position = Vector3.new(0, 1.39, 4.30),
+	color = Color3.fromRGB(240, 240, 240),
+	material = Enum.Material.SmoothPlastic,
+})
+
+--[[
+	The taxi light, beside the landing light in the left wing root.
+
+	A 172 carries both in the same place; they differ in aim and intensity
+	rather than in position, which is why this sits alongside `LandingLight`.
+]]
+add({
+	name = "TaxiLight",
+	size = Vector3.new(0.12, 0.08, 0.06),
+	position = Vector3.new(-0.95, 0.86, -0.62),
+	color = Color3.fromRGB(240, 235, 220),
+	material = Enum.Material.SmoothPlastic,
+})
+
+--[[
 	Flaps and ailerons. Both hinge about the datum's X axis, which is 1.73
 	degrees off the true hinge line because of the dihedral - far below what
 	is visible, and it keeps the animation layer talking about the aircraft's
